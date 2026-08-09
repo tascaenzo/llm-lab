@@ -51,7 +51,7 @@ tokenizer_status tokenizer_train_with_progress(const char *const *input_paths, s
                                                tokenizer_train_progress_callback progress_callback,
                                                void *progress_context, tokenizer **out_tokenizer);
 
-/** Saves a tokenizer in the portable .llmtok text format. */
+/** Saves a tokenizer in the portable binary .llmtok format. */
 tokenizer_status tokenizer_save(const tokenizer *tokenizer, const char *path);
 
 /** Loads a tokenizer saved by tokenizer_save. */

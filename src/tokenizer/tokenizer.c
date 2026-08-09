@@ -20,10 +20,6 @@ typedef struct encode_context {
     token_buffer *output;
 } encode_context;
 
-static int allocation_would_overflow(size_t count, size_t element_size) {
-    return element_size != 0U && count > (SIZE_MAX / element_size);
-}
-
 static tokenizer_status token_buffer_reserve(token_buffer *buffer, size_t required) {
     if (required <= buffer->capacity) {
         return TOKENIZER_OK;
@@ -37,7 +33,7 @@ static tokenizer_status token_buffer_reserve(token_buffer *buffer, size_t requir
         new_capacity *= 2U;
     }
 
-    if (allocation_would_overflow(new_capacity, sizeof(*buffer->data))) {
+    if (tokenizer_allocation_would_overflow(new_capacity, sizeof(*buffer->data))) {
         return TOKENIZER_OVERFLOW;
     }
 
@@ -66,7 +62,7 @@ static tokenizer_status byte_buffer_append(byte_buffer *buffer, unsigned char by
     if (buffer->length == buffer->capacity) {
         const size_t new_capacity = buffer->capacity == 0U ? 64U : buffer->capacity * 2U;
         if (new_capacity < buffer->capacity ||
-            allocation_would_overflow(new_capacity, sizeof(*buffer->data))) {
+            tokenizer_allocation_would_overflow(new_capacity, sizeof(*buffer->data))) {
             return TOKENIZER_OVERFLOW;
         }
 
@@ -110,7 +106,7 @@ static tokenizer_status encode_pretoken(const unsigned char *bytes, size_t lengt
         return TOKENIZER_OK;
     }
 
-    if (allocation_would_overflow(length, sizeof(token_id))) {
+    if (tokenizer_allocation_would_overflow(length, sizeof(token_id))) {
         return TOKENIZER_OVERFLOW;
     }
 
@@ -124,9 +120,29 @@ static tokenizer_status encode_pretoken(const unsigned char *bytes, size_t lengt
     }
 
     size_t token_length = length;
-    for (size_t merge_index = 0U; merge_index < encode->tokenizer->merge_count; ++merge_index) {
-        apply_merge(ids, &token_length, encode->tokenizer->merges[merge_index],
-                    TOKENIZER_BYTE_VOCABULARY_SIZE + (token_id)merge_index);
+    for (;;) {
+        token_id selected_id = 0U;
+        int has_selected = 0;
+        for (size_t index = 0U; index + 1U < token_length; ++index) {
+            token_id candidate_id = 0U;
+            if (tokenizer_find_merged_id(encode->tokenizer, ids[index], ids[index + 1U],
+                                         &candidate_id) != 0 &&
+                (has_selected == 0 || candidate_id < selected_id)) {
+                selected_id = candidate_id;
+                has_selected = 1;
+            }
+        }
+        if (has_selected == 0) {
+            break;
+        }
+
+        const size_t merge_index = (size_t)(selected_id - TOKENIZER_BYTE_VOCABULARY_SIZE);
+        apply_merge(ids, &token_length, encode->tokenizer->merges[merge_index], selected_id);
+    }
+
+    if (token_length > SIZE_MAX - encode->output->length) {
+        free(ids);
+        return TOKENIZER_OVERFLOW;
     }
 
     const tokenizer_status status =

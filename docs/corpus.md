@@ -15,7 +15,7 @@ Questa fase serve per il tokenizer. Quando addestreremo un language model,
 serviranno inoltre una selezione del corpus piu' ampia e split separati di training,
 validazione e test.
 
-## Corpus v1
+## Corpus Wikipedia
 
 Partiamo da due fonti con provenienza chiara:
 
@@ -48,11 +48,11 @@ data/
       itwiki-YYYYMMDD-pages-articles.xml.bz2
       source.json
   clean/
-    italiano-v1/
+    italiano-v2/
       documents.jsonl
       manifest.json
   derived/
-    italiano-v1/
+    italiano-v2/
       tokenizer-input/
         part-000.txt
         part-001.txt
@@ -85,10 +85,10 @@ Non normalizziamo accenti, apostrofi o punteggiatura: sono informazione utile pe
 un tokenizer byte-level. Le decisioni di pulizia eliminano markup e rumore, non
 riscrivono arbitrariamente l'italiano.
 
-Il corpus definitivo di questa fase si chiamera' `italiano-wikipedia-v1`: significa
-una configurazione precisa, non “l'ultima Wikipedia disponibile”. Un corpus futuro
-che aggiunge Wikisource o cambia la pulizia sara' una nuova versione, per esempio
-`italiano-v2`, e non sovrascrivera' questa.
+Il corpus corrente si chiama `italiano-wikipedia-v1`: identifica una configurazione
+precisa, non “l'ultima Wikipedia disponibile”. Manteniamo un solo corpus e un solo
+tokenizer finche' il progetto non richiedera' esplicitamente il confronto tra
+versioni diverse.
 
 ## Procedura completa: `italiano-wikipedia-v1`
 
@@ -112,7 +112,7 @@ data/raw/wikipedia-it/
 `source.json` contiene URL, data e checksum del dump. Non modificare il file
 `.xml.bz2`: e' la sorgente immutabile da cui potremo rigenerare tutto il corpus.
 
-### 2. Creare il corpus v1 completo
+### 2. Creare il corpus completo
 
 ```sh
 python3 utils/corpus/extract_wikipedia.py \
@@ -148,12 +148,14 @@ testo. I file `part-*.txt` contengono solo testo e sono l'unico input del traine
 La dimensione delle parti non cambia il vocabolario: serve solo a non creare un
 singolo file troppo grande.
 
-L'estrattore rimuove commenti, riferimenti, template annidati, tabelle, tag HTML,
-categorie e sintassi di link, mantenendo il testo visibile. Elimina inoltre i
-duplicati esatti del testo pulito con SHA-256 e una tabella SQLite temporanea.
-E' una pulizia
-deterministica `wikitext-basic-v1`, non un renderer completo di MediaWiki: questa
-scelta e' registrata nel manifesto e potra' essere migliorata in un corpus v2.
+L'estrattore rimuove commenti, riferimenti, formule grezze, codice e righe
+preformattate, template annidati, tabelle, media, tag HTML, categorie e link anche
+annidati o multilinea, mantenendo il testo visibile. Elimina inoltre i duplicati
+esatti del testo pulito con SHA-256 e una tabella SQLite temporanea. La pulizia
+deterministica `wikitext-basic-v2` verifica per ogni pagina che non rimangano
+delimitatori di link, riferimenti o righe media residue (`thumb|`). Non e' un
+renderer completo di MediaWiki: la versione della pulizia e le invarianti
+applicate sono registrate nel manifesto.
 
 Per sicurezza, l'utility rifiuta una destinazione gia' popolata. Se un'esecuzione
 viene interrotta, restano file `.part`; non riavviarla sullo stesso nome. Ispeziona
@@ -184,10 +186,14 @@ artifacts/tokenizers/
   italiano-wikipedia-v1.llmtok.json
 ```
 
-Il file `.json` registra corpus, parti usate, checksum del corpus, comando,
-vocabolario richiesto, numero effettivo di merge e SHA-256 del modello. Non
-sovrascriviamo un artefatto esistente: un nuovo training deve avere un nuovo nome
-o una scelta esplicita dell'utente.
+Il file `.json` registra snapshot e checksum del corpus, comando portabile,
+checksum e commit del trainer, durata, picco di memoria, vocabolario, merge e
+SHA-256 del modello. Include inoltre una valutazione sul primo MiB del corpus con
+compressione, throughput e round-trip; `--evaluation-bytes` permette di cambiare
+la dimensione. Il file `.llmtok` e' binario, versionato e contiene un secondo
+SHA-256 interno per il payload delle merge. Non sovrascriviamo un artefatto
+esistente: un nuovo training deve avere un nuovo nome o una scelta esplicita
+dell'utente.
 
 Il target 32k e' un massimo: il trainer puo' fermarsi prima solo se il corpus non
 contiene piu' coppie adiacenti da fondere. Il trainer incrementale e le sue misure
@@ -195,10 +201,11 @@ di memoria sono descritti nella sezione 5.7 di [tokenizer.md](tokenizer.md).
 
 ### 4. Usare il modello
 
-Apri il menu interattivo e carica il file prodotto:
+Apri il tester interattivo passando il file prodotto:
 
 ```sh
-./build/debug/tokenizer_experiment
+./build/debug/tokenizer_experiment \
+  artifacts/tokenizers/italiano-wikipedia-v1.llmtok
 ```
 
 Prova frasi italiane, osserva gli ID e verifica che la decodifica restituisca gli
@@ -242,6 +249,5 @@ python3 utils/corpus/download_wikipedia.py --check
 
 `--help` mostra tutte le opzioni.
 
-Il prossimo componente sara' un estrattore: leggere l'XML compresso e produrre
-`documents.jsonl`. Lo terremo distinto dal downloader, cosi' ogni passaggio e'
-facile da capire e ripetere.
+Downloader ed estrattore restano componenti distinti, cosi' download, pulizia e
+training possono essere verificati e ripetuti separatamente.

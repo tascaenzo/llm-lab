@@ -1,6 +1,6 @@
-.PHONY: configure build run format check-format clean
+.PHONY: configure build run test format check-format clean
 
-FORMAT_SOURCES := $(shell find apps src -type f -name '*.c') $(shell find include -type f -name '*.h')
+FORMAT_SOURCES := $(shell find apps src include tests -type f \( -name '*.c' -o -name '*.h' \))
 
 configure:
 	cmake --preset debug
@@ -10,6 +10,9 @@ build: configure
 
 run: build
 	./build/debug/llm-lab
+
+test: build
+	ctest --preset debug
 
 format:
 	clang-format -i $(FORMAT_SOURCES)

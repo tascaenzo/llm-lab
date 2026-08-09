@@ -1,17 +1,42 @@
 {
-  "schema": "llm-lab-tokenizer-artifact-v1",
-  "created_at": "2026-08-09T16:19:59.977964+00:00",
+  "schema": "llm-lab-tokenizer-artifact-v2",
+  "created_at": "2026-08-09T19:58:55.117148+00:00",
   "tokenizer": {
     "file": "artifacts/tokenizers/italiano-wikipedia-v1.llmtok",
-    "sha256": "3ef6e435c35b4beb0844a17d4ff7f5f3c76360cf4b208e5447ae67402fc04b4f",
+    "sha256": "49790aa9760aff09edfea91c890723a4ac2d63c94ab3f91438a43148567384a3",
+    "format": {
+      "kind": "binary",
+      "version": 1,
+      "byte_order": "little-endian",
+      "payload_checksum": "sha256"
+    },
     "target_vocabulary_size": 32000,
     "actual_vocabulary_size": 32000,
     "merge_count": 31744
   },
-  "trainer": "build/debug/llm-lab",
+  "trainer": {
+    "file": "build/release/llm-lab",
+    "sha256": "c10824c770ce42a7a310270481515fc3b0852c6bad2470beb9886c71f1129bca",
+    "git_commit": "8e18d1fb1ad3b2e747a94be2effef39b0f48a7b9",
+    "git_worktree_dirty": true,
+    "build_configuration": "release"
+  },
+  "execution": {
+    "training_seconds": 55.59336137500213,
+    "training_peak_memory_kib": 4464352
+  },
+  "evaluation": {
+    "schema": "llm-lab-tokenizer-evaluation-v1",
+    "bytes": 1048576,
+    "tokens": 380300,
+    "bytes_per_token": 2.757234,
+    "seconds": 0.040136,
+    "mebibytes_per_second": 24.915288,
+    "round_trip": true
+  },
   "corpus": {
     "manifest": "data/clean/italiano-wikipedia-v1/manifest.json",
-    "manifest_sha256": "40465a7aab8136cddeee4d6c58ee1a980d730b6892c4f82f9c226d2b627f7297",
+    "manifest_sha256": "257522a4c8dbd3d7bcc697b94190b3c49efbd3f3aeb8bdc69114d91241738cb2",
     "tokenizer_input": [
       "data/derived/italiano-wikipedia-v1/tokenizer-input/part-000.txt",
       "data/derived/italiano-wikipedia-v1/tokenizer-input/part-001.txt",
@@ -31,31 +56,106 @@
       "data/derived/italiano-wikipedia-v1/tokenizer-input/part-015.txt",
       "data/derived/italiano-wikipedia-v1/tokenizer-input/part-016.txt",
       "data/derived/italiano-wikipedia-v1/tokenizer-input/part-017.txt"
-    ]
+    ],
+    "snapshot": {
+      "schema": "llm-lab-corpus-v1",
+      "name": "italiano-wikipedia-v1",
+      "created_at": "2026-08-09T17:47:28.333184+00:00",
+      "source": {
+        "name": "Wikipedia in italiano",
+        "input": "data/raw/wikipedia-it/itwiki-20260801-pages-articles.xml.bz2",
+        "provenance": {
+          "schema": "llm-lab-corpus-source-v1",
+          "source": "Wikipedia in italiano",
+          "license": "CC BY-SA (consultare i termini Wikimedia)",
+          "downloaded_at": "2026-08-09T15:07:35.380424+00:00",
+          "download_url": "https://dumps.wikimedia.org/itwiki/20260801/itwiki-20260801-pages-articles.xml.bz2",
+          "file": "itwiki-20260801-pages-articles.xml.bz2",
+          "source_checksum": {
+            "algorithm": "md5",
+            "value": "162c8b363c61d32a63427d96e7a438ea"
+          },
+          "sha256": "aeb234538e1d05e5700a443c5f3e7c5257c79c4550295c100be9bc057dff7baa"
+        }
+      },
+      "selection": {
+        "namespace": 0,
+        "skip_redirects": true,
+        "min_characters": 200,
+        "deduplicate": true
+      },
+      "cleaning": {
+        "version": "wikitext-basic-v2",
+        "description": "rimuove markup, media, tabelle e conserva testo visibile",
+        "forbidden_residual_markers": [
+          "[[",
+          "]]",
+          "<ref",
+          "</ref>",
+          "thumb|"
+        ]
+      },
+      "execution": {
+        "workers": 9,
+        "cleaning_chunk_size": 16
+      },
+      "outputs": {
+        "documents": "data/clean/italiano-wikipedia-v1/documents.jsonl",
+        "tokenizer_input": [
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-000.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-001.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-002.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-003.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-004.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-005.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-006.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-007.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-008.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-009.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-010.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-011.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-012.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-013.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-014.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-015.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-016.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-input/part-017.txt"
+        ]
+      },
+      "statistics": {
+        "pages_seen": 4127796,
+        "pages_main_namespace": 3109600,
+        "redirects_skipped": 1128966,
+        "too_short_skipped": 307590,
+        "duplicates_skipped": 912,
+        "documents_written": 1672132,
+        "text_bytes_written": 4642500041
+      }
+    }
   },
   "command": [
-    "build/debug/llm-lab",
+    "build/release/llm-lab",
     "tokenizer",
     "train",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/artifacts/tokenizers/italiano-wikipedia-v1.llmtok.part",
+    "artifacts/tokenizers/italiano-wikipedia-v1.llmtok",
     "32000",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-000.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-001.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-002.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-003.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-004.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-005.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-006.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-007.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-008.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-009.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-010.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-011.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-012.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-013.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-014.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-015.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-016.txt",
-    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-017.txt"
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-000.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-001.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-002.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-003.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-004.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-005.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-006.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-007.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-008.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-009.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-010.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-011.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-012.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-013.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-014.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-015.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-016.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-input/part-017.txt"
   ]
 }

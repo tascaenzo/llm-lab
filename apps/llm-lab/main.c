@@ -7,6 +7,7 @@
 
 #ifdef _WIN32
 #include <io.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -22,6 +23,18 @@ typedef struct cli_training_progress {
 } cli_training_progress;
 
 static double current_time_seconds(void) {
+#ifdef _WIN32
+    LARGE_INTEGER counter = {0};
+    LARGE_INTEGER frequency = {0};
+    if (QueryPerformanceCounter(&counter) != 0 && QueryPerformanceFrequency(&frequency) != 0) {
+        return (double)counter.QuadPart / (double)frequency.QuadPart;
+    }
+#elif defined(CLOCK_MONOTONIC)
+    struct timespec monotonic = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0) {
+        return (double)monotonic.tv_sec + (double)monotonic.tv_nsec / 1000000000.0;
+    }
+#endif
     struct timespec value = {0};
     (void)timespec_get(&value, TIME_UTC);
     return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
@@ -137,8 +150,9 @@ static void finish_training_progress(const cli_training_progress *progress) {
 static void print_usage(const char *program) {
     fprintf(stderr,
             "Usage:\n"
-            "  %s tokenizer train OUTPUT.llmtok VOCAB_SIZE INPUT...\n",
-            program);
+            "  %s tokenizer train OUTPUT.llmtok VOCAB_SIZE INPUT...\n"
+            "  %s tokenizer evaluate MODEL.llmtok MAX_BYTES INPUT...\n",
+            program, program);
 }
 
 static int parse_vocabulary_size(const char *text, uint32_t *out_size) {
@@ -154,17 +168,7 @@ static int parse_vocabulary_size(const char *text, uint32_t *out_size) {
     return 1;
 }
 
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        print_usage(argv[0]);
-        return 1;
-    }
-
-    if (strcmp(argv[1], "tokenizer") != 0 || argc < 6 || strcmp(argv[2], "train") != 0) {
-        print_usage(argv[0]);
-        return 1;
-    }
-
+static int run_tokenizer_train(int argc, char **argv) {
     uint32_t vocabulary_size = 0U;
     if (parse_vocabulary_size(argv[4], &vocabulary_size) == 0 ||
         vocabulary_size < TOKENIZER_BYTE_VOCABULARY_SIZE) {
@@ -194,4 +198,128 @@ int main(int argc, char **argv) {
            tokenizer_vocabulary_size(tokenizer), tokenizer_merge_count(tokenizer));
     tokenizer_destroy(tokenizer);
     return 0;
+}
+
+static int parse_maximum_bytes(const char *text, size_t *out_size) {
+    errno = 0;
+    char *end = NULL;
+    const uintmax_t value = strtoumax(text, &end, 10);
+    if (errno != 0 || end == text || *end != '\0' || value == 0U || value > SIZE_MAX) {
+        return 0;
+    }
+    *out_size = (size_t)value;
+    return 1;
+}
+
+static int evaluate_file(const tokenizer *tokenizer, const char *path, size_t maximum_bytes,
+                         uint64_t *total_bytes, uint64_t *total_tokens) {
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        fprintf(stderr, "Cannot open evaluation input: %s\n", path);
+        return 0;
+    }
+
+    unsigned char *input = malloc(maximum_bytes);
+    if (input == NULL) {
+        fclose(file);
+        fprintf(stderr, "Evaluation allocation failed.\n");
+        return 0;
+    }
+
+    const size_t input_length = fread(input, 1U, maximum_bytes, file);
+    const int stream_failed = ferror(file) != 0;
+    const int close_failed = fclose(file) != 0;
+    const int read_failed = stream_failed != 0 || close_failed != 0;
+    if (read_failed != 0) {
+        free(input);
+        fprintf(stderr, "Cannot read evaluation input: %s\n", path);
+        return 0;
+    }
+
+    token_sequence tokens = {0};
+    tokenizer_status status = tokenizer_encode(tokenizer, input, input_length, &tokens);
+    unsigned char *decoded = NULL;
+    size_t decoded_length = 0U;
+    if (status == TOKENIZER_OK) {
+        status = tokenizer_decode(tokenizer, &tokens, &decoded, &decoded_length);
+    }
+    if (status != TOKENIZER_OK || decoded_length != input_length ||
+        (input_length != 0U && memcmp(input, decoded, input_length) != 0)) {
+        fprintf(stderr, "Evaluation round-trip failed for %s: %s\n", path,
+                tokenizer_status_string(status));
+        tokenizer_bytes_destroy(decoded);
+        token_sequence_destroy(&tokens);
+        free(input);
+        return 0;
+    }
+
+    if (input_length > UINT64_MAX - *total_bytes || tokens.length > UINT64_MAX - *total_tokens) {
+        fprintf(stderr, "Evaluation counters overflowed for %s.\n", path);
+        tokenizer_bytes_destroy(decoded);
+        token_sequence_destroy(&tokens);
+        free(input);
+        return 0;
+    }
+
+    *total_bytes += input_length;
+    *total_tokens += tokens.length;
+    tokenizer_bytes_destroy(decoded);
+    token_sequence_destroy(&tokens);
+    free(input);
+    return 1;
+}
+
+static int run_tokenizer_evaluate(int argc, char **argv) {
+    size_t maximum_bytes = 0U;
+    if (parse_maximum_bytes(argv[4], &maximum_bytes) == 0) {
+        fprintf(stderr, "MAX_BYTES must be a positive integer supported by this system.\n");
+        return 1;
+    }
+
+    tokenizer *tokenizer = NULL;
+    tokenizer_status status = tokenizer_load(argv[3], &tokenizer);
+    if (status != TOKENIZER_OK) {
+        fprintf(stderr, "Loading failed: %s\n", tokenizer_status_string(status));
+        return 1;
+    }
+
+    const double started_at = current_time_seconds();
+    uint64_t total_bytes = 0U;
+    uint64_t total_tokens = 0U;
+    for (int index = 5; index < argc && total_bytes < maximum_bytes; ++index) {
+        const size_t remaining = maximum_bytes - (size_t)total_bytes;
+        if (evaluate_file(tokenizer, argv[index], remaining, &total_bytes, &total_tokens) == 0) {
+            tokenizer_destroy(tokenizer);
+            return 1;
+        }
+    }
+    const double elapsed = current_time_seconds() - started_at;
+    tokenizer_destroy(tokenizer);
+
+    if (total_bytes == 0U || total_tokens == 0U) {
+        fprintf(stderr, "Evaluation inputs contain no data.\n");
+        return 1;
+    }
+
+    const double bytes_per_token = (double)total_bytes / (double)total_tokens;
+    const double mebibytes_per_second =
+        elapsed > 0.0 ? ((double)total_bytes / (1024.0 * 1024.0)) / elapsed : 0.0;
+    printf("{\"schema\":\"llm-lab-tokenizer-evaluation-v1\","
+           "\"bytes\":%" PRIu64 ",\"tokens\":%" PRIu64 ","
+           "\"bytes_per_token\":%.6f,\"seconds\":%.6f,"
+           "\"mebibytes_per_second\":%.6f,\"round_trip\":true}\n",
+           total_bytes, total_tokens, bytes_per_token, elapsed, mebibytes_per_second);
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc >= 6 && strcmp(argv[1], "tokenizer") == 0 && strcmp(argv[2], "train") == 0) {
+        return run_tokenizer_train(argc, argv);
+    }
+    if (argc >= 6 && strcmp(argv[1], "tokenizer") == 0 && strcmp(argv[2], "evaluate") == 0) {
+        return run_tokenizer_evaluate(argc, argv);
+    }
+
+    print_usage(argv[0]);
+    return 1;
 }

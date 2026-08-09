@@ -2,7 +2,7 @@
 
 ## 1. Scopo e confini
 
-Costruiremo un tokenizer testuale per il corpus italiano e per il language model del progetto.
+Costruiremo un tokenizer per il testo del corpus italiano e per il language model del progetto.
 
 **Stato di implementazione:** la v1 realizza vocabolario byte-level, pre-tokenizzazione, training BPE incrementale, `encode`/`decode`, salvataggio/caricamento `.llmtok` e comando CLI di training. Restano fuori token speciali, normalizzazione Unicode e training parallelo.
 
@@ -76,9 +76,9 @@ token 256 + i      -> bytes(token_left) concatenati a bytes(token_right)
 Il file salva le merge nell'ordine in cui sono state create. L'ordine assegna gli ID:
 
 ```text
-prima riga di merge  -> ID 256
-seconda riga         -> ID 257
-terza riga           -> ID 258
+prima merge  -> ID 256
+seconda merge -> ID 257
+terza merge   -> ID 258
 ```
 
 Esempio concettuale per `"ciao"`:
@@ -115,34 +115,38 @@ Il limite teorico di un ID e' `UINT32_MAX`; la v1 rifiuta una configurazione il 
 
 ## 4. Formato su disco
 
-La prima versione usa un formato testuale volutamente piccolo, leggibile e portabile. Il file puo' chiamarsi, ad esempio, `italiano.llmtok`.
+La prima versione usa un formato binario piccolo, versionato e portabile. Il file
+puo' chiamarsi, ad esempio, `italiano.llmtok`. Il manifesto laterale
+`italiano.llmtok.json` resta testuale e conserva provenienza e metriche.
+
+L'header occupa esattamente 64 byte:
+
+| Offset | Dimensione | Campo |
+|---:|---:|---|
+| 0 | 8 | magic `LLMTOK\r\n` |
+| 8 | 4 | versione del formato, `1` |
+| 12 | 4 | dimensione header, `64` |
+| 16 | 4 | vocabolario base, `256` |
+| 20 | 4 | numero di merge |
+| 24 | 8 | dimensione del payload |
+| 32 | 32 | SHA-256 del payload |
+
+I campi numerici sono unsigned little-endian. Il payload contiene le merge in
+ordine; ciascuna occupa 8 byte:
 
 ```text
-llm-tokenizer 1
-base-vocab 256
-merges 3
-76 39
-256 108
-257 108
+uint32 little-endian left_id
+uint32 little-endian right_id
 ```
 
-Interpretazione dell'esempio:
+L'ordine nel payload assegna gli ID `256 + i`. Il loader verifica magic, versione,
+dimensioni, checksum, assenza di dati aggiuntivi, riferimenti soltanto a token gia'
+esistenti e assenza di coppie duplicate. Un file testuale storico o un binario
+malformato viene rifiutato senza tentare un recupero silenzioso.
 
-```text
-ID 256 = merge(76, 39)
-ID 257 = merge(256, 108)
-ID 258 = merge(257, 108)
-```
-
-Regole del parser:
-
-- il file e' ASCII e usa `\n` come terminatore; il loader accetta anche `\r\n`;
-- la prima riga deve essere esattamente `llm-tokenizer 1`;
-- `base-vocab` deve essere `256`;
-- il numero dichiarato di merge deve coincidere con le righe successive;
-- ogni ID di una merge deve riferirsi a un token gia' esistente;
-- non sono ammessi overflow, righe malformate o dati dopo l'ultima merge;
-- il loader rifiuta un file non valido invece di tentare un recupero silenzioso.
+Il salvataggio scrive prima un file temporaneo nella stessa directory e lo rinomina
+solo dopo una chiusura riuscita. Un errore di scrittura non tronca quindi un modello
+valido gia' presente.
 
 Non salviamo il corpus, la frequenza delle coppie o una tabella ridondante token→byte: il file rimane piccolo e sufficiente per `encode` e `decode`.
 
@@ -150,7 +154,7 @@ Non salviamo il corpus, la frequenza delle coppie o una tabella ridondante token
 
 ### 5.1 Input
 
-Il trainer riceve un elenco di file di testo. Ogni file e' un documento indipendente; non vengono contate coppie tra la fine di un file e l'inizio del successivo. I file sono letti in streaming, quindi il corpus grezzo non viene mai caricato interamente in RAM.
+Il trainer riceve un elenco di file di testo. Ogni file introduce un confine esplicito; inoltre la pre-tokenizzazione impedisce alle merge di attraversare separatori come gli spazi tra documenti. I file derivati possono quindi contenere piu' documenti separati da righe vuote. Gli input sono letti in streaming, quindi il corpus grezzo non viene mai caricato interamente in RAM.
 
 La v1 non altera i byte in input. La pulizia, deduplicazione e selezione del corpus sono compiti precedenti al training e vengono registrati separatamente.
 
@@ -220,7 +224,7 @@ spareggio e stesso ordine di merge. Cambia soltanto la quantita' di lavoro svolt
 | Risorsa | Gestione |
 |---|---|
 | Corpus originale | Letto file per file, mai mappato o caricato interamente in memoria. |
-| Pre-token distinti | Conservati in RAM con la loro frequenza e sequenza corrente di ID. |
+| Pre-token distinti | Conservati in RAM con frequenza e ID; i byte originali vengono liberati dopo la raccolta iniziale. |
 | Frequenze delle coppie | Hash table persistente, aggiornata solo intorno alle parole modificate. |
 | Selezione della prossima merge | Heap con candidati e versioni; ricostruita periodicamente. |
 | Indice delle occorrenze | Liste di indici di parole per coppia; possono essere obsolete ma vengono verificate al momento dell'uso. |
@@ -262,9 +266,10 @@ RAM o di sistema operativo.
 | Primo tokenizer italiano | Corpus pulito rappresentativo | 32k |
 | Corpus molto grande o training troppo lento | Stesso obiettivo | 32k, con benchmark e ulteriore ottimizzazione |
 
-Per ogni training registreremo durata, picco di memoria, dimensione effettiva del
-vocabolario e numero di token prodotti su un campione fisso. Se 32k e' troppo lento,
-misureremo quale struttura e' il collo di bottiglia senza cambiare il formato
+Per ogni training lo script di produzione registra durata, picco di memoria,
+dimensione effettiva del vocabolario e valutazione su un campione fisso. La
+valutazione include token prodotti, byte per token, round-trip e throughput. Queste
+misure permettono di individuare i colli di bottiglia senza cambiare il formato
 `.llmtok` ne' abbassare automaticamente l'obiettivo del progetto.
 
 Il target resta un massimo. Se il corpus non offre abbastanza coppie utili, il
@@ -276,11 +281,13 @@ trainer si ferma prima.
 
 1. Applica la stessa pre-tokenizzazione deterministica usata nel training.
 2. Converte i byte di ogni pre-token nel relativo ID base (`0..255`).
-3. Per ogni merge, nell'ordine salvato nel modello, scandisce la sequenza corrente da sinistra a destra.
-4. Ogni coppia adiacente uguale alla merge e' sostituita dal suo ID implicito.
-5. Concatena le sequenze finali e restituisce gli ID `uint32_t`.
+3. Indicizza le coppie del modello in una tabella hash che restituisce il rank della merge.
+4. Cerca nella sequenza soltanto la merge disponibile con rank minimo e la applica da sinistra a destra.
+5. Ripete finche' non rimangono coppie note, poi concatena i risultati e restituisce gli ID `uint32_t`.
 
-La strategia e' deliberatamente identica alle trasformazioni effettuate durante il training. La sua semplicita' rende facile confrontarla con esempi manuali.
+Il risultato e' identico all'applicazione lineare di tutte le merge, ma il costo non
+dipende piu' dall'intero vocabolario per ogni pre-token. La versione lineare e'
+stata usata come riferimento durante la verifica del cambiamento.
 
 ## 7. Algoritmo di decode
 
@@ -370,7 +377,8 @@ include/tokenizer/tokenizer.h  API pubblica
 src/tokenizer/model.c          modello BPE in memoria e append veloce delle merge dal trainer
 src/tokenizer/pretokenizer.c   segmentazione deterministica dei byte
 src/tokenizer/tokenizer.c      encode, decode e gestione buffer
-src/tokenizer/train.c          training BPE e tabelle di frequenza
+src/tokenizer/train.c          orchestrazione del training e avanzamento
+src/tokenizer/train_data.c     parole, frequenze, heap e aggiornamenti BPE incrementali
 src/tokenizer/model_io.c       salvataggio e caricamento .llmtok
 ```
 
@@ -418,12 +426,23 @@ corrente, quindi l'ETA delle merge non viene confusa con quella della lettura. S
 l'output viene reindirizzato in un file, usa messaggi di fase su righe separate
 invece di caratteri di controllo.
 
-I tokenizer che vogliamo conservare vengono salvati in `artifacts/tokenizers/`, non in `build/`. Ogni artefatto deve indicare corpus, target, dimensione effettiva, merge e checksum nel relativo `README.md`.
+I tokenizer che vogliamo conservare vengono salvati in `artifacts/tokenizers/`, non in `build/`. Ogni artefatto ha un manifesto `.llmtok.json` con corpus, snapshot della provenienza, target, dimensione effettiva, merge, checksum, commit, misure del training e valutazione.
 
-Per un esperimento rapido, senza file modello in output:
+Per valutare un modello su un massimo di byte distribuiti sugli input indicati:
 
 ```sh
-tokenizer_experiment
+llm-lab tokenizer evaluate italiano.llmtok 1048576 corpus-a.txt corpus-b.txt
 ```
 
-Il menu permette di creare e salvare un tokenizer, codificare testo in ID o decodificare una lista di ID. Ogni operazione di codifica e decodifica carica esplicitamente il file `.llmtok` scelto dall'utente.
+Il comando restituisce JSON, verifica anche il round-trip e puo' essere richiamato
+dalla pipeline di produzione degli artefatti.
+
+Per un esperimento rapido sul modello gia' addestrato:
+
+```sh
+tokenizer_experiment artifacts/tokenizers/italiano-wikipedia-v1.llmtok
+```
+
+Il tester riceve il percorso `.llmtok` come unico argomento, carica il modello una
+sola volta e mantiene una sessione interattiva per testo → ID e ID → testo. Non
+addestra ne' salva modelli: queste operazioni restano nella CLI principale.

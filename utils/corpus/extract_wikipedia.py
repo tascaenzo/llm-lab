@@ -26,15 +26,26 @@ CLEANING_CHUNK_SIZE = 16
 COMMENT_PATTERN = re.compile(r"<!--.*?-->", re.DOTALL)
 REF_PATTERN = re.compile(r"<ref\b[^>]*>.*?</ref\s*>", re.IGNORECASE | re.DOTALL)
 SELF_CLOSING_REF_PATTERN = re.compile(r"<ref\b[^>]*/\s*>", re.IGNORECASE)
-TABLE_PATTERN = re.compile(r"\{\|.*?\|\}", re.DOTALL)
+RESIDUAL_REF_PATTERN = re.compile(
+    r"</?ref[^>\n]*(?:>|$)", re.IGNORECASE | re.MULTILINE
+)
+MATH_PATTERN = re.compile(r"<math\b[^>]*>.*?</math\s*>", re.IGNORECASE | re.DOTALL)
+CODE_BLOCK_PATTERN = re.compile(
+    r"<(syntaxhighlight|source|code|pre)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL
+)
+PREFORMATTED_LINE_PATTERN = re.compile(r"^[ \t]+.*$", re.MULTILINE)
+RESIDUAL_MEDIA_LINE_PATTERN = re.compile(r"^.*\bthumb\|.*$", re.IGNORECASE | re.MULTILINE)
 TAG_PATTERN = re.compile(r"<[^>]+>")
 EXTERNAL_LINK_PATTERN = re.compile(r"\[(?:https?://|//)[^\s\]]+(?:\s+([^\]]+))?\]")
 HEADING_PATTERN = re.compile(r"^={2,}\s*(.*?)\s*={2,}$", re.MULTILINE)
 WHITESPACE_PATTERN = re.compile(r"[ \t\r\f\v]+")
 BLANK_LINES_PATTERN = re.compile(r"\n{3,}")
-WIKILINK_PATTERN = re.compile(r"\[\[([^\[\]\n]+)\]\]")
 REDIRECT_PATTERN = re.compile(r"^\s*#(?:redirect|rinvia)\b", re.IGNORECASE)
 INVALID_NAME_PATTERN = re.compile(r"[^a-z0-9-]")
+FORBIDDEN_CLEAN_MARKERS = ("[[", "]]", "<ref", "</ref>", "thumb|")
+NON_TEXT_WIKILINK_PATTERN = re.compile(
+    r"\[\[\s*:?\s*(?:categoria|category|file|immagine|image):", re.IGNORECASE
+)
 
 RawPage = Tuple[str, str, str]
 CleanPage = Tuple[str, str, str]
@@ -72,7 +83,9 @@ def strip_balanced(text: str, opening: str, closing: str) -> str:
             next_opening = text.find(opening, cursor)
             next_closing = text.find(closing, cursor)
             if next_closing < 0:
-                return "".join(result)
+                line_end = text.find("\n", cursor)
+                cursor = len(text) if line_end < 0 else line_end
+                break
             if 0 <= next_opening < next_closing:
                 depth += 1
                 cursor = next_opening + len(opening)
@@ -81,33 +94,121 @@ def strip_balanced(text: str, opening: str, closing: str) -> str:
                 cursor = next_closing + len(closing)
 
 
-def replace_wikilink(match: re.Match) -> str:
-    fields = match.group(1).split("|")
-    target = fields[0].strip().lower()
+def find_balanced_end(text: str, start: int, opening: str, closing: str) -> Optional[int]:
+    depth = 1
+    cursor = start + len(opening)
+    while cursor < len(text):
+        next_opening = text.find(opening, cursor)
+        next_closing = text.find(closing, cursor)
+        if next_closing < 0:
+            return None
+        if 0 <= next_opening < next_closing:
+            depth += 1
+            cursor = next_opening + len(opening)
+            continue
+        depth -= 1
+        cursor = next_closing + len(closing)
+        if depth == 0:
+            return cursor
+    return None
+
+
+def strip_non_text_wikilinks(text: str) -> str:
+    result = []
+    cursor = 0
+    while match := NON_TEXT_WIKILINK_PATTERN.search(text, cursor):
+        start = match.start()
+        result.append(text[cursor:start])
+        end = find_balanced_end(text, start, "[[", "]]")
+        if end is None:
+            line_end = text.find("\n", match.end())
+            cursor = len(text) if line_end < 0 else line_end
+        else:
+            cursor = end
+    result.append(text[cursor:])
+    return "".join(result)
+
+
+def split_wikilink_fields(content: str) -> list[str]:
+    fields = []
+    field_start = 0
+    depth = 0
+    cursor = 0
+    while cursor < len(content):
+        if content.startswith("[[", cursor):
+            depth += 1
+            cursor += 2
+            continue
+        if content.startswith("]]", cursor) and depth > 0:
+            depth -= 1
+            cursor += 2
+            continue
+        if content[cursor] == "|" and depth == 0:
+            fields.append(content[field_start:cursor])
+            field_start = cursor + 1
+        cursor += 1
+    fields.append(content[field_start:])
+    return fields
+
+
+def visible_wikilink_text(content: str) -> str:
+    fields = split_wikilink_fields(content)
+    target = fields[0].strip().lower().lstrip(":")
     if target.startswith(("categoria:", "category:", "file:", "immagine:", "image:")):
         return " "
-    return fields[-1].strip()
+    return strip_wikilinks(fields[-1].strip())
+
+
+def strip_wikilinks(text: str) -> str:
+    result = []
+    cursor = 0
+    while True:
+        start = text.find("[[", cursor)
+        if start < 0:
+            result.append(text[cursor:])
+            break
+        result.append(text[cursor:start])
+        end = find_balanced_end(text, start, "[[", "]]")
+        if end is None:
+            cursor = start + 2
+            continue
+        content = text[start + 2 : end - 2]
+        result.append(visible_wikilink_text(content))
+        cursor = end
+    return "".join(result).replace("[[", "").replace("]]", "")
 
 
 def clean_wikitext(text: str) -> str:
     text = COMMENT_PATTERN.sub(" ", text)
+    text = html.unescape(text).replace("\u00a0", " ")
     text = REF_PATTERN.sub(" ", text)
     text = SELF_CLOSING_REF_PATTERN.sub(" ", text)
+    text = RESIDUAL_REF_PATTERN.sub(" ", text)
+    text = MATH_PATTERN.sub(" ", text)
+    text = CODE_BLOCK_PATTERN.sub(" ", text)
+    text = PREFORMATTED_LINE_PATTERN.sub(" ", text)
+    text = strip_non_text_wikilinks(text)
+    text = RESIDUAL_MEDIA_LINE_PATTERN.sub(" ", text)
     text = strip_balanced(text, "{{", "}}")
-    text = TABLE_PATTERN.sub(" ", text)
-    text = WIKILINK_PATTERN.sub(replace_wikilink, text)
+    text = strip_balanced(text, "{|", "|}")
+    text = strip_wikilinks(text)
     text = EXTERNAL_LINK_PATTERN.sub(lambda match: match.group(1) or " ", text)
     text = HEADING_PATTERN.sub(r"\1", text)
     text = text.replace("'''", "").replace("''", "")
     text = TAG_PATTERN.sub(" ", text)
-    text = html.unescape(text).replace("\u00a0", " ")
     text = WHITESPACE_PATTERN.sub(" ", text)
     return BLANK_LINES_PATTERN.sub("\n\n", text).strip()
 
 
 def clean_page(page: RawPage) -> CleanPage:
     page_id, title, raw_text = page
-    return page_id, title, clean_wikitext(raw_text)
+    clean_text = clean_wikitext(raw_text)
+    residual = next(
+        (marker for marker in FORBIDDEN_CLEAN_MARKERS if marker in clean_text.lower()), None
+    )
+    if residual is not None:
+        raise ValueError(f"markup residuo {residual!r} nella pagina {page_id}")
+    return page_id, title, clean_text
 
 
 def safe_name(value: str) -> str:
@@ -447,7 +548,11 @@ def main() -> int:
                 "provenance": load_source_provenance(input_path),
             },
             "selection": {"namespace": 0, "skip_redirects": True, "min_characters": args.min_characters, "deduplicate": True},
-            "cleaning": {"version": "wikitext-basic-v1", "description": "rimuove markup e conserva testo visibile"},
+            "cleaning": {
+                "version": "wikitext-basic-v2",
+                "description": "rimuove markup, media, tabelle e conserva testo visibile",
+                "forbidden_residual_markers": list(FORBIDDEN_CLEAN_MARKERS),
+            },
             "execution": {"workers": args.workers, "cleaning_chunk_size": CLEANING_CHUNK_SIZE},
             "outputs": {
                 "documents": relative_to_project(documents_path, project_root),

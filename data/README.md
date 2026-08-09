@@ -20,13 +20,13 @@ fonte pubblica -> raw -> clean -> derived -> tokenizer .llmtok
 
 - `raw` conserva il file esattamente come ricevuto; permette di ripetere la
   preparazione senza riscaricarlo.
-- `clean` conterra' `documents.jsonl`: una riga JSON per documento, con almeno
+- `clean` contiene `documents.jsonl`: una riga JSON per documento, con almeno
   `id`, `source`, `license`, `url` e `text`.
-- `derived` conterra' file `part-000.txt`, `part-001.txt`, ...: il solo testo
+- `derived` contiene file `part-000.txt`, `part-001.txt`, ...: il solo testo
   passato a `llm-lab tokenizer train`.
 
 Non si mescolano testi anonimi in un unico file senza sapere da dove arrivano.
-Ogni corpus avra' inoltre un manifesto con fonti, data/versione del dump, licenza,
+Ogni corpus ha inoltre un manifesto con fonti, data/versione del dump, licenza,
 regole di pulizia, numero di documenti, dimensione e comando di training.
 
 La procedura completa e gli script di estrazione e training sono in

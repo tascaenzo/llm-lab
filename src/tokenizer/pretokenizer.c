@@ -16,10 +16,6 @@ typedef struct byte_buffer {
     size_t capacity;
 } byte_buffer;
 
-static int allocation_would_overflow(size_t count, size_t element_size) {
-    return element_size != 0U && count > (SIZE_MAX / element_size);
-}
-
 static pretoken_kind classify_byte(unsigned char byte) {
     if (byte == ' ' || (byte >= '\t' && byte <= '\r')) {
         return PRETOKEN_WHITESPACE;
@@ -37,7 +33,7 @@ static tokenizer_status byte_buffer_append(byte_buffer *buffer, unsigned char by
     if (buffer->length == buffer->capacity) {
         const size_t new_capacity = buffer->capacity == 0U ? 64U : buffer->capacity * 2U;
         if (new_capacity < buffer->capacity ||
-            allocation_would_overflow(new_capacity, sizeof(*buffer->data))) {
+            tokenizer_allocation_would_overflow(new_capacity, sizeof(*buffer->data))) {
             return TOKENIZER_OVERFLOW;
         }
 
@@ -148,6 +144,9 @@ tokenizer_status tokenizer_pretokenize_file(const char *path, tokenizer_pretoken
     uint64_t bytes_read = 0U;
 
     for (;;) {
+        if (feof(file) != 0 || ferror(file) != 0) {
+            break;
+        }
         const size_t read_count = fread(input_buffer, 1U, sizeof(input_buffer), file);
         if (read_count == 0U) {
             break;
