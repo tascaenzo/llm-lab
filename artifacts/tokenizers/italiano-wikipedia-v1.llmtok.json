@@ -1,0 +1,61 @@
+{
+  "schema": "llm-lab-tokenizer-artifact-v1",
+  "created_at": "2026-08-09T16:19:59.977964+00:00",
+  "tokenizer": {
+    "file": "artifacts/tokenizers/italiano-wikipedia-v1.llmtok",
+    "sha256": "3ef6e435c35b4beb0844a17d4ff7f5f3c76360cf4b208e5447ae67402fc04b4f",
+    "target_vocabulary_size": 32000,
+    "actual_vocabulary_size": 32000,
+    "merge_count": 31744
+  },
+  "trainer": "build/debug/llm-lab",
+  "corpus": {
+    "manifest": "data/clean/italiano-wikipedia-v1/manifest.json",
+    "manifest_sha256": "40465a7aab8136cddeee4d6c58ee1a980d730b6892c4f82f9c226d2b627f7297",
+    "tokenizer_input": [
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-000.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-001.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-002.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-003.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-004.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-005.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-006.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-007.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-008.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-009.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-010.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-011.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-012.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-013.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-014.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-015.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-016.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-input/part-017.txt"
+    ]
+  },
+  "command": [
+    "build/debug/llm-lab",
+    "tokenizer",
+    "train",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/artifacts/tokenizers/italiano-wikipedia-v1.llmtok.part",
+    "32000",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-000.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-001.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-002.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-003.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-004.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-005.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-006.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-007.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-008.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-009.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-010.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-011.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-012.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-013.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-014.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-015.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-016.txt",
+    "/Users/enzo/Documents/ChatGPT/llm-lab/data/derived/italiano-wikipedia-v1/tokenizer-input/part-017.txt"
+  ]
+}
