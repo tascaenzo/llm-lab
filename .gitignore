@@ -19,3 +19,8 @@ Testing/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Corpus locali: grandi, rigenerabili e non versionati.
+/data/raw/
+/data/clean/
+/data/derived/
