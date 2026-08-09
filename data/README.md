@@ -37,3 +37,5 @@ La procedura completa e gli script di estrazione e training sono in
 [../docs/corpus.md](../docs/corpus.md).
 La derivazione degli split del language model e' in
 [../docs/dataset.md](../docs/dataset.md).
+Una spiegazione end-to-end di ogni file e del suo uso nel futuro training e' in
+[../wiki/09-flusso-dati-e-artefatti.md](../wiki/09-flusso-dati-e-artefatti.md).

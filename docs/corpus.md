@@ -1,5 +1,8 @@
 # Corpus italiano — piano operativo
 
+Per una guida di studio che collega sorgente, corpus, tokenizer, dataset e futuro
+training, consulta [flusso dati e artefatti](../wiki/09-flusso-dati-e-artefatti.md).
+
 ## Che cos'e' il corpus
 
 Il corpus e' l'insieme dei testi da cui il tokenizer impara quali sequenze di byte

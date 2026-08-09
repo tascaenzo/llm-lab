@@ -1,5 +1,9 @@
 # Dataset del language model — specifica implementativa
 
+Questa pagina specifica il formato. Per studiare il percorso completo dei dati e
+il ruolo di ogni file nel training, consulta
+[flusso dati e artefatti](../wiki/09-flusso-dati-e-artefatti.md).
+
 ## 1. Obiettivo e confini
 
 La pipeline converte `documents.jsonl` e un tokenizer `.llmtok` in tre stream di

@@ -87,3 +87,5 @@ training.
 
 La rappresentazione binaria, le invarianti e le API sono specificate in
 [docs/dataset.md](../docs/dataset.md).
+La guida [flusso dati e artefatti](09-flusso-dati-e-artefatti.md) collega invece
+questo passaggio a tutti i file prodotti prima e dopo la tokenizzazione.

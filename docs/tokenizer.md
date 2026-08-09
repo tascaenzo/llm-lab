@@ -1,5 +1,9 @@
 # Tokenizer Byte-level BPE — specifica implementativa
 
+Per vedere come il tokenizer si collega al corpus, agli split `.llmdat` e al
+futuro trainer, consulta
+[flusso dati e artefatti](../wiki/09-flusso-dati-e-artefatti.md).
+
 ## 1. Scopo e confini
 
 Costruiremo un tokenizer per il testo del corpus italiano e per il language model del progetto.

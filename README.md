@@ -7,6 +7,8 @@ Il progetto privilegia chiarezza e portabilita' tra macOS, Linux e Windows. Usa 
 La prima specifica implementativa e' [docs/tokenizer.md](docs/tokenizer.md).
 La preparazione del corpus italiano e' descritta in [docs/corpus.md](docs/corpus.md).
 La conversione in dati autoregressivi e' descritta in [docs/dataset.md](docs/dataset.md).
+Per studiare l'intero percorso e il ruolo di ogni file consulta la
+[guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 
 ## Stato
 
