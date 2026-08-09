@@ -28,9 +28,20 @@ target_include_directories(tokenizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(tokenizer PUBLIC c_std_23)
 llm_lab_set_warnings(tokenizer)
 
+add_library(dataset STATIC
+    src/dataset/dataset.c
+    src/dataset/dataset_io.c
+    src/dataset/jsonl.c)
+target_include_directories(dataset
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/tokenizer)
+target_compile_features(dataset PUBLIC c_std_23)
+target_link_libraries(dataset PUBLIC tokenizer)
+llm_lab_set_warnings(dataset)
+
 add_executable(llm_lab_cli apps/llm-lab/main.c)
 target_compile_features(llm_lab_cli PRIVATE c_std_23)
-target_link_libraries(llm_lab_cli PRIVATE tokenizer)
+target_link_libraries(llm_lab_cli PRIVATE dataset tokenizer)
 llm_lab_set_warnings(llm_lab_cli)
 set_target_properties(llm_lab_cli PROPERTIES OUTPUT_NAME llm-lab)
 
