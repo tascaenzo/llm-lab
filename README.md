@@ -6,10 +6,13 @@ Il progetto privilegia chiarezza e portabilita' tra macOS, Linux e Windows. Usa 
 
 La prima specifica implementativa e' [docs/tokenizer.md](docs/tokenizer.md).
 La preparazione del corpus italiano e' descritta in [docs/corpus.md](docs/corpus.md).
+La conversione in dati autoregressivi e' descritta in [docs/dataset.md](docs/dataset.md).
 
 ## Stato
 
-La toolchain e' pronta. Il primo modulo implementato e' un tokenizer Byte-level BPE: addestra merge da un corpus, salva un modello binario `.llmtok` e lo ricarica.
+La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
+dataset divide i documenti in training, validation e test, crea artefatti binari
+`.llmdat` e fornisce batch input/target al futuro modello.
 
 ## Requisiti
 
@@ -68,6 +71,23 @@ Per misurare compressione, velocita' e round-trip su un campione deterministico:
 ```
 
 Il risultato JSON include byte, token, byte per token, durata, throughput e verifica del round-trip.
+
+## Preparare il dataset del language model
+
+Il comando seguente assegna ogni documento a uno split stabile, lo tokenizza e
+scrive tre stream binari:
+
+```sh
+./build/debug/llm-lab dataset prepare \
+  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  data/clean/italiano-wikipedia-v1/documents.jsonl \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+```
+
+La directory che contiene il prefisso di output deve gia' esistere. Il report JSON
+finale mostra documenti e token prodotti per ogni split; durante il lavoro standard
+error mostra percentuale, throughput ed ETA. Formato, token `<EOD>` e batcher sono
+specificati in [docs/dataset.md](docs/dataset.md).
 
 ## Struttura
 

@@ -211,6 +211,25 @@ Apri il tester interattivo passando il file prodotto:
 Prova frasi italiane, osserva gli ID e verifica che la decodifica restituisca gli
 stessi byte di partenza.
 
+### 5. Derivare gli split del language model
+
+Dopo avere creato la directory di destinazione, combina i documenti puliti e il
+tokenizer versionato:
+
+```sh
+mkdir -p data/derived/italiano-wikipedia-v1/lm
+
+./build/debug/llm-lab dataset prepare \
+  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  data/clean/italiano-wikipedia-v1/documents.jsonl \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+```
+
+Il comando produce gli stream `train`, `validation` e `test` senza modificare il
+corpus pulito. Lo split usa l'ID della pagina, non il tema o l'ordine nel file; il
+target di training e' costruito successivamente dal batcher spostando lo stream di
+un token. Formato e invarianti sono in [dataset.md](dataset.md).
+
 ## Download del dump di Wikipedia
 
 L'utility [../utils/corpus/download_wikipedia.py](../utils/corpus/download_wikipedia.py)

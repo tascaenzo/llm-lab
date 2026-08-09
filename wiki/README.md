@@ -13,7 +13,8 @@ Un LLM non e' soltanto una rete neurale: e' un sistema formato da dati, rapprese
 5. [05 — Inferenza e generazione](05-inferenza-e-generazione.md): come una previsione diventa una risposta.
 6. [06 — Allineamento e valutazione](06-allineamento-e-valutazione.md): come rendere il modello utile e misurarne la qualita'.
 7. [07 — Roadmap: LLM didattico da zero](07-roadmap-llm-da-zero.md): il progetto che realizzeremo dopo la teoria.
-8. [Glossario](glossario.md): termini chiave.
+8. [08 — Dataset autoregressivo](08-dataset-autoregressivo.md): come i documenti diventano input e target.
+9. [Glossario](glossario.md): termini chiave.
 
 ## Limite del primo progetto
 
