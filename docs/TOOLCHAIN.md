@@ -9,7 +9,7 @@
 | Builder | Ninja | Veloce, semplice e identico su macOS, Linux e Windows. |
 | Compilatore | Clang, GCC o MSVC | Il progetto verifica esplicitamente queste tre famiglie. |
 | Formattazione | clang-format | Stile riproducibile. |
-| CI | GitHub Actions | Compilazione e test su tre sistemi operativi. |
+| CI | GitHub Actions | Compilazione su tre sistemi operativi. |
 
 Il codice richiede C23, non estensioni specifiche di un compilatore. Servono quindi versioni aggiornate di Clang, GCC o MSVC; la CI rilevera' subito eventuali regressioni di compatibilita'.
 

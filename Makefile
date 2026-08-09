@@ -1,6 +1,6 @@
 .PHONY: configure build run format check-format clean
 
-FORMAT_SOURCES := $(shell find apps -type f -name '*.c')
+FORMAT_SOURCES := $(shell find apps src -type f -name '*.c') $(shell find include -type f -name '*.h')
 
 configure:
 	cmake --preset debug
