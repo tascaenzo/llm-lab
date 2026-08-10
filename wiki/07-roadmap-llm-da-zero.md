@@ -21,29 +21,64 @@ La toolchain e' descritta in [../docs/TOOLCHAIN.md](../docs/TOOLCHAIN.md); l'obi
 
 **Verifica:** `decode(encode(testo))` funziona e un batch ha le forme attese.
 
-Il tokenizer Byte-level BPE e il corpus Wikipedia v1 sono ora implementati. Il
-prossimo incremento della fase e' la pipeline descritta in
-[dataset autoregressivo](08-dataset-autoregressivo.md): split per documento,
-artefatti `.llmdat` e batch input/target.
+Il tokenizer Byte-level BPE, il corpus Wikipedia v1 e la pipeline descritta in
+[dataset autoregressivo](08-dataset-autoregressivo.md) sono implementati: split
+per documento, artefatti `.llmdat` e batch input/target.
 
-## Fase 2 — Baseline semplice
+## Fase 2 — Runtime tensoriale
 
-- implementare un modello bigram o una piccola rete che predice il token successivo;
-- addestrarlo e generare testo.
+- rappresentare tensori, forma, dtype e dispositivo;
+- gestire memoria e ownership;
+- definire una API di operazioni indipendente dall'hardware;
+- implementare backend e kernel CPU di riferimento;
+- verificare ogni operazione con risultati noti.
 
-**Verifica:** la loss scende sensibilmente e i campioni riflettono il corpus.
+La teoria e' in [runtime tensoriale](10-runtime-tensoriale.md); la specifica
+concreta e' in
+[docs/runtime-tensoriale.md](../docs/runtime-tensoriale.md).
 
-## Fase 3 — Mini Transformer
+**Verifica:** tensori, memoria e operazioni CPU superano test indipendenti dal
+modello e non espongono dettagli hardware al chiamante.
 
-- embedding di token e posizione;
+## Fase 3 — Backend CPU parallelo
+
+**Stato: implementato nella versione iniziale.**
+
+- separare il codice specifico CPU in una directory di backend;
+- creare un executor con thread pool persistente;
+- parallelizzare elementwise, riduzioni, matmul e primitive per il modello;
+- conservare i kernel C di riferimento;
+- misurare scalabilita', tiling e primi percorsi SIMD.
+
+La teoria e' in [backend CPU](11-backend-cpu.md); il progetto tecnico e' in
+[docs/backend-cpu.md](../docs/backend-cpu.md).
+
+**Verifica:** gli stessi kernel coincidono entro tolleranza con il riferimento
+usando uno o piu' thread, non presentano race e migliorano in benchmark su forme
+rappresentative.
+
+## Fase 4 — Core neurale
+
+- aggiungere backward e registrazione delle operazioni;
+- costruire embedding e layer lineari;
+- implementare RMSNorm, RoPE e SwiGLU;
+- verificare i gradienti numericamente.
+
+**Verifica:** una piccola rete composta dai layer riduce una loss nota e ogni
+gradiente coincide con una stima numerica entro la tolleranza dichiarata.
+
+## Fase 5 — Transformer
+
+- embedding dei token e posizione rappresentata con RoPE;
 - singola testa di attenzione causale;
-- blocco MLP, residual e LayerNorm;
+- blocco SwiGLU, connessioni residuali e RMSNorm;
 - piu' teste e piu' blocchi;
 - head finale e cross-entropy.
 
-**Verifica:** il modello supera la baseline e non puo' attendere token futuri (test della maschera causale).
+**Verifica:** il modello impara una piccola sequenza nota e cambiare un token
+futuro non modifica le attivazioni delle posizioni precedenti.
 
-## Fase 4 — Training affidabile
+## Fase 6 — Training affidabile
 
 - AdamW, scheduler del learning rate e gradient clipping;
 - validation periodica;
@@ -52,7 +87,7 @@ artefatti `.llmdat` e batch input/target.
 
 **Verifica:** un run interrotto riparte correttamente e la validation loss e' tracciata.
 
-## Fase 5 — Generazione e analisi
+## Fase 7 — Generazione e analisi
 
 - greedy, temperatura e top-k;
 - prompt di confronto ripetibili;
@@ -60,18 +95,33 @@ artefatti `.llmdat` e batch input/target.
 
 **Verifica:** lo stesso checkpoint produce output controllabili al variare della strategia di decoding.
 
-## Fase 6 — Estensioni
+## Fase 8 — Backend accelerati e scalabilita'
 
-- tokenizer BPE;
+- backend Metal e CUDA;
+- test di conformita' tra dispositivi;
+- mixed precision;
+- kernel fusi e profiling.
+
+**Verifica:** lo stesso modello produce risultati numericamente compatibili su
+backend diversi senza modificare i layer.
+
+## Fase 9 — Estensioni
+
 - dataset piu' ricco;
-- mixed precision e GPU;
+- Multi-head Latent Attention;
+- Mixture of Experts;
+- Multi-Token Prediction;
 - KV cache;
+- attenzione sparsa per contesti lunghi;
 - instruction fine-tuning su dati curati.
 
-## Decisioni da prendere prima di iniziare
+## Decisione corrente
 
-1. Quale hardware e' disponibile (solo CPU, GPU Apple, CUDA o cloud)?
-2. Preferisci imparare con un corpus letterario italiano, documentazione tecnica o un dataset artificiale molto piccolo?
-3. Vuoi privilegiare la massima semplicita' del codice o avvicinarci prima alle pratiche dei modelli moderni?
-
-Quando sceglieremo queste tre cose, creeremo la struttura del progetto e partiremo dalla Fase 1.
+Il runtime tensoriale CPU di riferimento e' implementato: backend, storage,
+tensori FP32/U32, memoria, operazioni elementwise, riduzioni, matmul, embedding
+gather/scatter, softmax e cross-entropy. Il codice hardware-specifico e' ora
+isolato in `src/runtime/backends/cpu/`. Executor, thread pool, soglie di
+parallelizzazione, matmul a blocchi e benchmark sono operativi. Il prossimo
+incremento funzionale puo' quindi essere backward e core neurale; SIMD baseline
+e' operativo, mentre dispatch avanzato e BLAS restano ottimizzazioni CPU
+misurabili e opzionali.

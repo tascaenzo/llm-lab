@@ -15,11 +15,16 @@ Un LLM non e' soltanto una rete neurale: e' un sistema formato da dati, rapprese
 7. [07 — Roadmap: LLM didattico da zero](07-roadmap-llm-da-zero.md): il progetto che realizzeremo dopo la teoria.
 8. [08 — Dataset autoregressivo](08-dataset-autoregressivo.md): come i documenti diventano input e target.
 9. [09 — Flusso dati e artefatti](09-flusso-dati-e-artefatti.md): guida completa ai file prodotti e al loro uso nel training.
-10. [Glossario](glossario.md): termini chiave.
+10. [10 — Runtime tensoriale](10-runtime-tensoriale.md): come i calcoli del modello vengono eseguiti su CPU e, in futuro, GPU.
+11. [11 — Backend CPU](11-backend-cpu.md): come usare thread, core, SIMD e cache conservando kernel leggibili.
+12. [Glossario](glossario.md): termini chiave.
 
-## Limite del primo progetto
+## Scala iniziale
 
-La prima implementazione non cerchera' di replicare un modello commerciale: costruiremo un **piccolo language model autoregressivo** addestrato su un corpus limitato. L'obiettivo e' capire ogni passaggio, osservare risultati misurabili e avere una base estendibile.
+La prima configurazione addestrabile sara' necessariamente piccola, cosi' da
+poter verificare ogni componente su hardware locale. Runtime, backend e modello
+saranno pero' progettati come componenti estendibili: ridurre le dimensioni del
+primo esperimento non deve introdurre limiti strutturali nel codice.
 
 ## Flusso essenziale
 
