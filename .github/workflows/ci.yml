@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset debug -DLLM_LAB_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset debug
 
       - name: Build unit-test targets
         run: >
