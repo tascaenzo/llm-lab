@@ -19,6 +19,16 @@ llm_lab_add_tokenizer_test(model_io tokenizer/test_model_io.c)
 llm_lab_add_tokenizer_test(pretokenizer tokenizer/test_pretokenizer.c)
 llm_lab_add_tokenizer_test(training tokenizer/test_training.c)
 
+add_executable(dataset_test dataset/test_dataset.c)
+target_compile_features(dataset_test PRIVATE c_std_23)
+target_link_libraries(dataset_test PRIVATE dataset)
+target_include_directories(dataset_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+target_compile_definitions(dataset_test PRIVATE
+    LLM_LAB_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}"
+    LLM_LAB_TEST_DOCUMENTS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/documents.jsonl")
+llm_lab_set_warnings(dataset_test)
+add_test(NAME dataset.unit COMMAND dataset_test)
+
 add_test(
     NAME python.unit
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
@@ -48,7 +58,16 @@ add_test(
         $<TARGET_FILE:tokenizer_experiment>
         ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tiny-corpus-a.txt)
 
+add_test(
+    NAME integration.dataset_cli
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/integration/test_dataset_cli.py
+        $<TARGET_FILE:llm_lab_cli>
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/documents.jsonl
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tiny-corpus-a.txt
+        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/tiny-corpus-b.txt)
+
 set_tests_properties(
     python.unit integration.cli integration.artifact_pipeline integration.tokenizer_experiment
+    integration.dataset_cli
     PROPERTIES
     ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")

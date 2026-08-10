@@ -10,6 +10,9 @@ loss = - media(log P(token_corretto | contesto))
 
 Una loss piu' bassa indica previsioni migliori sul set valutato, ma non garantisce da sola risposte utili, fattuali o sicure.
 
+La costruzione concreta di input e target, lo split per documento e il token
+`<EOD>` sono descritti in [dataset autoregressivo](08-dataset-autoregressivo.md).
+
 ## Il ciclo di training
 
 ```text

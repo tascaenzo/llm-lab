@@ -12,6 +12,7 @@
 #include <unistd.h>
 #endif
 
+#include "dataset/dataset.h"
 #include "tokenizer/tokenizer.h"
 
 typedef struct cli_training_progress {
@@ -21,6 +22,14 @@ typedef struct cli_training_progress {
     int has_phase;
     int interactive;
 } cli_training_progress;
+
+typedef struct cli_dataset_progress {
+    double started_at;
+    double last_update_at;
+    uint64_t next_log_bytes;
+    int interactive;
+    int has_output;
+} cli_dataset_progress;
 
 static double current_time_seconds(void) {
 #ifdef _WIN32
@@ -147,12 +156,88 @@ static void finish_training_progress(const cli_training_progress *progress) {
     }
 }
 
+static uint64_t sum_dataset_tokens(const uint64_t token_counts[3]) {
+    uint64_t total = 0U;
+    for (size_t index = 0U; index < 3U; ++index) {
+        if (token_counts[index] > UINT64_MAX - total) {
+            return UINT64_MAX;
+        }
+        total += token_counts[index];
+    }
+    return total;
+}
+
+static void show_dataset_progress(uint64_t bytes_read, uint64_t total_bytes,
+                                  uint64_t documents_processed, const uint64_t token_counts[3],
+                                  void *context) {
+    cli_dataset_progress *progress = context;
+    const double now = current_time_seconds();
+    const int completed = bytes_read >= total_bytes;
+    const uint64_t total_tokens = sum_dataset_tokens(token_counts);
+    const double fraction = total_bytes == 0U ? 1.0 : (double)bytes_read / (double)total_bytes;
+    const double elapsed = now - progress->started_at;
+    const double bytes_per_second = elapsed > 0.0 ? (double)bytes_read / elapsed : 0.0;
+    const double remaining_seconds = bytes_per_second > 0.0 && total_bytes > bytes_read
+                                         ? (double)(total_bytes - bytes_read) / bytes_per_second
+                                         : 0.0;
+
+    if (progress->interactive == 0) {
+        const uint64_t interval = total_bytes < UINT64_C(20) ? UINT64_C(1) : total_bytes / 20U;
+        if (bytes_read != 0U && completed == 0 && bytes_read < progress->next_log_bytes) {
+            return;
+        }
+        progress->next_log_bytes =
+            bytes_read > UINT64_MAX - interval ? UINT64_MAX : bytes_read + interval;
+    } else if (completed == 0 && bytes_read != 0U && now - progress->last_update_at < 0.5) {
+        return;
+    }
+
+    char completed_bytes[32] = {0};
+    char total_size[32] = {0};
+    char eta[32] = "--:--";
+    format_bytes(bytes_read, completed_bytes, sizeof(completed_bytes));
+    format_bytes(total_bytes, total_size, sizeof(total_size));
+    if (bytes_per_second > 0.0 && completed == 0) {
+        format_duration(remaining_seconds, eta, sizeof(eta));
+    }
+    const double mebibytes_per_second = bytes_per_second / (1024.0 * 1024.0);
+
+    if (progress->interactive != 0) {
+        const size_t bar_width = 26U;
+        const size_t filled = (size_t)(fraction * (double)bar_width);
+        fprintf(stderr, "\rDataset [");
+        for (size_t index = 0U; index < bar_width; ++index) {
+            fputc(index < filled ? '#' : '-', stderr);
+        }
+        fprintf(stderr,
+                "] %5.1f%% %s/%s | documenti %" PRIu64 " | token %" PRIu64 " | %.1f MiB/s | ETA %s",
+                fraction * 100.0, completed_bytes, total_size, documents_processed, total_tokens,
+                mebibytes_per_second, eta);
+        fflush(stderr);
+    } else {
+        fprintf(stderr,
+                "Dataset: %5.1f%% %s/%s, documenti %" PRIu64 ", token %" PRIu64
+                ", %.1f MiB/s, ETA %s\n",
+                fraction * 100.0, completed_bytes, total_size, documents_processed, total_tokens,
+                mebibytes_per_second, eta);
+    }
+    progress->last_update_at = now;
+    progress->has_output = 1;
+}
+
+static void finish_dataset_progress(const cli_dataset_progress *progress) {
+    if (progress->interactive != 0 && progress->has_output != 0) {
+        fputc('\n', stderr);
+    }
+}
+
 static void print_usage(const char *program) {
     fprintf(stderr,
             "Usage:\n"
             "  %s tokenizer train OUTPUT.llmtok VOCAB_SIZE INPUT...\n"
-            "  %s tokenizer evaluate MODEL.llmtok MAX_BYTES INPUT...\n",
-            program, program);
+            "  %s tokenizer evaluate MODEL.llmtok MAX_BYTES INPUT...\n"
+            "  %s dataset prepare MODEL.llmtok DOCUMENTS.jsonl OUTPUT_PREFIX\n",
+            program, program, program);
 }
 
 static int parse_vocabulary_size(const char *text, uint32_t *out_size) {
@@ -312,12 +397,45 @@ static int run_tokenizer_evaluate(int argc, char **argv) {
     return 0;
 }
 
+static int run_dataset_prepare(char **argv) {
+    cli_dataset_progress progress = {
+        .started_at = current_time_seconds(),
+        .interactive = standard_error_is_terminal(),
+    };
+    lm_dataset_prepare_report report = {0};
+    const lm_dataset_status status = lm_dataset_prepare_jsonl_with_progress(
+        argv[3], argv[4], argv[5], show_dataset_progress, &progress, &report);
+    finish_dataset_progress(&progress);
+    if (status != LM_DATASET_OK) {
+        fprintf(stderr, "Dataset preparation failed: %s\n", lm_dataset_status_string(status));
+        return 1;
+    }
+
+    printf("{\"schema\":\"llm-lab-dataset-report-v1\","
+           "\"tokenizer_vocabulary_size\":%" PRIu32 ","
+           "\"model_vocabulary_size\":%" PRIu32 ","
+           "\"end_of_document_token\":%" PRIu32 ","
+           "\"splits\":{"
+           "\"train\":{\"documents\":%" PRIu64 ",\"tokens\":%" PRIu64 "},"
+           "\"validation\":{\"documents\":%" PRIu64 ",\"tokens\":%" PRIu64 "},"
+           "\"test\":{\"documents\":%" PRIu64 ",\"tokens\":%" PRIu64 "}}}\n",
+           report.tokenizer_vocabulary_size, report.model_vocabulary_size,
+           report.end_of_document_token, report.document_counts[LM_DATASET_TRAIN],
+           report.token_counts[LM_DATASET_TRAIN], report.document_counts[LM_DATASET_VALIDATION],
+           report.token_counts[LM_DATASET_VALIDATION], report.document_counts[LM_DATASET_TEST],
+           report.token_counts[LM_DATASET_TEST]);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 6 && strcmp(argv[1], "tokenizer") == 0 && strcmp(argv[2], "train") == 0) {
         return run_tokenizer_train(argc, argv);
     }
     if (argc >= 6 && strcmp(argv[1], "tokenizer") == 0 && strcmp(argv[2], "evaluate") == 0) {
         return run_tokenizer_evaluate(argc, argv);
+    }
+    if (argc == 6 && strcmp(argv[1], "dataset") == 0 && strcmp(argv[2], "prepare") == 0) {
+        return run_dataset_prepare(argv);
     }
 
     print_usage(argv[0]);

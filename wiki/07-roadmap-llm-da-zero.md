@@ -21,6 +21,11 @@ La toolchain e' descritta in [../docs/TOOLCHAIN.md](../docs/TOOLCHAIN.md); l'obi
 
 **Verifica:** `decode(encode(testo))` funziona e un batch ha le forme attese.
 
+Il tokenizer Byte-level BPE e il corpus Wikipedia v1 sono ora implementati. Il
+prossimo incremento della fase e' la pipeline descritta in
+[dataset autoregressivo](08-dataset-autoregressivo.md): split per documento,
+artefatti `.llmdat` e batch input/target.
+
 ## Fase 2 — Baseline semplice
 
 - implementare un modello bigram o una piccola rete che predice il token successivo;
