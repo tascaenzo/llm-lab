@@ -1,0 +1,6 @@
+{"id":"doc-19","source":"fixture","text":"virgolette: \"ciao\""}
+{"id":"doc-0","source":"fixture","text":"ciao"}
+{"id":"doc-13","source":"fixture","text":"è valida"}
+{"id":"doc-1","metadata":{"nested":true},"text":"prima riga\nseconda riga"}
+{"id":"doc-27","source":"fixture","text":""}
+{"id":"doc-21","tags":["fixture",1],"text":"emoji 😀"}
