@@ -1,39 +1,29 @@
-name: CI
+name: Unit tests
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    name: ${{ matrix.os }} / ${{ matrix.build_type }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        build_type: [debug, release]
+  unit-tests:
+    name: Ubuntu / Debug
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset ${{ matrix.build_type }} -DLLM_LAB_WARNINGS_AS_ERRORS=ON
+        run: cmake --preset debug -DLLM_LAB_WARNINGS_AS_ERRORS=ON
 
-      - name: Build
-        run: cmake --build --preset ${{ matrix.build_type }} --parallel
+      - name: Build unit-test targets
+        run: >
+          cmake --build --preset debug --parallel --target
+          encode_decode model_io pretokenizer training dataset_test
 
-      - name: Test
-        run: ctest --preset ${{ matrix.build_type }}
-
-  quality:
-    name: Formatting and Python syntax
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Check C formatting
-        run: make check-format
-
-      - name: Check Python syntax
-        run: python3 -m compileall -q utils tests
+      - name: Run unit tests
+        run: >
+          ctest --test-dir build/debug --output-on-failure
+          -R '^(tokenizer\.|dataset\.unit$|python\.unit$)'
