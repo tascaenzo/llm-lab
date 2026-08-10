@@ -13,8 +13,34 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
 option(LLM_LAB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(LLM_LAB_BUILD_BENCHMARKS "Build runtime benchmark executables" OFF)
 
 include(cmake/CompilerWarnings.cmake)
+find_package(Threads REQUIRED)
+
+add_library(runtime STATIC
+    src/runtime/backend.c
+    src/runtime/backends/cpu/cpu_backend.c
+    src/runtime/backends/cpu/cpu_executor.c
+    src/runtime/backends/cpu/cpu_features.c
+    src/runtime/backends/cpu/cpu_kernels.c
+    src/runtime/backends/cpu/cpu_operations.c
+    src/runtime/backends/cpu/cpu_simd.c
+    src/runtime/backends/cpu/cpu_threads.c
+    src/runtime/memory.c
+    src/runtime/operations.c
+    src/runtime/tensor.c)
+target_include_directories(runtime
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/backends/cpu)
+target_compile_features(runtime PUBLIC c_std_23)
+target_link_libraries(runtime PUBLIC Threads::Threads)
+llm_lab_set_warnings(runtime)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(runtime PUBLIC m)
+endif()
 
 add_library(tokenizer STATIC
     src/tokenizer/model.c
@@ -52,4 +78,8 @@ llm_lab_set_warnings(tokenizer_experiment)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+
+if(LLM_LAB_BUILD_BENCHMARKS)
+    add_subdirectory(utils/benchmarks)
 endif()

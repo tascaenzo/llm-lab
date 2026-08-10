@@ -1,5 +1,36 @@
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+add_executable(runtime_test runtime/test_runtime.c)
+target_compile_features(runtime_test PRIVATE c_std_23)
+target_link_libraries(runtime_test PRIVATE runtime)
+target_include_directories(runtime_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+llm_lab_set_warnings(runtime_test)
+add_test(NAME runtime.unit COMMAND runtime_test)
+
+add_executable(runtime_operations_test runtime/test_operations.c)
+target_compile_features(runtime_operations_test PRIVATE c_std_23)
+target_link_libraries(runtime_operations_test PRIVATE runtime)
+target_include_directories(runtime_operations_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+llm_lab_set_warnings(runtime_operations_test)
+add_test(NAME runtime.operations COMMAND runtime_operations_test)
+
+add_executable(runtime_language_operations_test runtime/test_language_operations.c)
+target_compile_features(runtime_language_operations_test PRIVATE c_std_23)
+target_link_libraries(runtime_language_operations_test PRIVATE runtime)
+target_include_directories(runtime_language_operations_test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+llm_lab_set_warnings(runtime_language_operations_test)
+add_test(NAME runtime.language_operations COMMAND runtime_language_operations_test)
+
+add_executable(runtime_cpu_backend_test runtime/test_cpu_backend.c)
+target_compile_features(runtime_cpu_backend_test PRIVATE c_std_23)
+target_link_libraries(runtime_cpu_backend_test PRIVATE runtime)
+target_include_directories(runtime_cpu_backend_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer
+    ${PROJECT_SOURCE_DIR}/src/runtime/backends/cpu)
+llm_lab_set_warnings(runtime_cpu_backend_test)
+add_test(NAME runtime.cpu_backend COMMAND runtime_cpu_backend_test)
+
 function(llm_lab_add_tokenizer_test test_name source)
     add_executable(${test_name} ${source})
     target_compile_features(${test_name} PRIVATE c_std_23)

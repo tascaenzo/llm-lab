@@ -9,21 +9,52 @@ permissions:
 
 jobs:
   unit-tests:
-    name: Ubuntu / Debug
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Debug
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Configure
-        run: cmake --preset debug
+        run: cmake --preset debug -DLLM_LAB_BUILD_BENCHMARKS=ON
 
       - name: Build unit-test targets
         run: >
           cmake --build --preset debug --parallel --target
           encode_decode model_io pretokenizer training dataset_test
+          runtime_test runtime_operations_test runtime_language_operations_test
+          runtime_cpu_backend_test runtime_cpu_benchmark
 
       - name: Run unit tests
         run: >
           ctest --test-dir build/debug --output-on-failure
-          -R '^(tokenizer\.|dataset\.unit$|python\.unit$)'
+          -R '^(tokenizer\.|dataset\.unit$|runtime\.|benchmark\.|python\.unit$)'
+
+  runtime-sanitizers:
+    name: Ubuntu / Runtime sanitizers
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure ASan and UBSan
+        run: >
+          cmake -S . -B build/sanitizers -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+
+      - name: Build runtime tests
+        run: >
+          cmake --build build/sanitizers --parallel --target
+          runtime_test runtime_operations_test runtime_language_operations_test
+          runtime_cpu_backend_test
+
+      - name: Run runtime tests
+        run: >
+          ctest --test-dir build/sanitizers --output-on-failure
+          -R '^runtime\.'
