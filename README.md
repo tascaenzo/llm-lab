@@ -4,9 +4,19 @@ Un laboratorio in C per capire e costruire, passo dopo passo, un piccolo languag
 
 Il progetto privilegia chiarezza e portabilita' tra macOS, Linux e Windows. Usa C23, lo standard C piu' recente, e non usa framework di deep learning: ogni componente viene implementato quando diventa necessario e resta osservabile dalla CLI.
 
+L'[indice della documentazione implementativa](docs/README.md) raccoglie le
+specifiche tecniche; la [wiki](wiki/README.md) spiega prima la teoria con un
+percorso di lettura guidato.
+
 La prima specifica implementativa e' [docs/tokenizer.md](docs/tokenizer.md).
 La preparazione del corpus italiano e' descritta in [docs/corpus.md](docs/corpus.md).
 La conversione in dati autoregressivi e' descritta in [docs/dataset.md](docs/dataset.md).
+Il runtime tensoriale e' introdotto nella
+[wiki](wiki/10-runtime-tensoriale.md) e specificato in
+[docs/runtime-tensoriale.md](docs/runtime-tensoriale.md).
+La fase corrente, dedicata al backend CPU parallelo, e' spiegata nella
+[wiki](wiki/11-backend-cpu.md) e definita tecnicamente in
+[docs/backend-cpu.md](docs/backend-cpu.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 
@@ -14,7 +24,17 @@ Per studiare l'intero percorso e il ruolo di ogni file consulta la
 
 La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
-`.llmdat` e fornisce batch input/target al futuro modello.
+`.llmdat` e fornisce batch input/target al futuro modello. Il runtime tensoriale
+CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
+riduzioni, matmul, gather/scatter, softmax e cross-entropy. Il prossimo incremento
+costruira' backward e layer neurali sopra il backend CPU gia' dotato di thread
+pool, kernel paralleli, matmul a blocchi e benchmark. I sorgenti specifici
+dell'hardware sono separati sotto `src/runtime/backends/`, cosi' Metal e CUDA
+potranno essere aggiunti senza riscrivere il modello.
+
+La suite prestazionale accetta operazioni, forme e liste di thread configurabili
+e produce JSONL confrontabile con baseline locali. Uso e criteri di misura sono
+descritti nella [specifica del backend CPU](docs/backend-cpu.md#14-benchmark).
 
 ## Requisiti
 
@@ -96,13 +116,14 @@ specificati in [docs/dataset.md](docs/dataset.md).
 ```text
 apps/      eseguibili del progetto (oggi: llm-lab)
 artifacts/ tokenizer addestrati e versionati
+utils/benchmarks/ strumenti per misure prestazionali e confronto delle regressioni
 include/   header pubblici dei moduli implementati
 src/       implementazione dei moduli implementati
 utils/     piccole utility riproducibili per dati e sviluppo
 tests/     test C, test Python, integrazione CLI e fixture minime
 data/      corpus locali: originali, puliti e derivati (non versionati)
 cmake/     moduli della toolchain
-docs/      istruzioni tecniche
+docs/      specifiche implementative e istruzioni tecniche
 wiki/      teoria e roadmap dell'LLM
 ```
 

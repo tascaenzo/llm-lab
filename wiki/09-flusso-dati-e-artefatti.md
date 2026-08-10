@@ -383,24 +383,26 @@ piu' ampie.
 - formato `.llmdat` con checksum;
 - token `<EOD>`;
 - batcher casuale riproducibile;
+- runtime CPU di riferimento, tensori e operazioni numeriche;
 - CLI con avanzamento;
 - test unitari, integrazione e sanitizer.
 
 ### Non ancora implementato
 
-- nucleo numerico e tensori;
 - embedding del modello;
 - forward e backward;
 - optimizer;
-- baseline neurale;
 - Transformer;
 - checkpoint del modello;
 - ciclo di validation/test;
 - generazione autoregressiva del modello.
 
-La prossima milestone non consiste quindi nel raccogliere altri dati: consiste nel
-leggere un batch `.llmdat`, calcolare una loss e dimostrare che il primo piccolo
-modello riesce a farla scendere.
+La prossima milestone non consiste quindi nel raccogliere altri dati. Consiste
+nel completare lo strato di esecuzione parallela del backend CPU e misurarne i
+kernel principali. Backward e primi layer verranno costruiti subito dopo, senza
+inserire calcoli hardware-specifici nel modello. La teoria e' in
+[runtime tensoriale](10-runtime-tensoriale.md) e
+[backend CPU](11-backend-cpu.md).
 
 ## 14. Domande di controllo
 
