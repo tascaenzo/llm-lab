@@ -32,10 +32,12 @@ def sha256_file(path: Path) -> str:
 
 
 def project_relative(path: Path, project_root: Path) -> str:
+    resolved_path = path.resolve()
     try:
-        return str(path.resolve().relative_to(project_root.resolve()))
+        portable_path = resolved_path.relative_to(project_root.resolve())
     except ValueError:
-        return str(path.resolve())
+        portable_path = resolved_path
+    return portable_path.as_posix()
 
 
 def model_merge_count(path: Path) -> int:
