@@ -12,6 +12,35 @@ static int tensors_have_same_shape(const llm_tensor *left, const llm_tensor *rig
     return 1;
 }
 
+llm_status llm_cast(llm_backend *backend, const llm_tensor *input, llm_tensor *output) {
+    size_t input_bytes = 0U;
+    size_t output_bytes = 0U;
+    llm_status status = llm_tensor_validate(backend, input, &input_bytes);
+    if (status == LLM_OK) {
+        status = llm_tensor_validate(backend, output, &output_bytes);
+    }
+    if (status != LLM_OK) {
+        return status;
+    }
+    (void)input_bytes;
+    (void)output_bytes;
+    const int valid_pair = (input->dtype == LLM_DTYPE_F32 &&
+                            (output->dtype == LLM_DTYPE_F16 || output->dtype == LLM_DTYPE_BF16)) ||
+                           (output->dtype == LLM_DTYPE_F32 &&
+                            (input->dtype == LLM_DTYPE_F16 || input->dtype == LLM_DTYPE_BF16));
+    if (valid_pair == 0) {
+        return LLM_UNSUPPORTED_DTYPE;
+    }
+    if (tensors_have_same_shape(input, output) == 0) {
+        return LLM_INVALID_SHAPE;
+    }
+    if (input->storage == output->storage) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    return backend->ops->cast(backend->context, input->storage->memory, input->dtype,
+                              output->storage->memory, output->dtype, input->element_count);
+}
+
 static llm_status validate_f32_tensor(const llm_backend *backend, const llm_tensor *tensor) {
     size_t payload_bytes = 0U;
     const llm_status status = llm_tensor_validate(backend, tensor, &payload_bytes);
@@ -194,6 +223,37 @@ llm_status llm_matmul(llm_backend *backend, const llm_tensor *left, const llm_te
                                     (const float *)right->storage->memory,
                                     (float *)output->storage->memory, left->shape[0],
                                     left->shape[1], right->shape[1]);
+}
+
+llm_status llm_matmul_mixed_f32(llm_backend *backend, const llm_tensor *left,
+                                const llm_tensor *right, llm_tensor *output) {
+    size_t payload_bytes = 0U;
+    llm_status status = llm_tensor_validate(backend, left, &payload_bytes);
+    if (status == LLM_OK) {
+        status = llm_tensor_validate(backend, right, &payload_bytes);
+    }
+    if (status == LLM_OK) {
+        status = validate_f32_tensor(backend, output);
+    }
+    if (status != LLM_OK) {
+        return status;
+    }
+    (void)payload_bytes;
+    if ((left->dtype != LLM_DTYPE_F16 && left->dtype != LLM_DTYPE_BF16) ||
+        right->dtype != left->dtype) {
+        return LLM_UNSUPPORTED_DTYPE;
+    }
+    if (left->rank != 2U || right->rank != 2U || output->rank != 2U ||
+        left->shape[1] != right->shape[0] || output->shape[0] != left->shape[0] ||
+        output->shape[1] != right->shape[1]) {
+        return LLM_INVALID_SHAPE;
+    }
+    if (output->storage == left->storage || output->storage == right->storage) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    return backend->ops->matmul_mixed_f32(
+        backend->context, left->storage->memory, right->storage->memory, left->dtype,
+        (float *)output->storage->memory, left->shape[0], left->shape[1], right->shape[1]);
 }
 
 static llm_status validate_gather_shapes(const llm_tensor *table, const llm_tensor *indices,

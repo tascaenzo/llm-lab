@@ -22,7 +22,8 @@ static int cpu_supports_dtype(const void *context, llm_dtype dtype) {
     if (context == NULL) {
         return 0;
     }
-    return dtype == LLM_DTYPE_F32 || dtype == LLM_DTYPE_U32;
+    return dtype == LLM_DTYPE_F32 || dtype == LLM_DTYPE_U32 || dtype == LLM_DTYPE_F16 ||
+           dtype == LLM_DTYPE_BF16;
 }
 
 static llm_status cpu_allocate(void *context, size_t byte_count, void **out_memory) {
@@ -71,6 +72,7 @@ static const llm_backend_ops *cpu_backend_ops(void) {
         .deallocate = cpu_deallocate,
         .zero = llm_cpu_execute_zero,
         .copy = llm_cpu_execute_copy,
+        .cast = llm_cpu_execute_cast,
         .fill_f32 = llm_cpu_execute_fill_f32,
         .add_f32 = llm_cpu_execute_add_f32,
         .multiply_f32 = llm_cpu_execute_multiply_f32,
@@ -79,6 +81,7 @@ static const llm_backend_ops *cpu_backend_ops(void) {
         .reduce_max_last_f32 = llm_cpu_execute_reduce_max_last_f32,
         .reduce_mean_square_last_f32 = llm_cpu_execute_reduce_mean_square_last_f32,
         .matmul_f32 = llm_cpu_execute_matmul_f32,
+        .matmul_mixed_f32 = llm_cpu_execute_matmul_mixed_f32,
         .gather_rows_f32 = llm_cpu_execute_gather_rows_f32,
         .scatter_add_rows_f32 = llm_cpu_execute_scatter_add_rows_f32,
         .softmax_last_f32 = llm_cpu_execute_softmax_last_f32,
