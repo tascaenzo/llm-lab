@@ -74,6 +74,17 @@ class BenchmarkComparisonTest(unittest.TestCase):
         report = json.loads(completed.stdout)
         self.assertEqual(len(report["missing"]), 1)
 
+    def test_backend_and_dtype_are_distinct_results(self):
+        cpu = result(1.0)
+        cpu.update({"backend": "cpu", "dtype": "f32", "scenario": "square"})
+        metal = result(0.5, threads=0)
+        metal.update({"backend": "metal", "dtype": "f16", "scenario": "square"})
+        completed = self.run_comparison([cpu, metal], [cpu, metal])
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["compared_records"], 2)
+        self.assertEqual(len(report["comparisons"]), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
