@@ -15,6 +15,7 @@ prima la pagina wiki e poi la specifica corrispondente.
 4. [Dataset autoregressivo](dataset.md)
 5. [Runtime tensoriale](runtime-tensoriale.md)
 6. [Backend CPU](backend-cpu.md)
+7. [Backend Metal](backend-metal.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

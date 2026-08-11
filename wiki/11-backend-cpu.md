@@ -87,9 +87,9 @@ Non tutte le operazioni si parallelizzano nello stesso modo.
 | cross-entropy | righe, poi somma controllata delle loss |
 
 `scatter_add` richiede piu' attenzione: due indici possono indicare la stessa
-riga e quindi due thread potrebbero scrivere nello stesso punto. La versione
-attuale resta seriale. Una futura versione parallela dovra'
-usare partizioni, buffer locali o sincronizzazione esplicita.
+riga e quindi due thread non devono possedere la stessa colonna. La versione
+attuale divide le colonne tra i worker: ciascuno aggiorna posizioni disgiunte,
+anche quando gli indici di riga sono duplicati.
 
 ## 5. SIMD: piu' numeri con una istruzione
 
@@ -189,8 +189,8 @@ La suite benchmark misura le primitive principali con liste come
 `1,2,4,8,auto`, calcola speedup ed efficienza e produce risultati JSON
 confrontabili con una baseline della stessa macchina.
 
-`scatter_add` e la cross-entropy forward restano seriali per evitare race o
-riduzioni non controllate. I percorsi piu' caldi usano gia' SIMD baseline NEON
-su ARM64 e SSE2 su x86-64. Il prossimo lavoro prestazionale e' il dispatch per
-estensioni piu' avanzate e, se misurata utile, una BLAS opzionale; il core
-neurale puo' ora iniziare sopra un backend gia' parallelo.
+`scatter_add` e' parallelo per colonne senza atomiche; la cross-entropy forward
+mantiene una riduzione deterministica. I percorsi piu' caldi usano NEON/FMA su
+ARM64 e, su x86 con Clang/GCC, scelgono SSE2, AVX2/FMA o AVX-512/FMA in base alla
+CPU. Una BLAS opzionale resta un possibile incremento futuro; il core neurale
+puo' iniziare sopra un backend gia' parallelo.

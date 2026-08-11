@@ -1,0 +1,16 @@
+#ifndef LLM_LAB_METAL_KERNELS_EMBEDDED_H
+#define LLM_LAB_METAL_KERNELS_EMBEDDED_H
+
+static const unsigned char llm_metal_kernel_source[] = {@LLM_METAL_KERNEL_BYTES@};
+static const unsigned long llm_metal_kernel_source_size = sizeof(llm_metal_kernel_source);
+static const unsigned char llm_metal_simdgroup_source[] = {@LLM_METAL_SIMDGROUP_BYTES@};
+static const unsigned long llm_metal_simdgroup_source_size = sizeof(llm_metal_simdgroup_source);
+
+#define LLM_METAL_HAS_PRECOMPILED_LIBRARY @LLM_METAL_HAS_PRECOMPILED_LIBRARY@
+#if LLM_METAL_HAS_PRECOMPILED_LIBRARY
+static const unsigned char llm_metal_precompiled_library[] = {@LLM_METAL_LIBRARY_BYTES@};
+static const unsigned long llm_metal_precompiled_library_size =
+    sizeof(llm_metal_precompiled_library);
+#endif
+
+#endif

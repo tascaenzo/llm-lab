@@ -20,7 +20,14 @@ Testing/
 .DS_Store
 Thumbs.db
 
+# Cache e bytecode Python generati dalle utility locali.
+__pycache__/
+*.py[cod]
+
 # Corpus locali: grandi, rigenerabili e non versionati.
 /data/raw/
 /data/clean/
 /data/derived/
+
+# Baseline e risultati prestazionali locali, dipendenti dalla macchina.
+/artifacts/benchmarks/local/
