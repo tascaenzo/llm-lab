@@ -17,6 +17,7 @@ typedef enum benchmark_output_format {
 typedef struct benchmark_cli_config {
     cpu_benchmark_config workload;
     int selected_operations[CPU_BENCHMARK_OPERATION_COUNT];
+    int selected_backends[2];
     size_t requested_threads[CPU_BENCHMARK_MAX_THREAD_CONFIGS];
     size_t thread_config_count;
     benchmark_output_format output_format;
@@ -25,14 +26,16 @@ typedef struct benchmark_cli_config {
 static void print_usage(const char *program) {
     printf("Usage: %s [options]\n\n", program);
     printf("Options:\n");
+    printf("  --backend NAME      cpu (default), metal, or all\n");
     printf("  --operations LIST   all or comma-separated: copy,add,reduce_sum,matmul,\n");
-    printf("                      gather,softmax,cross_entropy_forward,\n");
+    printf("                      gather,scatter_add,softmax,cross_entropy_forward,\n");
     printf("                      cross_entropy_backward\n");
     printf("  --threads LIST      comma-separated thread counts; use auto for detection\n");
     printf("  --elements N        vector elements for copy/add (default: 1048576)\n");
     printf("  --rows N            matrix rows (default: 256)\n");
     printf("  --columns N         matrix columns/vocabulary (default: 256)\n");
     printf("  --inner N           matmul inner dimension (default: 256)\n");
+    printf("  --precision NAME    matmul inputs: f32 (default), f16, or bf16\n");
     printf("  --warmup N          warm-up iterations (default: 2)\n");
     printf("  --iterations N      measured iterations (default: 10)\n");
     printf("  --sample-ms N       minimum duration per timing sample (default: 10)\n");
@@ -164,7 +167,17 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
             return 0;
         }
         const char *value = argv[++index];
-        if (strcmp(option, "--operations") == 0) {
+        if (strcmp(option, "--backend") == 0) {
+            config->selected_backends[RUNTIME_BENCHMARK_CPU] =
+                strcmp(value, "cpu") == 0 || strcmp(value, "all") == 0;
+            config->selected_backends[RUNTIME_BENCHMARK_METAL] =
+                strcmp(value, "metal") == 0 || strcmp(value, "all") == 0;
+            if (config->selected_backends[RUNTIME_BENCHMARK_CPU] == 0 &&
+                config->selected_backends[RUNTIME_BENCHMARK_METAL] == 0) {
+                fprintf(stderr, "invalid backend: %s (expected cpu, metal, or all)\n", value);
+                return 0;
+            }
+        } else if (strcmp(option, "--operations") == 0) {
             if (parse_operations(value, config) == 0) {
                 fprintf(stderr, "invalid operation list: %s\n", value);
                 return 0;
@@ -188,6 +201,17 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
             }
         } else if (strcmp(option, "--inner") == 0) {
             if (parse_size(value, 0, &config->workload.inner_size) == 0) {
+                return 0;
+            }
+        } else if (strcmp(option, "--precision") == 0) {
+            if (strcmp(value, "f32") == 0) {
+                config->workload.matmul_dtype = LLM_DTYPE_F32;
+            } else if (strcmp(value, "f16") == 0) {
+                config->workload.matmul_dtype = LLM_DTYPE_F16;
+            } else if (strcmp(value, "bf16") == 0) {
+                config->workload.matmul_dtype = LLM_DTYPE_BF16;
+            } else {
+                fprintf(stderr, "invalid precision: %s (expected f32, f16, or bf16)\n", value);
                 return 0;
             }
         } else if (strcmp(option, "--warmup") == 0) {
@@ -282,11 +306,14 @@ static size_t detect_hardware_threads(void) {
 static void print_jsonl_metadata(const benchmark_cli_config *config) {
     printf("{\"type\":\"metadata\",\"schema_version\":1,\"os\":\"%s\","
            "\"architecture\":\"%s\",\"compiler\":\"%s\",\"build\":\"%s\","
-           "\"detected_hardware_threads\":%zu,\"warmup_iterations\":%zu,"
-           "\"measured_iterations\":%zu,\"minimum_sample_seconds\":%.6f}\n",
+           "\"detected_hardware_threads\":%zu,\"metal_available\":%s,"
+           "\"warmup_iterations\":%zu,\"measured_iterations\":%zu,"
+           "\"minimum_sample_seconds\":%.6f}\n",
            operating_system_name(), architecture_name(), compiler_name(), build_type_name(),
-           detect_hardware_threads(), config->workload.warmup_iterations,
-           config->workload.measured_iterations, config->workload.minimum_sample_seconds);
+           detect_hardware_threads(), llm_backend_metal_is_available() != 0 ? "true" : "false",
+           config->workload.warmup_iterations, config->workload.measured_iterations,
+           config->workload.minimum_sample_seconds);
+    (void)fflush(stdout);
 }
 
 static void print_jsonl_dimensions(cpu_benchmark_operation operation,
@@ -305,13 +332,18 @@ static void print_jsonl_result(const cpu_benchmark_result *result,
                                const cpu_benchmark_config *config, double baseline_seconds,
                                size_t baseline_threads) {
     const double speedup = baseline_seconds / result->median_seconds;
-    const double efficiency = speedup * (double)baseline_threads / (double)result->actual_threads;
+    const double efficiency = result->actual_threads > 0U ? speedup * (double)baseline_threads /
+                                                                (double)result->actual_threads
+                                                          : 0.0;
     const double variation = result->mean_seconds > 0.0
                                  ? result->standard_deviation_seconds / result->mean_seconds
                                  : 0.0;
-    printf("{\"type\":\"result\",\"schema_version\":1,\"operation\":\"%s\","
+    printf("{\"type\":\"result\",\"schema_version\":2,\"backend\":\"%s\","
+           "\"device\":\"%s\",\"dtype\":\"%s\",\"operation\":\"%s\","
            "\"requested_threads\":%zu,\"actual_threads\":%zu,\"baseline_threads\":%zu,"
            "\"repetitions_per_sample\":%zu,\"deterministic\":%s,\"dimensions\":",
+           runtime_benchmark_backend_name(result->backend), result->device_name,
+           runtime_benchmark_dtype_name(result->dtype),
            cpu_benchmark_operation_name(result->operation), result->requested_threads,
            result->actual_threads, baseline_threads, result->repetitions_per_sample,
            config->deterministic != 0 ? "true" : "false");
@@ -320,24 +352,29 @@ static void print_jsonl_result(const cpu_benchmark_result *result,
            "\"mean_seconds\":%.9f,\"standard_deviation_seconds\":%.9f,"
            "\"coefficient_of_variation\":%.6f,\"throughput\":%.6f,"
            "\"throughput_unit\":\"%s\",\"speedup\":%.6f,"
-           "\"parallel_efficiency\":%.6f,\"guard\":%.9g}\n",
+           "\"parallel_efficiency\":%.6f,\"gpu_median_seconds\":%.9f,"
+           "\"gpu_p95_seconds\":%.9f,\"pipeline_compilation_seconds\":%.9f,"
+           "\"guard\":%.9g}\n",
            result->minimum_seconds, result->median_seconds, result->p95_seconds,
            result->mean_seconds, result->standard_deviation_seconds, variation, result->throughput,
-           result->throughput_unit, speedup, efficiency, result->guard_value);
+           result->throughput_unit, speedup, efficiency, result->gpu_median_seconds,
+           result->gpu_p95_seconds, result->pipeline_compilation_seconds, result->guard_value);
+    (void)fflush(stdout);
 }
 
 static void print_human_metadata(const benchmark_cli_config *config) {
-    printf("CPU runtime benchmark\n");
+    printf("Tensor runtime benchmark\n");
     printf("System: %s / %s | compiler: %s | build: %s | CPU threads: %zu\n",
            operating_system_name(), architecture_name(), compiler_name(), build_type_name(),
            detect_hardware_threads());
     printf("Samples: %zu warm-up, %zu measured, minimum %.1f ms each\n",
            config->workload.warmup_iterations, config->workload.measured_iterations,
            config->workload.minimum_sample_seconds * 1000.0);
+    printf("Metal: %s\n", llm_backend_metal_is_available() != 0 ? "available" : "unavailable");
 }
 
-static void print_human_operation_header(cpu_benchmark_operation operation,
-                                         const cpu_benchmark_config *config) {
+static void print_human_operation_title(cpu_benchmark_operation operation,
+                                        const cpu_benchmark_config *config) {
     printf("\n%s (", cpu_benchmark_operation_name(operation));
     if (operation == CPU_BENCHMARK_COPY || operation == CPU_BENCHMARK_ADD) {
         printf("%zu elements", config->elements);
@@ -347,6 +384,9 @@ static void print_human_operation_header(cpu_benchmark_operation operation,
         printf("%zu x %zu", config->rows, config->columns);
     }
     printf(")\n");
+}
+
+static void print_human_cpu_header(void) {
     printf("%-10s %12s %12s %20s %10s %12s\n", "Threads", "Median", "P95", "Throughput", "Speedup",
            "Efficiency");
     printf("%-10s %12s %12s %20s %10s %12s\n", "----------", "------------", "------------",
@@ -369,6 +409,26 @@ static void print_human_result(const cpu_benchmark_result *result, double baseli
            efficiency);
 }
 
+static void print_human_metal_header(const cpu_benchmark_result *result) {
+    printf("Metal device: %s | dtype: %s | pipeline startup: %.3f ms\n", result->device_name,
+           runtime_benchmark_dtype_name(result->dtype),
+           result->pipeline_compilation_seconds * 1000.0);
+    printf("%-10s %12s %12s %12s %20s\n", "Backend", "Median", "P95", "GPU median", "Throughput");
+    printf("%-10s %12s %12s %12s %20s\n", "----------", "------------", "------------",
+           "------------", "--------------------");
+}
+
+static void print_human_metal_result(const cpu_benchmark_result *result) {
+    char throughput[64];
+    const int written = snprintf(throughput, sizeof(throughput), "%.3f %s", result->throughput,
+                                 result->throughput_unit);
+    if (written < 0 || (size_t)written >= sizeof(throughput)) {
+        (void)snprintf(throughput, sizeof(throughput), "unavailable");
+    }
+    printf("%-10s %9.3f ms %9.3f ms %9.3f ms %20s\n", "metal", result->median_seconds * 1000.0,
+           result->p95_seconds * 1000.0, result->gpu_median_seconds * 1000.0, throughput);
+}
+
 int main(int argc, char **argv) {
     benchmark_cli_config config = {
         .workload =
@@ -381,7 +441,9 @@ int main(int argc, char **argv) {
                 .measured_iterations = 10U,
                 .minimum_sample_seconds = 0.01,
                 .deterministic = 1,
+                .matmul_dtype = LLM_DTYPE_F32,
             },
+        .selected_backends = {1, 0},
         .requested_threads = {1U, 0U},
         .thread_config_count = 2U,
         .output_format = BENCHMARK_OUTPUT_HUMAN,
@@ -410,16 +472,20 @@ int main(int argc, char **argv) {
             continue;
         }
         if (config.output_format == BENCHMARK_OUTPUT_HUMAN) {
-            print_human_operation_header((cpu_benchmark_operation)operation_index,
-                                         &config.workload);
+            print_human_operation_title((cpu_benchmark_operation)operation_index, &config.workload);
+            if (config.selected_backends[RUNTIME_BENCHMARK_CPU] != 0) {
+                print_human_cpu_header();
+            }
         }
         double baseline_seconds = 0.0;
         size_t baseline_threads = 0U;
-        for (size_t thread_index = 0U; thread_index < config.thread_config_count; ++thread_index) {
+        for (size_t thread_index = 0U; config.selected_backends[RUNTIME_BENCHMARK_CPU] != 0 &&
+                                       thread_index < config.thread_config_count;
+             ++thread_index) {
             cpu_benchmark_result result = {0};
-            if (cpu_benchmark_run((cpu_benchmark_operation)operation_index,
-                                  config.requested_threads[thread_index], &config.workload,
-                                  &result) == 0) {
+            if (runtime_benchmark_run(
+                    RUNTIME_BENCHMARK_CPU, (cpu_benchmark_operation)operation_index,
+                    config.requested_threads[thread_index], &config.workload, &result) == 0) {
                 return EXIT_FAILURE;
             }
             if (thread_index == 0U) {
@@ -430,6 +496,26 @@ int main(int argc, char **argv) {
                 print_jsonl_result(&result, &config.workload, baseline_seconds, baseline_threads);
             } else {
                 print_human_result(&result, baseline_seconds, baseline_threads);
+            }
+        }
+        if (config.selected_backends[RUNTIME_BENCHMARK_METAL] != 0) {
+            if (llm_backend_metal_is_available() == 0) {
+                if (config.output_format == BENCHMARK_OUTPUT_HUMAN) {
+                    printf("Metal unavailable: operation skipped\n");
+                }
+                continue;
+            }
+            cpu_benchmark_result result = {0};
+            if (runtime_benchmark_run(RUNTIME_BENCHMARK_METAL,
+                                      (cpu_benchmark_operation)operation_index, 0U,
+                                      &config.workload, &result) == 0) {
+                return EXIT_FAILURE;
+            }
+            if (config.output_format == BENCHMARK_OUTPUT_JSONL) {
+                print_jsonl_result(&result, &config.workload, result.median_seconds, 0U);
+            } else {
+                print_human_metal_header(&result);
+                print_human_metal_result(&result);
             }
         }
     }

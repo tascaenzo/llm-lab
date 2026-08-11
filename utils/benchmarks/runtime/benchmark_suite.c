@@ -5,11 +5,18 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "benchmark_suite.h"
 #include "runtime/runtime.h"
 
 typedef struct cpu_benchmark_workload {
     cpu_benchmark_operation operation;
+    runtime_benchmark_backend backend_kind;
+    llm_dtype dtype;
     llm_backend *backend;
     llm_tensor first;
     llm_tensor second;
@@ -21,12 +28,26 @@ typedef struct cpu_benchmark_workload {
     size_t inner_size;
 } cpu_benchmark_workload;
 
+const char *runtime_benchmark_backend_name(runtime_benchmark_backend backend) {
+    return backend == RUNTIME_BENCHMARK_CPU     ? "cpu"
+           : backend == RUNTIME_BENCHMARK_METAL ? "metal"
+                                                : "unknown";
+}
+
+const char *runtime_benchmark_dtype_name(llm_dtype dtype) {
+    return dtype == LLM_DTYPE_F32    ? "f32"
+           : dtype == LLM_DTYPE_F16  ? "f16"
+           : dtype == LLM_DTYPE_BF16 ? "bf16"
+                                     : "unknown";
+}
+
 static const char *const operation_names[CPU_BENCHMARK_OPERATION_COUNT] = {
     [CPU_BENCHMARK_COPY] = "copy",
     [CPU_BENCHMARK_ADD] = "add",
     [CPU_BENCHMARK_REDUCE_SUM] = "reduce_sum",
     [CPU_BENCHMARK_MATMUL] = "matmul",
     [CPU_BENCHMARK_GATHER] = "gather",
+    [CPU_BENCHMARK_SCATTER_ADD] = "scatter_add",
     [CPU_BENCHMARK_SOFTMAX] = "softmax",
     [CPU_BENCHMARK_CROSS_ENTROPY_FORWARD] = "cross_entropy_forward",
     [CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD] = "cross_entropy_backward",
@@ -61,11 +82,27 @@ static int checked_multiply(size_t left, size_t right, size_t *out_product) {
 }
 
 static double current_seconds(void) {
+#ifdef _WIN32
+    LARGE_INTEGER counter = {0};
+    LARGE_INTEGER frequency = {0};
+    if (QueryPerformanceCounter(&counter) == 0 || QueryPerformanceFrequency(&frequency) == 0 ||
+        frequency.QuadPart == 0) {
+        return 0.0;
+    }
+    return (double)counter.QuadPart / (double)frequency.QuadPart;
+#elif defined(CLOCK_MONOTONIC)
+    struct timespec time = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &time) != 0) {
+        return 0.0;
+    }
+    return (double)time.tv_sec + (double)time.tv_nsec / 1000000000.0;
+#else
     struct timespec time = {0};
     if (timespec_get(&time, TIME_UTC) != TIME_UTC) {
         return 0.0;
     }
     return (double)time.tv_sec + (double)time.tv_nsec / 1000000000.0;
+#endif
 }
 
 static int compare_double(const void *left, const void *right) {
@@ -151,6 +188,17 @@ static llm_status setup_matrix_workload(cpu_benchmark_workload *workload) {
                 create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->output, 0.0F);
         }
         break;
+    case CPU_BENCHMARK_SCATTER_ADD:
+        status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.5F);
+        if (status == LLM_OK) {
+            status = create_indices(workload->backend, workload->rows, workload->rows,
+                                    &workload->indices);
+        }
+        if (status == LLM_OK) {
+            status =
+                create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->output, 0.0F);
+        }
+        break;
     case CPU_BENCHMARK_SOFTMAX:
         status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.0F);
         if (status == LLM_OK) {
@@ -183,10 +231,35 @@ static llm_status setup_matmul_workload(cpu_benchmark_workload *workload) {
     const size_t left_shape[] = {workload->rows, workload->inner_size};
     const size_t right_shape[] = {workload->inner_size, workload->columns};
     const size_t output_shape[] = {workload->rows, workload->columns};
-    llm_status status =
-        create_f32_tensor(workload->backend, 2U, left_shape, &workload->first, 0.25F);
-    if (status == LLM_OK) {
-        status = create_f32_tensor(workload->backend, 2U, right_shape, &workload->second, -0.125F);
+    llm_status status = LLM_OK;
+    if (workload->dtype == LLM_DTYPE_F32) {
+        status = create_f32_tensor(workload->backend, 2U, left_shape, &workload->first, 0.25F);
+        if (status == LLM_OK) {
+            status =
+                create_f32_tensor(workload->backend, 2U, right_shape, &workload->second, -0.125F);
+        }
+    } else {
+        llm_tensor source = {0};
+        status = create_f32_tensor(workload->backend, 2U, left_shape, &source, 0.25F);
+        if (status == LLM_OK) {
+            status = llm_tensor_create(workload->backend, workload->dtype, 2U, left_shape,
+                                       &workload->first);
+        }
+        if (status == LLM_OK) {
+            status = llm_cast(workload->backend, &source, &workload->first);
+        }
+        llm_tensor_destroy(&source);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 2U, right_shape, &source, -0.125F);
+        }
+        if (status == LLM_OK) {
+            status = llm_tensor_create(workload->backend, workload->dtype, 2U, right_shape,
+                                       &workload->second);
+        }
+        if (status == LLM_OK) {
+            status = llm_cast(workload->backend, &source, &workload->second);
+        }
+        llm_tensor_destroy(&source);
     }
     if (status == LLM_OK) {
         status = create_f32_tensor(workload->backend, 2U, output_shape, &workload->output, 0.0F);
@@ -194,21 +267,29 @@ static llm_status setup_matmul_workload(cpu_benchmark_workload *workload) {
     return status;
 }
 
-static llm_status workload_setup(cpu_benchmark_operation operation, size_t requested_threads,
+static llm_status workload_setup(runtime_benchmark_backend backend_kind,
+                                 cpu_benchmark_operation operation, size_t requested_threads,
                                  const cpu_benchmark_config *config,
                                  cpu_benchmark_workload *out_workload) {
     *out_workload = (cpu_benchmark_workload){
         .operation = operation,
+        .backend_kind = backend_kind,
+        .dtype = operation == CPU_BENCHMARK_MATMUL ? config->matmul_dtype : LLM_DTYPE_F32,
         .elements = config->elements,
         .rows = config->rows,
         .columns = config->columns,
         .inner_size = config->inner_size,
     };
-    const llm_cpu_backend_config backend_config = {
-        .thread_count = requested_threads,
-        .deterministic = config->deterministic,
-    };
-    llm_status status = llm_backend_cpu_create_with_config(&backend_config, &out_workload->backend);
+    llm_status status = LLM_INVALID_ARGUMENT;
+    if (backend_kind == RUNTIME_BENCHMARK_CPU) {
+        const llm_cpu_backend_config backend_config = {
+            .thread_count = requested_threads,
+            .deterministic = config->deterministic,
+        };
+        status = llm_backend_cpu_create_with_config(&backend_config, &out_workload->backend);
+    } else if (backend_kind == RUNTIME_BENCHMARK_METAL) {
+        status = llm_backend_metal_create(&out_workload->backend);
+    }
     if (status != LLM_OK) {
         return status;
     }
@@ -219,6 +300,7 @@ static llm_status workload_setup(cpu_benchmark_operation operation, size_t reque
         break;
     case CPU_BENCHMARK_REDUCE_SUM:
     case CPU_BENCHMARK_GATHER:
+    case CPU_BENCHMARK_SCATTER_ADD:
     case CPU_BENCHMARK_SOFTMAX:
     case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
     case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
@@ -246,11 +328,20 @@ static llm_status workload_execute(cpu_benchmark_workload *workload) {
     case CPU_BENCHMARK_REDUCE_SUM:
         return llm_reduce_sum_last(workload->backend, &workload->first, &workload->output);
     case CPU_BENCHMARK_MATMUL:
-        return llm_matmul(workload->backend, &workload->first, &workload->second,
-                          &workload->output);
+        return workload->dtype == LLM_DTYPE_F32
+                   ? llm_matmul(workload->backend, &workload->first, &workload->second,
+                                &workload->output)
+                   : llm_matmul_mixed_f32(workload->backend, &workload->first, &workload->second,
+                                          &workload->output);
     case CPU_BENCHMARK_GATHER:
         return llm_gather_rows(workload->backend, &workload->first, &workload->indices,
                                &workload->output);
+    case CPU_BENCHMARK_SCATTER_ADD: {
+        const llm_status status = llm_tensor_fill_f32(workload->backend, &workload->output, 0.0F);
+        return status == LLM_OK ? llm_scatter_add_rows(workload->backend, &workload->first,
+                                                       &workload->indices, &workload->output)
+                                : status;
+    }
     case CPU_BENCHMARK_SOFTMAX:
         return llm_softmax_last(workload->backend, &workload->first, &workload->output);
     case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
@@ -301,6 +392,9 @@ static int workload_verify(cpu_benchmark_workload *workload, double *out_guard_v
     case CPU_BENCHMARK_GATHER:
         expected = 0.5F;
         break;
+    case CPU_BENCHMARK_SCATTER_ADD:
+        expected = 0.5F;
+        break;
     case CPU_BENCHMARK_SOFTMAX:
         expected = 1.0F / (float)workload->columns;
         break;
@@ -348,6 +442,11 @@ static double workload_throughput(const cpu_benchmark_workload *workload, double
                (double)workload->rows * sizeof(uint32_t);
         *out_unit = "GB/s";
         return work / seconds / 1.0e9;
+    case CPU_BENCHMARK_SCATTER_ADD:
+        work = (3.0 * (double)workload->rows * (double)workload->columns * sizeof(float)) +
+               (double)workload->rows * sizeof(uint32_t);
+        *out_unit = "GB/s";
+        return work / seconds / 1.0e9;
     case CPU_BENCHMARK_SOFTMAX:
     case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
     case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
@@ -362,13 +461,17 @@ static double workload_throughput(const cpu_benchmark_workload *workload, double
     return 0.0;
 }
 
-int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_threads,
-                      const cpu_benchmark_config *config, cpu_benchmark_result *out_result) {
-    if (operation < CPU_BENCHMARK_COPY || operation >= CPU_BENCHMARK_OPERATION_COUNT ||
+int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_operation operation,
+                          size_t requested_threads, const cpu_benchmark_config *config,
+                          cpu_benchmark_result *out_result) {
+    if ((backend_kind != RUNTIME_BENCHMARK_CPU && backend_kind != RUNTIME_BENCHMARK_METAL) ||
+        operation < CPU_BENCHMARK_COPY || operation >= CPU_BENCHMARK_OPERATION_COUNT ||
         config == NULL || out_result == NULL || config->elements == 0U || config->rows == 0U ||
         config->columns == 0U || config->inner_size == 0U || config->warmup_iterations == 0U ||
         config->measured_iterations == 0U || config->minimum_sample_seconds <= 0.0 ||
-        config->measured_iterations > SIZE_MAX / sizeof(double)) {
+        config->measured_iterations > SIZE_MAX / sizeof(double) ||
+        (config->matmul_dtype != LLM_DTYPE_F32 && config->matmul_dtype != LLM_DTYPE_F16 &&
+         config->matmul_dtype != LLM_DTYPE_BF16)) {
         return 0;
     }
     size_t matrix_elements = 0U;
@@ -378,7 +481,8 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
     (void)matrix_elements;
 
     cpu_benchmark_workload workload = {0};
-    const llm_status setup_status = workload_setup(operation, requested_threads, config, &workload);
+    const llm_status setup_status =
+        workload_setup(backend_kind, operation, requested_threads, config, &workload);
     if (setup_status != LLM_OK) {
         fprintf(stderr, "%s setup failed: %s\n", cpu_benchmark_operation_name(operation),
                 llm_status_string(setup_status));
@@ -427,11 +531,21 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
     }
 
     double *durations = malloc(config->measured_iterations * sizeof(*durations));
-    if (durations == NULL) {
+    double *gpu_durations = calloc(config->measured_iterations, sizeof(*gpu_durations));
+    if (durations == NULL || gpu_durations == NULL) {
+        free(gpu_durations);
+        free(durations);
         workload_destroy(&workload);
         return 0;
     }
+    llm_metal_backend_metrics initial_metrics = {0};
+    if (backend_kind == RUNTIME_BENCHMARK_METAL) {
+        (void)llm_backend_metal_get_metrics(workload.backend, &initial_metrics);
+    }
     for (size_t iteration = 0U; iteration < config->measured_iterations; ++iteration) {
+        if (backend_kind == RUNTIME_BENCHMARK_METAL) {
+            (void)llm_backend_metal_reset_metrics(workload.backend);
+        }
         const double start = current_seconds();
         llm_status status = LLM_OK;
         for (size_t repetition = 0U; repetition < repetitions_per_sample; ++repetition) {
@@ -441,10 +555,20 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
             }
         }
         durations[iteration] = (current_seconds() - start) / (double)repetitions_per_sample;
+        if (backend_kind == RUNTIME_BENCHMARK_METAL) {
+            llm_metal_backend_metrics metrics = {0};
+            if (llm_backend_metal_get_metrics(workload.backend, &metrics) != LLM_OK) {
+                status = LLM_BACKEND_ERROR;
+            } else {
+                gpu_durations[iteration] =
+                    metrics.total_gpu_seconds / (double)repetitions_per_sample;
+            }
+        }
         if (status != LLM_OK || durations[iteration] <= 0.0) {
             fprintf(stderr, "%s measurement failed: %s\n", cpu_benchmark_operation_name(operation),
                     llm_status_string(status));
             free(durations);
+            free(gpu_durations);
             workload_destroy(&workload);
             return 0;
         }
@@ -454,6 +578,7 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
     if (workload_verify(&workload, &guard_value) == 0) {
         fprintf(stderr, "%s produced an invalid result\n", cpu_benchmark_operation_name(operation));
         free(durations);
+        free(gpu_durations);
         workload_destroy(&workload);
         return 0;
     }
@@ -470,6 +595,7 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
     }
     variance /= (double)config->measured_iterations;
     qsort(durations, config->measured_iterations, sizeof(*durations), compare_double);
+    qsort(gpu_durations, config->measured_iterations, sizeof(*gpu_durations), compare_double);
     const size_t median_index = config->measured_iterations / 2U;
     const double median = config->measured_iterations % 2U == 0U
                               ? (durations[median_index - 1U] + durations[median_index]) * 0.5
@@ -482,8 +608,12 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
 
     *out_result = (cpu_benchmark_result){
         .operation = operation,
+        .backend = backend_kind,
+        .dtype = workload.dtype,
         .requested_threads = requested_threads,
-        .actual_threads = llm_backend_cpu_thread_count(workload.backend),
+        .actual_threads = backend_kind == RUNTIME_BENCHMARK_CPU
+                              ? llm_backend_cpu_thread_count(workload.backend)
+                              : 0U,
         .repetitions_per_sample = repetitions_per_sample,
         .minimum_seconds = durations[0],
         .median_seconds = median,
@@ -491,11 +621,26 @@ int cpu_benchmark_run(cpu_benchmark_operation operation, size_t requested_thread
         .mean_seconds = mean,
         .standard_deviation_seconds = sqrt(variance),
         .guard_value = guard_value,
+        .gpu_median_seconds =
+            backend_kind == RUNTIME_BENCHMARK_METAL
+                ? (config->measured_iterations % 2U == 0U
+                       ? (gpu_durations[median_index - 1U] + gpu_durations[median_index]) * 0.5
+                       : gpu_durations[median_index])
+                : 0.0,
+        .gpu_p95_seconds = backend_kind == RUNTIME_BENCHMARK_METAL ? gpu_durations[p95_index] : 0.0,
+        .pipeline_compilation_seconds = initial_metrics.pipeline_compilation_seconds,
     };
+    const char *device_name = backend_kind == RUNTIME_BENCHMARK_METAL
+                                  ? llm_backend_metal_device_name(workload.backend)
+                                  : "CPU";
+    if (device_name != NULL) {
+        (void)snprintf(out_result->device_name, sizeof(out_result->device_name), "%s", device_name);
+    }
     out_result->throughput =
         workload_throughput(&workload, out_result->median_seconds, &out_result->throughput_unit);
 
     free(durations);
+    free(gpu_durations);
     workload_destroy(&workload);
     return 1;
 }
