@@ -17,7 +17,8 @@ Un LLM non e' soltanto una rete neurale: e' un sistema formato da dati, rapprese
 9. [09 — Flusso dati e artefatti](09-flusso-dati-e-artefatti.md): guida completa ai file prodotti e al loro uso nel training.
 10. [10 — Runtime tensoriale](10-runtime-tensoriale.md): come i calcoli del modello vengono eseguiti su CPU e, in futuro, GPU.
 11. [11 — Backend CPU](11-backend-cpu.md): come usare thread, core, SIMD e cache conservando kernel leggibili.
-12. [Glossario](glossario.md): termini chiave.
+12. [12 — Backend Metal](12-backend-metal.md): come gli stessi tensori diventano buffer e kernel eseguiti dalla GPU Apple.
+13. [Glossario](glossario.md): termini chiave.
 
 ## Scala iniziale
 
