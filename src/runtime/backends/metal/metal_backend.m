@@ -134,7 +134,7 @@ static llm_status metal_create_pipelines(llm_metal_context *context) {
 #if LLM_METAL_HAS_PRECOMPILED_LIBRARY
     dispatch_data_t library_data = dispatch_data_create(
         llm_metal_precompiled_library, llm_metal_precompiled_library_size,
-        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), DISPATCH_DATA_DESTRUCTOR_NONE);
+        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), DISPATCH_DATA_DESTRUCTOR_DEFAULT);
     if (library_data != nil) {
         library = [context->device newLibraryWithData:library_data error:&error];
 #if !OS_OBJECT_USE_OBJC
