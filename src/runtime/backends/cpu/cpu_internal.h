@@ -20,6 +20,8 @@ size_t llm_cpu_detect_thread_count(void);
 llm_status llm_cpu_execute_zero(void *context, void *memory, size_t byte_count);
 llm_status llm_cpu_execute_copy(void *context, const void *source, void *destination,
                                 size_t byte_count);
+llm_status llm_cpu_execute_cast(void *context, const void *input, llm_dtype input_dtype,
+                                void *output, llm_dtype output_dtype, size_t value_count);
 llm_status llm_cpu_execute_fill_f32(void *context, float *values, size_t value_count, float value);
 llm_status llm_cpu_execute_add_f32(void *context, const float *left, const float *right,
                                    float *output, size_t value_count);
@@ -37,6 +39,9 @@ llm_status llm_cpu_execute_reduce_mean_square_last_f32(void *context, const floa
 llm_status llm_cpu_execute_matmul_f32(void *context, const float *left, const float *right,
                                       float *output, size_t rows, size_t inner_size,
                                       size_t columns);
+llm_status llm_cpu_execute_matmul_mixed_f32(void *context, const void *left, const void *right,
+                                            llm_dtype input_dtype, float *output, size_t rows,
+                                            size_t inner_size, size_t columns);
 llm_status llm_cpu_execute_gather_rows_f32(void *context, const float *table, size_t row_count,
                                            size_t row_width, const uint32_t *indices,
                                            size_t index_count, float *output);

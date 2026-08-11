@@ -102,9 +102,13 @@ llm_status llm_cpu_matmul_f32(const float *left, const float *right, float *outp
         columns == 0U) {
         return LLM_INVALID_ARGUMENT;
     }
-    for (size_t row = 0U; row < rows; ++row) {
-        float *output_row = output + row * columns;
-        (void)memset(output_row, 0, columns * sizeof(*output_row));
+    for (size_t row_begin = 0U; row_begin < rows; row_begin += 4U) {
+        const size_t block_rows = rows - row_begin < 4U ? rows - row_begin : 4U;
+        float *output_rows[4] = {NULL, NULL, NULL, NULL};
+        for (size_t block_row = 0U; block_row < block_rows; ++block_row) {
+            output_rows[block_row] = output + (row_begin + block_row) * columns;
+            (void)memset(output_rows[block_row], 0, columns * sizeof(*output));
+        }
         for (size_t inner_begin = 0U; inner_begin < inner_size;
              inner_begin += LLM_CPU_MATMUL_INNER_TILE) {
             const size_t inner_end = inner_size - inner_begin < LLM_CPU_MATMUL_INNER_TILE
@@ -116,16 +120,39 @@ llm_status llm_cpu_matmul_f32(const float *left, const float *right, float *outp
                                               ? columns
                                               : column_begin + LLM_CPU_MATMUL_COLUMN_TILE;
                 for (size_t inner = inner_begin; inner < inner_end; ++inner) {
-                    const float left_value = left[row * inner_size + inner];
                     const float *right_row = right + inner * columns;
-                    llm_cpu_simd_axpy_f32(right_row + column_begin, left_value,
-                                          output_row + column_begin, column_end - column_begin);
+                    if (block_rows == 4U) {
+                        const float scales[4] = {
+                            left[(row_begin + 0U) * inner_size + inner],
+                            left[(row_begin + 1U) * inner_size + inner],
+                            left[(row_begin + 2U) * inner_size + inner],
+                            left[(row_begin + 3U) * inner_size + inner],
+                        };
+                        float *column_outputs[4] = {
+                            output_rows[0] + column_begin,
+                            output_rows[1] + column_begin,
+                            output_rows[2] + column_begin,
+                            output_rows[3] + column_begin,
+                        };
+                        llm_cpu_simd_axpy4_f32(right_row + column_begin, scales, column_outputs,
+                                               column_end - column_begin);
+                    } else {
+                        for (size_t block_row = 0U; block_row < block_rows; ++block_row) {
+                            const float left_value =
+                                left[(row_begin + block_row) * inner_size + inner];
+                            llm_cpu_simd_axpy_f32(right_row + column_begin, left_value,
+                                                  output_rows[block_row] + column_begin,
+                                                  column_end - column_begin);
+                        }
+                    }
                 }
             }
         }
-        for (size_t column = 0U; column < columns; ++column) {
-            if (isfinite(output_row[column]) == 0) {
-                return LLM_NUMERICAL_ERROR;
+        for (size_t block_row = 0U; block_row < block_rows; ++block_row) {
+            for (size_t column = 0U; column < columns; ++column) {
+                if (isfinite(output_rows[block_row][column]) == 0) {
+                    return LLM_NUMERICAL_ERROR;
+                }
             }
         }
     }

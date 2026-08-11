@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +60,7 @@ static int test_tensor_layout_and_lifecycle(void) {
     TEST_ASSERT(invalid.storage == NULL);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, LLM_TENSOR_MAX_RANK + 1U, shape,
                                   &invalid) == LLM_INVALID_SHAPE);
-    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_BF16, 1U, shape, &invalid) ==
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F8_E4M3, 1U, shape, &invalid) ==
                 LLM_UNSUPPORTED_DTYPE);
 
     const size_t overflow_shape[] = {SIZE_MAX, 2U};
@@ -71,6 +72,92 @@ static int test_tensor_layout_and_lifecycle(void) {
     llm_tensor_destroy(&invalid);
     llm_tensor_destroy(NULL);
     TEST_ASSERT(llm_tensor_device(&moved) == LLM_DEVICE_NONE);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
+static int test_reduced_precision_operations(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+
+    const size_t left_shape[] = {2U, 3U};
+    const size_t right_shape[] = {3U, 2U};
+    const size_t output_shape[] = {2U, 2U};
+    const float left_values[] = {1.0F, -2.0F, 0.5F, 3.0F, 0.25F, -1.0F};
+    const float right_values[] = {2.0F, -1.0F, 0.5F, 4.0F, -2.0F, 3.0F};
+    const float expected[] = {0.0F, -7.5F, 8.125F, -5.0F};
+    const llm_dtype reduced_dtypes[] = {LLM_DTYPE_F16, LLM_DTYPE_BF16};
+
+    for (size_t dtype_index = 0U; dtype_index < 2U; ++dtype_index) {
+        llm_tensor left_f32 = {0};
+        llm_tensor right_f32 = {0};
+        llm_tensor left_reduced = {0};
+        llm_tensor right_reduced = {0};
+        llm_tensor roundtrip = {0};
+        llm_tensor output = {0};
+        const llm_dtype dtype = reduced_dtypes[dtype_index];
+        TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, left_shape, &left_f32) == LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, right_shape, &right_f32) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, dtype, 2U, left_shape, &left_reduced) == LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, dtype, 2U, right_shape, &right_reduced) == LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, left_shape, &roundtrip) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, output_shape, &output) == LLM_OK);
+        TEST_ASSERT(llm_tensor_write(backend, &left_f32, left_values, sizeof(left_values)) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_tensor_write(backend, &right_f32, right_values, sizeof(right_values)) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_cast(backend, &left_f32, &left_reduced) == LLM_OK);
+        TEST_ASSERT(llm_cast(backend, &right_f32, &right_reduced) == LLM_OK);
+        TEST_ASSERT(llm_cast(backend, &left_reduced, &roundtrip) == LLM_OK);
+        float roundtrip_values[6] = {0};
+        TEST_ASSERT(llm_tensor_read(backend, &roundtrip, roundtrip_values,
+                                    sizeof(roundtrip_values)) == LLM_OK);
+        for (size_t index = 0U; index < 6U; ++index) {
+            TEST_ASSERT(roundtrip_values[index] == left_values[index]);
+        }
+        TEST_ASSERT(llm_matmul_mixed_f32(backend, &left_reduced, &right_reduced, &output) ==
+                    LLM_OK);
+        float product[4] = {0};
+        TEST_ASSERT(llm_tensor_read(backend, &output, product, sizeof(product)) == LLM_OK);
+        for (size_t index = 0U; index < 4U; ++index) {
+            TEST_ASSERT(product[index] == expected[index]);
+        }
+
+        llm_tensor_destroy(&output);
+        llm_tensor_destroy(&roundtrip);
+        llm_tensor_destroy(&right_reduced);
+        llm_tensor_destroy(&left_reduced);
+        llm_tensor_destroy(&right_f32);
+        llm_tensor_destroy(&left_f32);
+    }
+
+    const size_t special_shape[] = {3U};
+    const float special_values[] = {INFINITY, -INFINITY, NAN};
+    for (size_t dtype_index = 0U; dtype_index < 2U; ++dtype_index) {
+        llm_tensor source = {0};
+        llm_tensor reduced = {0};
+        llm_tensor roundtrip = {0};
+        TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 1U, special_shape, &source) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, reduced_dtypes[dtype_index], 1U, special_shape,
+                                      &reduced) == LLM_OK);
+        TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 1U, special_shape, &roundtrip) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_tensor_write(backend, &source, special_values, sizeof(special_values)) ==
+                    LLM_OK);
+        TEST_ASSERT(llm_cast(backend, &source, &reduced) == LLM_OK);
+        TEST_ASSERT(llm_cast(backend, &reduced, &roundtrip) == LLM_OK);
+        float actual[3] = {0};
+        TEST_ASSERT(llm_tensor_read(backend, &roundtrip, actual, sizeof(actual)) == LLM_OK);
+        TEST_ASSERT(isinf(actual[0]) != 0 && actual[0] > 0.0F);
+        TEST_ASSERT(isinf(actual[1]) != 0 && actual[1] < 0.0F);
+        TEST_ASSERT(isnan(actual[2]) != 0);
+        llm_tensor_destroy(&roundtrip);
+        llm_tensor_destroy(&reduced);
+        llm_tensor_destroy(&source);
+    }
     llm_backend_destroy(backend);
     return EXIT_SUCCESS;
 }
@@ -164,7 +251,8 @@ int main(void) {
     if (test_backend_lifecycle() != EXIT_SUCCESS ||
         test_tensor_layout_and_lifecycle() != EXIT_SUCCESS ||
         test_tensor_memory_operations() != EXIT_SUCCESS ||
-        test_u32_tensor_memory() != EXIT_SUCCESS) {
+        test_u32_tensor_memory() != EXIT_SUCCESS ||
+        test_reduced_precision_operations() != EXIT_SUCCESS) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

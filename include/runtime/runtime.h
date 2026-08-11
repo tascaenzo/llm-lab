@@ -46,6 +46,19 @@ typedef struct llm_cpu_backend_config {
     int deterministic;
 } llm_cpu_backend_config;
 
+/** Observable counters for profiling a Metal backend without exposing native objects. */
+typedef struct llm_metal_backend_metrics {
+    size_t active_buffer_count;
+    size_t cached_buffer_count;
+    size_t cached_buffer_bytes;
+    unsigned long long submitted_command_buffers;
+    unsigned long long kernel_dispatches;
+    unsigned long long reused_buffer_allocations;
+    double pipeline_compilation_seconds;
+    double total_gpu_seconds;
+    double last_gpu_seconds;
+} llm_metal_backend_metrics;
+
 /** A row-major tensor descriptor owning its storage. Do not copy it by assignment. */
 typedef struct llm_tensor {
     llm_storage *storage;
@@ -66,6 +79,28 @@ llm_status llm_backend_cpu_create_with_config(const llm_cpu_backend_config *conf
 
 /** Returns the configured CPU thread count, or zero for a non-CPU/NULL backend. */
 size_t llm_backend_cpu_thread_count(const llm_backend *backend);
+
+/** Returns non-zero when a usable Metal device is available on this machine. */
+int llm_backend_metal_is_available(void);
+
+/** Creates a synchronous Metal backend using the system default GPU. */
+llm_status llm_backend_metal_create(llm_backend **out_backend);
+
+/** Returns the Metal device name, or NULL for a non-Metal/NULL backend. */
+const char *llm_backend_metal_device_name(const llm_backend *backend);
+
+/** Begins an explicit asynchronous batch. Nested batches are rejected. */
+llm_status llm_backend_metal_begin_batch(llm_backend *backend);
+
+/** Waits for every command in the current batch and closes it. */
+llm_status llm_backend_metal_end_batch(llm_backend *backend);
+
+/** Reads Metal profiling and buffer-pool counters. */
+llm_status llm_backend_metal_get_metrics(const llm_backend *backend,
+                                         llm_metal_backend_metrics *out_metrics);
+
+/** Resets cumulative Metal counters without changing live or cached buffers. */
+llm_status llm_backend_metal_reset_metrics(llm_backend *backend);
 
 /** Destroys a backend. All tensors created by it must have already been destroyed. */
 void llm_backend_destroy(llm_backend *backend);
@@ -109,6 +144,9 @@ llm_status llm_tensor_write(llm_backend *backend, llm_tensor *destination, const
 llm_status llm_tensor_read(llm_backend *backend, const llm_tensor *source, void *destination,
                            size_t byte_count);
 
+/** Converts between FP32 and FP16/BF16 tensors with identical shapes. */
+llm_status llm_cast(llm_backend *backend, const llm_tensor *input, llm_tensor *output);
+
 /** Adds two distinct FP32 tensors with identical shapes. */
 llm_status llm_add(llm_backend *backend, const llm_tensor *left, const llm_tensor *right,
                    llm_tensor *output);
@@ -134,6 +172,10 @@ llm_status llm_reduce_mean_square_last(llm_backend *backend, const llm_tensor *i
 /** Computes a two-dimensional FP32 matrix product: [M,K] x [K,N] -> [M,N]. */
 llm_status llm_matmul(llm_backend *backend, const llm_tensor *left, const llm_tensor *right,
                       llm_tensor *output);
+
+/** Multiplies FP16 or BF16 matrices while accumulating into an FP32 output. */
+llm_status llm_matmul_mixed_f32(llm_backend *backend, const llm_tensor *left,
+                                const llm_tensor *right, llm_tensor *output);
 
 /** Selects rows from an FP32 [V,C] table using a U32 tensor of row indices. */
 llm_status llm_gather_rows(llm_backend *backend, const llm_tensor *table, const llm_tensor *indices,

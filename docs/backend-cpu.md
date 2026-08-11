@@ -10,10 +10,10 @@ parallelismo, SIMD e kernel ottimizzati senza contaminare le API del modello.
 thread pool persistente, `parallel_for`, kernel C FP32/U32, parallelizzazione
 per intervalli o righe, matmul a blocchi e benchmark dedicato.
 
-**Restano futuri:** dispatch runtime per estensioni SIMD avanzate, tuning dei
-tile su piu' famiglie di CPU e integrazione BLAS opzionale. I kernel elementwise
-e il micro-kernel della matmul usano gia' intrinsic NEON su ARM64 e SSE2 su
-x86-64, con fallback C portabile.
+**Restano futuri:** tuning dei tile su piu' famiglie di CPU e integrazione BLAS
+opzionale. I kernel elementwise e il micro-kernel multi-riga della matmul usano
+NEON/FMA su ARM64, SSE2 su x86-64 e, con Clang/GCC, dispatch runtime verso
+AVX2/FMA o AVX-512/FMA. Il fallback C portabile resta sempre disponibile.
 
 La teoria introduttiva e' in
 [Backend CPU: usare davvero il processore](../wiki/11-backend-cpu.md). Il
@@ -69,7 +69,7 @@ src/runtime/
       cpu_features.c       rilevamento dei processori disponibili
       cpu_threads.c        astrazione pthread/Windows
       cpu_threads.h
-    metal/                 futuro
+    metal/                 backend GPU Apple separato
     cuda/                  futuro
 
 tests/runtime/
@@ -84,6 +84,7 @@ utils/benchmarks/runtime/
 
 utils/benchmarks/
   compare_results.py       confronto con baseline della stessa macchina
+  performance_suite.py     scenari rappresentativi CPU/Metal e confronto
 ```
 
 I file comuni non includono header nativi specifici di un dispositivo.
@@ -285,17 +286,12 @@ distinta; le letture duplicate dalla tabella sono sicure.
 
 ### 7.5 Scatter-add
 
-Indici duplicati possono provocare scritture concorrenti. La prima versione
-parallela del backend deve mantenere `scatter_add_rows` seriale. Possibili
-estensioni, da scegliere dopo misure reali:
-
-- partizione per riga destinazione;
-- buffer privati per worker e riduzione finale;
-- atomiche FP32 dove supportate;
-- ordinamento o raggruppamento preventivo degli indici.
-
-Nessuna di queste strategie puo' essere introdotta senza test espliciti per
-indici duplicati e determinismo.
+Indici duplicati possono provocare scritture concorrenti sulla stessa riga. Il
+backend evita la race partizionando invece le colonne: ogni task possiede un
+intervallo di colonne disgiunto e attraversa gli indici nello stesso ordine.
+Non servono atomiche o buffer temporanei e il risultato resta deterministico.
+La strategia e' conveniente quando le righe sono abbastanza larghe; le soglie
+evitano di distribuire lavoro minuscolo.
 
 ### 7.6 Softmax e cross-entropy
 
@@ -309,18 +305,18 @@ gradiente distinte.
 
 ## 8. SIMD e rilevamento delle capacita'
 
-`cpu_features.c` rileva oggi il numero di processori logici disponibili e
-applica il limite interno. In futuro conterra' anche le capacita' SIMD
-effettivamente utilizzabili, separate dall'architettura dichiarata in
-compilazione.
+`cpu_features.c` rileva il numero di processori logici disponibili e applica il
+limite interno. Il livello SIMD usa istruzioni baseline garantite
+dall'architettura: NEON su ARM64 e SSE2 su x86-64. Add, multiply, scale e il
+passo AXPY della matmul gestiscono anche la coda scalare.
 
-Il livello SIMD corrente usa istruzioni baseline garantite dall'architettura:
-NEON su ARM64 e SSE2 su x86-64. Add, multiply, scale e il passo AXPY della
-matmul gestiscono anche la coda scalare quando la dimensione non e' multipla di
-quattro.
+Il micro-kernel della matmul aggiorna quattro righe di output insieme, riusando
+il vettore letto dalla matrice destra. Su x86 con Clang/GCC il binario contiene
+anche versioni AVX2/FMA e AVX-512/FMA compilate con target dedicato; il dispatch
+controlla le feature della CPU prima di eseguirle. Su toolchain che non supportano
+questo meccanismo resta il percorso SSE2.
 
-Il futuro dispatch per AVX2/FMA o estensioni ulteriori deve rispettare questa
-precedenza:
+Il dispatch rispetta questa precedenza:
 
 ```text
 implementazione esplicitamente disabilitata
@@ -479,6 +475,10 @@ cmake --build --preset release --target runtime_cpu_benchmark
   --warmup 3 --iterations 20 --sample-ms 10
 ```
 
+Il target unificato `runtime_benchmark` usa gli stessi workload e aggiunge
+`--backend cpu|metal|all` e `--precision f32|f16|bf16`. Il nome storico
+`runtime_cpu_benchmark` resta disponibile per gli script CPU esistenti.
+
 La tabella mostra mediana, p95, throughput, speedup ed efficienza rispetto alla
 prima configurazione della lista. I campioni troppo brevi vengono ripetuti
 automaticamente per raggiungere la durata minima configurata. Il risultato
@@ -537,11 +537,11 @@ leak, race o deadlock.
 
 ### Incremento CPU-C — Parallelizzazione dei kernel
 
-**Stato: implementato per le operazioni senza scritture condivise.**
+**Stato: implementato.**
 
 - elementwise, righe delle riduzioni, gather, softmax e cross-entropy;
 - matmul inizialmente divisa per righe o blocchi di output;
-- scatter-add mantenuto seriale;
+- scatter-add partizionato per colonne senza scritture condivise;
 - soglie per evitare overhead sui tensori piccoli.
 
 Anche la cross-entropy forward resta seriale per mantenere una riduzione della
@@ -558,20 +558,21 @@ loss semplice e deterministica. Il backward e' parallelo per riga.
 - misure di scalabilita' per numero di thread;
 - documentazione dei risultati e delle scelte.
 
-Il target opzionale `runtime_cpu_benchmark` misura tutte le primitive principali
-con configurazioni di thread arbitrarie e produce JSONL confrontabile con una
-baseline. La matmul usa tile interni e per colonna da 64 elementi; il tuning per
-architettura resta futuro.
+I target `runtime_cpu_benchmark` e `runtime_benchmark` misurano tutte le
+primitive principali con configurazioni di thread arbitrarie e producono JSONL
+confrontabile con una baseline. La matmul usa tile interni e per colonna da 64
+elementi; il tuning per architettura resta futuro.
 
 **Uscita:** miglioramento misurato su forme rappresentative senza regressioni di
 correttezza.
 
 ### Incremento CPU-E — SIMD e BLAS opzionale
 
-**Stato: SIMD baseline implementato; dispatch avanzato e BLAS futuri.**
+**Stato: SIMD e dispatch x86 implementati; BLAS futura.**
 
 - rilevamento feature;
-- percorsi SIMD NEON/SSE2 per elementwise e micro-kernel matmul;
+- percorsi NEON/SSE2 e micro-kernel multi-riga;
+- dispatch AVX2/FMA e AVX-512/FMA su Clang/GCC x86;
 - code path portabile sempre disponibile;
 - BLAS opzionale e politica esplicita dei thread;
 - test forzabili per ciascun dispatch disponibile.

@@ -14,9 +14,12 @@ La conversione in dati autoregressivi e' descritta in [docs/dataset.md](docs/dat
 Il runtime tensoriale e' introdotto nella
 [wiki](wiki/10-runtime-tensoriale.md) e specificato in
 [docs/runtime-tensoriale.md](docs/runtime-tensoriale.md).
-La fase corrente, dedicata al backend CPU parallelo, e' spiegata nella
-[wiki](wiki/11-backend-cpu.md) e definita tecnicamente in
+Il backend CPU parallelo e' spiegato nella
+[wiki](wiki/11-backend-cpu.md) e definito tecnicamente in
 [docs/backend-cpu.md](docs/backend-cpu.md).
+Il primo backend GPU Metal e' introdotto nella
+[wiki](wiki/12-backend-metal.md) e specificato in
+[docs/backend-metal.md](docs/backend-metal.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 
@@ -26,15 +29,48 @@ La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
 `.llmdat` e fornisce batch input/target al futuro modello. Il runtime tensoriale
 CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
-riduzioni, matmul, gather/scatter, softmax e cross-entropy. Il prossimo incremento
-costruira' backward e layer neurali sopra il backend CPU gia' dotato di thread
-pool, kernel paralleli, matmul a blocchi e benchmark. I sorgenti specifici
-dell'hardware sono separati sotto `src/runtime/backends/`, cosi' Metal e CUDA
-potranno essere aggiunti senza riscrivere il modello.
+riduzioni, matmul, gather/scatter, softmax e cross-entropy. Il backend Metal
+esegue lo stesso contratto sulla GPU Apple con pool dei buffer, batch asincroni
+espliciti, metriche, kernel paralleli e matmul tiled FP32/FP16/BF16 con accumulo
+FP32. Il prossimo incremento costruira' backward e layer neurali sopra queste
+API. I sorgenti specifici dell'hardware
+restano separati sotto `src/runtime/backends/`, cosi' CPU, Metal e futuri backend
+CUDA non entrano nel codice del modello.
 
-La suite prestazionale accetta operazioni, forme e liste di thread configurabili
-e produce JSONL confrontabile con baseline locali. Uso e criteri di misura sono
-descritti nella [specifica del backend CPU](docs/backend-cpu.md#14-benchmark).
+La suite prestazionale unificata accetta backend, precisione, operazioni, forme
+e liste di thread configurabili; mostra una tabella e puo' produrre JSONL. Uso,
+tempi GPU ed esempi sono nella
+[specifica del backend Metal](docs/backend-metal.md#11-benchmark-riproducibile).
+
+```sh
+cmake --preset release -DLLM_LAB_BUILD_BENCHMARKS=ON
+cmake --build --preset release --target runtime_benchmark
+./build/release/utils/benchmarks/runtime_benchmark \
+  --backend all --operations matmul --precision f16 \
+  --threads 1,2,4,8,auto --rows 512 --inner 512 --columns 512
+```
+
+Per riconoscere automaticamente la macchina e misurare tutti i kernel
+supportati con un solo comando:
+
+```sh
+cmake --build --preset release --target runtime_benchmark_report
+./build/release/utils/benchmarks/runtime_benchmark_report
+```
+
+Sono disponibili anche `--quick` per un controllo breve e `--full` per misure
+piu' lunghe e stabili.
+
+La suite rappresentativa per validare le prestazioni dopo una modifica dura
+indicativamente 40–70 secondi, mostra l'avanzamento di ogni test e termina con
+un riepilogo immediato CPU/Metal. Si avvia con:
+
+```sh
+cmake --build --preset release --target runtime_performance_suite
+```
+
+Baseline e confronto automatico sono descritti nella
+[specifica Metal](docs/backend-metal.md#suite-prestazionale-rappresentativa).
 
 ## Requisiti
 

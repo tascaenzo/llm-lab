@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare JSONL CPU benchmark results produced on the same controlled host."""
+"""Compare JSONL runtime benchmark results produced on the same controlled host."""
 
 from __future__ import annotations
 
@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 
-ResultKey = Tuple[str, int, str]
+ResultKey = Tuple[str, str, str, str, int, str]
 
 
 def result_key(record: Dict[str, Any]) -> ResultKey:
     return (
+        str(record.get("scenario", "default")),
+        str(record.get("backend", "cpu")),
+        str(record.get("dtype", "f32")),
         str(record["operation"]),
         int(record["actual_threads"]),
         json.dumps(record["dimensions"], sort_keys=True, separators=(",", ":")),
@@ -51,6 +54,7 @@ def compare(
     maximum_regression_percent: float,
 ) -> Dict[str, Any]:
     regressions: List[Dict[str, Any]] = []
+    comparisons: List[Dict[str, Any]] = []
     missing: List[Dict[str, Any]] = []
     compared = 0
     for key, baseline_record in baseline.items():
@@ -58,9 +62,12 @@ def compare(
         if current_record is None:
             missing.append(
                 {
-                    "operation": key[0],
-                    "actual_threads": key[1],
-                    "dimensions": json.loads(key[2]),
+                    "scenario": key[0],
+                    "backend": key[1],
+                    "dtype": key[2],
+                    "operation": key[3],
+                    "actual_threads": key[4],
+                    "dimensions": json.loads(key[5]),
                 }
             )
             continue
@@ -68,17 +75,20 @@ def compare(
         baseline_seconds = float(baseline_record["median_seconds"])
         current_seconds = float(current_record["median_seconds"])
         regression_percent = (current_seconds / baseline_seconds - 1.0) * 100.0
+        comparison = {
+            "scenario": key[0],
+            "backend": key[1],
+            "dtype": key[2],
+            "operation": key[3],
+            "actual_threads": key[4],
+            "dimensions": json.loads(key[5]),
+            "baseline_seconds": baseline_seconds,
+            "current_seconds": current_seconds,
+            "change_percent": regression_percent,
+        }
+        comparisons.append(comparison)
         if regression_percent > maximum_regression_percent:
-            regressions.append(
-                {
-                    "operation": key[0],
-                    "actual_threads": key[1],
-                    "dimensions": json.loads(key[2]),
-                    "baseline_seconds": baseline_seconds,
-                    "current_seconds": current_seconds,
-                    "regression_percent": regression_percent,
-                }
-            )
+            regressions.append({**comparison, "regression_percent": regression_percent})
     return {
         "type": "benchmark_comparison",
         "schema_version": 1,
@@ -86,6 +96,7 @@ def compare(
         "baseline_records": len(baseline),
         "current_records": len(current),
         "compared_records": compared,
+        "comparisons": comparisons,
         "regressions": regressions,
         "missing": missing,
     }

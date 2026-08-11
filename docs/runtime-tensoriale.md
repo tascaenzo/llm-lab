@@ -6,17 +6,20 @@ Il runtime tensoriale e' lo strato numerico condiviso dai futuri layer del
 language model. Deve rappresentare tensori, gestire la loro memoria ed eseguire
 operazioni tramite un backend indipendente dall'hardware.
 
-La prima implementazione usa `float` a 32 bit e una CPU. Le API devono pero'
-permettere di aggiungere in seguito backend Metal e CUDA senza modificare il
-codice del modello.
+La prima implementazione usa FP32 per tutte le primitive e supporta anche
+storage FP16/BF16, conversioni e matmul mista con accumulo FP32. Le API
+permettono di scegliere CPU o GPU Metal senza modificare il codice del modello e
+restano estendibili a CUDA.
 
 Questa pagina definisce il contratto prima dell'implementazione. La spiegazione
 introduttiva e' nella pagina wiki
 [Runtime tensoriale: il motore di calcolo](../wiki/10-runtime-tensoriale.md).
 
 **Stato:** gli Incrementi A-D sono implementati. Il backend CPU e' configurabile
-e parallelo come specificato in [backend-cpu.md](backend-cpu.md). Restano futuri
-autograd, dispatch SIMD avanzato e backend accelerati.
+e parallelo come specificato in [backend-cpu.md](backend-cpu.md). Il backend
+Metal accelerato, i batch espliciti e le metriche sono descritti in
+[backend-metal.md](backend-metal.md). Restano futuri autograd, layer neurali,
+dispatch SIMD CPU avanzato, CUDA e fusion GPU.
 
 ## 2. Principi
 
@@ -40,7 +43,7 @@ Il runtime v1 comprende:
 - tipi comuni, dtype e dispositivi;
 - storage e tensori;
 - allocazione e copia della memoria;
-- backend CPU sincrono;
+- backend CPU e Metal, con batch asincroni espliciti su Metal;
 - operazioni numeriche minime;
 - kernel CPU di riferimento;
 - validazione di forme, tipi e dispositivi;
@@ -52,9 +55,9 @@ Non comprende ancora:
 - grafo di autodifferenziazione;
 - backward automatico;
 - optimizer e training loop;
-- Metal, CUDA o calcolo distribuito;
-- precisioni diverse da FP32;
-- ottimizzazioni SIMD o multithreading.
+- CUDA o calcolo distribuito;
+- FP8 e quantizzazione;
+- scheduler asincrono generale e kernel fusi dei layer.
 
 Questi elementi verranno costruiti sopra il contratto del runtime o aggiunti
 come nuovi backend.
@@ -105,11 +108,19 @@ src/runtime/
       cpu_executor.c thread pool e parallel_for
       cpu_features.c rilevamento risorse CPU
       cpu_threads.c  portabilita' dei thread
+    metal/
+      metal_backend.m    dispositivo, pipeline e factory
+      metal_memory.m     buffer e trasferimenti
+      metal_operations.m dispatch delle operazioni
+      metal_internal.h   contratti privati Metal
+      kernels/
+        runtime.metal    kernel Metal Shading Language
 
 tests/runtime/
   test_runtime.c                 tensori, memoria e backend
   test_operations.c              elementwise, riduzioni e matmul
   test_language_operations.c     gather, softmax e cross-entropy
+  test_metal_backend.c           disponibilita' e parita' CPU-Metal
 ```
 
 Non verra' creato un file per ogni piccola operazione. Un file sara' diviso solo
@@ -159,10 +170,10 @@ typedef enum llm_dtype {
 } llm_dtype;
 ```
 
-La presenza di un valore nell'enum non significa che sia gia' supportato. Le
-prime operazioni accettano `LLM_DTYPE_F32`; `LLM_DTYPE_U32` viene aggiunto con
-gather e cross-entropy per rappresentare gli ID dei token. Gli altri valori
-riservano un linguaggio comune per i backend futuri.
+La presenza di un valore nell'enum non significa da sola che ogni operazione lo
+supporti. FP32 e U32 coprono calcolo e indici; CPU e Metal supportano anche
+storage F16/BF16, cast da/verso FP32 e matmul mista. FP8 resta riservato a un
+incremento futuro.
 
 ### 6.3 Dispositivo
 
@@ -175,8 +186,8 @@ typedef enum llm_device_type {
 } llm_device_type;
 ```
 
-`LLM_DEVICE_NONE` descrive un backend o tensore vuoto. La v1 implementa soltanto
-`LLM_DEVICE_CPU` come dispositivo operativo.
+`LLM_DEVICE_NONE` descrive un backend o tensore vuoto. CPU e Metal sono
+dispositivi operativi; CUDA riserva il valore per il futuro backend.
 
 ## 7. Storage e tensore
 
@@ -370,6 +381,9 @@ operazioni esplicitamente in-place avranno nomi e contratti dedicati.
 ### 10.1 Operazioni di base
 
 ```c
+llm_status llm_cast(llm_backend *backend, const llm_tensor *input,
+                    llm_tensor *output);
+
 llm_status llm_add(llm_backend *backend, const llm_tensor *left,
                    const llm_tensor *right, llm_tensor *output);
 
@@ -380,14 +394,21 @@ llm_status llm_scale(llm_backend *backend, const llm_tensor *input,
                      float scale, llm_tensor *output);
 ```
 
-La v1 richiede forme identiche e non implementa broadcasting implicito. Evitare
-broadcasting inizialmente rende piu' chiari errori e regole di memoria.
+`llm_cast` converte tra FP32 e FP16/BF16 a parita' di forma. Le operazioni
+elementwise richiedono forme identiche e non implementano broadcasting
+implicito. Evitare broadcasting inizialmente rende piu' chiari errori e regole
+di memoria.
 
 ### 10.2 Moltiplicazione matriciale
 
 ```c
 llm_status llm_matmul(llm_backend *backend, const llm_tensor *left,
                       const llm_tensor *right, llm_tensor *output);
+
+llm_status llm_matmul_mixed_f32(llm_backend *backend,
+                                const llm_tensor *left,
+                                const llm_tensor *right,
+                                llm_tensor *output);
 ```
 
 Contratto v1:
@@ -398,9 +419,10 @@ right  [K, N]
 output [M, N]
 ```
 
-Tutti i tensori devono essere FP32, contigui e sullo stesso backend. Il kernel
-CPU di riferimento usa cicli espliciti e accumulazione FP32. Ottimizzazioni BLAS
-verranno introdotte dietro la stessa API.
+`llm_matmul` richiede tensori FP32. `llm_matmul_mixed_f32` richiede due input
+dello stesso tipo F16 o BF16 e un output FP32. Tutti i tensori sono contigui e
+sullo stesso backend; ogni variante accumula in FP32. Ottimizzazioni BLAS o GPU
+future resteranno dietro le stesse API.
 
 ### 10.3 Riduzioni
 
@@ -609,9 +631,9 @@ lineari e loss senza inserire cicli hardware-specifici nel modello.
 
 - grafo e backward automatico;
 - dispatch SIMD avanzato e BLAS CPU opzionale;
-- backend Metal;
+- scheduler Metal generale, fusion e autotuning persistente;
 - backend CUDA;
-- BF16 e FP8;
+- FP8 e quantizzazione;
 - kernel fusi;
 - esecuzione asincrona e distribuita.
 

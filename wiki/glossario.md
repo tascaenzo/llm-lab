@@ -6,13 +6,16 @@
 | Backend | Componente del runtime che gestisce un tipo di dispositivo e avvia i kernel adatti. |
 | Batch | Gruppo di esempi elaborato insieme durante un singolo aggiornamento. |
 | Checkpoint | Salvataggio dello stato del training, utile per riprendere o confrontare esperimenti. |
+| Command buffer | Insieme ordinato di comandi inviato dal programma a una GPU Metal. |
 | Contesto | I token precedenti disponibili al modello quando predice il successivo. |
 | Cross-entropy | Loss usata per misurare quanto la distribuzione prevista diverga dal target corretto. |
 | Embedding | Vettore denso appreso che rappresenta un token. |
 | Gradiente | Direzione e intensita' con cui modificare un parametro per ridurre la loss. |
 | Kernel di calcolo | Implementazione concreta di un'operazione per CPU, Metal, CUDA o un altro backend. |
 | Logit | Punteggio non normalizzato prodotto dal modello prima della softmax. |
+| Metal | API Apple che permette di gestire memoria, pipeline e calcolo sulla GPU. |
 | Parametri | Valori appresi dal modello, come pesi e bias. |
+| Pipeline di calcolo | Versione compilata di un kernel GPU pronta per essere eseguita. |
 | Perplexity | `exp(cross-entropy)`; misura comparativa dell'incertezza predittiva. |
 | Runtime tensoriale | Strato che rappresenta tensori, gestisce memoria ed esegue operazioni tramite un backend. |
 | Softmax | Funzione che converte logits in probabilita' positive la cui somma e' 1. |
@@ -20,6 +23,7 @@
 | Storage | Buffer di memoria che contiene i valori interpretati da un tensore. |
 | Tensore | Insieme multidimensionale di numeri con forma, tipo e posizione in memoria. |
 | Thread pool | Gruppo di thread persistenti usato per distribuire piu' lavori senza ricrearli a ogni operazione. |
+| Threadgroup | Gruppo di thread GPU che puo' cooperare usando memoria veloce condivisa. |
 | Tiling | Divisione di un calcolo in blocchi per riutilizzare meglio i dati nella cache. |
 | Token | Unita' discreta di testo elaborata dal modello. |
 | Transformer | Architettura basata sull'attenzione, usata dalla maggior parte dei LLM moderni. |

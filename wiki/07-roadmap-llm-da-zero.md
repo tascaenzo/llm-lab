@@ -97,6 +97,8 @@ futuro non modifica le attivazioni delle posizioni precedenti.
 
 ## Fase 8 — Backend accelerati e scalabilita'
 
+**Stato: backend Metal accelerato implementato e misurato; layer e fusion futuri.**
+
 - backend Metal e CUDA;
 - test di conformita' tra dispositivi;
 - mixed precision;
@@ -117,11 +119,10 @@ backend diversi senza modificare i layer.
 
 ## Decisione corrente
 
-Il runtime tensoriale CPU di riferimento e' implementato: backend, storage,
-tensori FP32/U32, memoria, operazioni elementwise, riduzioni, matmul, embedding
-gather/scatter, softmax e cross-entropy. Il codice hardware-specifico e' ora
-isolato in `src/runtime/backends/cpu/`. Executor, thread pool, soglie di
-parallelizzazione, matmul a blocchi e benchmark sono operativi. Il prossimo
-incremento funzionale puo' quindi essere backward e core neurale; SIMD baseline
-e' operativo, mentre dispatch avanzato e BLAS restano ottimizzazioni CPU
-misurabili e opzionali.
+Il runtime tensoriale CPU di riferimento e il backend Metal sono implementati.
+Metal dispone di pool dei buffer, batch asincroni espliciti, metriche GPU,
+riduzioni parallele, matmul tiled FP32/FP16/BF16 e benchmark riproducibile. Il
+codice hardware-specifico resta isolato sotto `src/runtime/backends/`. Il
+prossimo incremento funzionale puo' quindi costruire autograd e layer neurali
+sopra l'API comune; fusion, autotuning persistente, CUDA e BLAS rimangono
+ottimizzazioni o backend successivi.

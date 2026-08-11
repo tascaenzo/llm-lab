@@ -1,6 +1,7 @@
 .PHONY: configure build run test format check-format clean
 
-FORMAT_SOURCES := $(shell find apps src include tests utils -type f \( -name '*.c' -o -name '*.h' \))
+FORMAT_SOURCES := $(shell find apps src include tests utils -type f \
+	\( -name '*.c' -o -name '*.h' -o -name '*.m' -o -name '*.metal' \))
 
 configure:
 	cmake --preset debug
