@@ -2,7 +2,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "runtime/runtime.h"
+#include "runtime/backend.h"
+#include "runtime/operations.h"
 #include "test_support.h"
 
 static int close_enough(float left, float right) { return fabsf(left - right) < 1.0e-5F; }

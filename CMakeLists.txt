@@ -24,8 +24,11 @@ add_library(runtime STATIC
     src/runtime/backends/cpu/cpu_executor.c
     src/runtime/backends/cpu/cpu_features.c
     src/runtime/backends/cpu/cpu_kernels.c
+    src/runtime/backends/cpu/cpu_linear.c
     src/runtime/backends/cpu/cpu_operations.c
+    src/runtime/backends/cpu/cpu_optimizer.c
     src/runtime/backends/cpu/cpu_simd.c
+    src/runtime/backends/cpu/cpu_transformer.c
     src/runtime/backends/cpu/cpu_threads.c
     src/runtime/memory.c
     src/runtime/operations.c
