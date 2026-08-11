@@ -6,15 +6,35 @@
 #include "runtime/runtime.h"
 
 typedef enum cpu_benchmark_operation {
-    CPU_BENCHMARK_COPY = 0,
+    CPU_BENCHMARK_ZERO = 0,
+    CPU_BENCHMARK_FILL,
+    CPU_BENCHMARK_COPY,
+    CPU_BENCHMARK_CAST_DOWN,
+    CPU_BENCHMARK_CAST_UP,
     CPU_BENCHMARK_ADD,
+    CPU_BENCHMARK_MULTIPLY,
+    CPU_BENCHMARK_SCALE,
+    CPU_BENCHMARK_ACCUMULATE,
     CPU_BENCHMARK_REDUCE_SUM,
+    CPU_BENCHMARK_REDUCE_MAX,
+    CPU_BENCHMARK_REDUCE_MEAN_SQUARE,
     CPU_BENCHMARK_MATMUL,
+    CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT,
+    CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT,
     CPU_BENCHMARK_GATHER,
     CPU_BENCHMARK_SCATTER_ADD,
+    CPU_BENCHMARK_SILU,
+    CPU_BENCHMARK_SILU_BACKWARD,
+    CPU_BENCHMARK_RMS_NORM,
+    CPU_BENCHMARK_RMS_NORM_BACKWARD,
+    CPU_BENCHMARK_ROPE,
+    CPU_BENCHMARK_ROPE_BACKWARD,
+    CPU_BENCHMARK_ATTENTION,
+    CPU_BENCHMARK_ATTENTION_BACKWARD,
     CPU_BENCHMARK_SOFTMAX,
     CPU_BENCHMARK_CROSS_ENTROPY_FORWARD,
     CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD,
+    CPU_BENCHMARK_ADAMW,
     CPU_BENCHMARK_OPERATION_COUNT
 } cpu_benchmark_operation;
 
@@ -28,6 +48,11 @@ typedef struct cpu_benchmark_config {
     size_t rows;
     size_t columns;
     size_t inner_size;
+    size_t batch_size;
+    size_t sequence_length;
+    size_t query_head_count;
+    size_t key_value_head_count;
+    size_t head_dimension;
     size_t warmup_iterations;
     size_t measured_iterations;
     double minimum_sample_seconds;
@@ -47,6 +72,8 @@ typedef struct cpu_benchmark_result {
     double p95_seconds;
     double mean_seconds;
     double standard_deviation_seconds;
+    double nanoseconds_per_call;
+    double calls_per_second;
     double throughput;
     const char *throughput_unit;
     double guard_value;
@@ -58,6 +85,9 @@ typedef struct cpu_benchmark_result {
 
 const char *cpu_benchmark_operation_name(cpu_benchmark_operation operation);
 int cpu_benchmark_operation_parse(const char *name, cpu_benchmark_operation *out_operation);
+
+int runtime_benchmark_operation_supported(runtime_benchmark_backend backend,
+                                          cpu_benchmark_operation operation);
 
 const char *runtime_benchmark_backend_name(runtime_benchmark_backend backend);
 const char *runtime_benchmark_dtype_name(llm_dtype dtype);

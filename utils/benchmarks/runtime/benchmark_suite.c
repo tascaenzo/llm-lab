@@ -13,20 +13,66 @@
 #include "benchmark_suite.h"
 #include "runtime/runtime.h"
 
+#define BENCHMARK_TENSOR_COUNT 7U
+
+enum benchmark_tensor_slot {
+    BENCHMARK_FIRST = 0,
+    BENCHMARK_SECOND,
+    BENCHMARK_THIRD,
+    BENCHMARK_FOURTH,
+    BENCHMARK_FIFTH,
+    BENCHMARK_SIXTH,
+    BENCHMARK_OUTPUT,
+};
+
 typedef struct cpu_benchmark_workload {
     cpu_benchmark_operation operation;
     runtime_benchmark_backend backend_kind;
     llm_dtype dtype;
     llm_backend *backend;
-    llm_tensor first;
-    llm_tensor second;
-    llm_tensor indices;
-    llm_tensor output;
+    llm_tensor tensors[BENCHMARK_TENSOR_COUNT];
     size_t elements;
     size_t rows;
     size_t columns;
     size_t inner_size;
+    size_t batch_size;
+    size_t sequence_length;
+    size_t query_head_count;
+    size_t key_value_head_count;
+    size_t head_dimension;
 } cpu_benchmark_workload;
+
+static const char *const operation_names[CPU_BENCHMARK_OPERATION_COUNT] = {
+    [CPU_BENCHMARK_ZERO] = "zero",
+    [CPU_BENCHMARK_FILL] = "fill",
+    [CPU_BENCHMARK_COPY] = "copy",
+    [CPU_BENCHMARK_CAST_DOWN] = "cast_down",
+    [CPU_BENCHMARK_CAST_UP] = "cast_up",
+    [CPU_BENCHMARK_ADD] = "add",
+    [CPU_BENCHMARK_MULTIPLY] = "multiply",
+    [CPU_BENCHMARK_SCALE] = "scale",
+    [CPU_BENCHMARK_ACCUMULATE] = "accumulate",
+    [CPU_BENCHMARK_REDUCE_SUM] = "reduce_sum",
+    [CPU_BENCHMARK_REDUCE_MAX] = "reduce_max",
+    [CPU_BENCHMARK_REDUCE_MEAN_SQUARE] = "reduce_mean_square",
+    [CPU_BENCHMARK_MATMUL] = "matmul",
+    [CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT] = "matmul_transpose_left",
+    [CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT] = "matmul_transpose_right",
+    [CPU_BENCHMARK_GATHER] = "gather",
+    [CPU_BENCHMARK_SCATTER_ADD] = "scatter_add",
+    [CPU_BENCHMARK_SILU] = "silu",
+    [CPU_BENCHMARK_SILU_BACKWARD] = "silu_backward",
+    [CPU_BENCHMARK_RMS_NORM] = "rms_norm",
+    [CPU_BENCHMARK_RMS_NORM_BACKWARD] = "rms_norm_backward",
+    [CPU_BENCHMARK_ROPE] = "rope",
+    [CPU_BENCHMARK_ROPE_BACKWARD] = "rope_backward",
+    [CPU_BENCHMARK_ATTENTION] = "attention",
+    [CPU_BENCHMARK_ATTENTION_BACKWARD] = "attention_backward",
+    [CPU_BENCHMARK_SOFTMAX] = "softmax",
+    [CPU_BENCHMARK_CROSS_ENTROPY_FORWARD] = "cross_entropy_forward",
+    [CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD] = "cross_entropy_backward",
+    [CPU_BENCHMARK_ADAMW] = "adamw",
+};
 
 const char *runtime_benchmark_backend_name(runtime_benchmark_backend backend) {
     return backend == RUNTIME_BENCHMARK_CPU     ? "cpu"
@@ -41,20 +87,8 @@ const char *runtime_benchmark_dtype_name(llm_dtype dtype) {
                                      : "unknown";
 }
 
-static const char *const operation_names[CPU_BENCHMARK_OPERATION_COUNT] = {
-    [CPU_BENCHMARK_COPY] = "copy",
-    [CPU_BENCHMARK_ADD] = "add",
-    [CPU_BENCHMARK_REDUCE_SUM] = "reduce_sum",
-    [CPU_BENCHMARK_MATMUL] = "matmul",
-    [CPU_BENCHMARK_GATHER] = "gather",
-    [CPU_BENCHMARK_SCATTER_ADD] = "scatter_add",
-    [CPU_BENCHMARK_SOFTMAX] = "softmax",
-    [CPU_BENCHMARK_CROSS_ENTROPY_FORWARD] = "cross_entropy_forward",
-    [CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD] = "cross_entropy_backward",
-};
-
 const char *cpu_benchmark_operation_name(cpu_benchmark_operation operation) {
-    if (operation < CPU_BENCHMARK_COPY || operation >= CPU_BENCHMARK_OPERATION_COUNT) {
+    if (operation < CPU_BENCHMARK_ZERO || operation >= CPU_BENCHMARK_OPERATION_COUNT) {
         return "unknown";
     }
     return operation_names[operation];
@@ -69,6 +103,55 @@ int cpu_benchmark_operation_parse(const char *name, cpu_benchmark_operation *out
             *out_operation = (cpu_benchmark_operation)index;
             return 1;
         }
+    }
+    return 0;
+}
+
+int runtime_benchmark_operation_supported(runtime_benchmark_backend backend,
+                                          cpu_benchmark_operation operation) {
+    if (operation < CPU_BENCHMARK_ZERO || operation >= CPU_BENCHMARK_OPERATION_COUNT) {
+        return 0;
+    }
+    if (backend == RUNTIME_BENCHMARK_CPU) {
+        return 1;
+    }
+    if (backend != RUNTIME_BENCHMARK_METAL) {
+        return 0;
+    }
+    switch (operation) {
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT:
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT:
+    case CPU_BENCHMARK_ACCUMULATE:
+    case CPU_BENCHMARK_SILU:
+    case CPU_BENCHMARK_SILU_BACKWARD:
+    case CPU_BENCHMARK_RMS_NORM:
+    case CPU_BENCHMARK_RMS_NORM_BACKWARD:
+    case CPU_BENCHMARK_ROPE:
+    case CPU_BENCHMARK_ROPE_BACKWARD:
+    case CPU_BENCHMARK_ATTENTION:
+    case CPU_BENCHMARK_ATTENTION_BACKWARD:
+    case CPU_BENCHMARK_ADAMW:
+        return 0;
+    case CPU_BENCHMARK_ZERO:
+    case CPU_BENCHMARK_FILL:
+    case CPU_BENCHMARK_COPY:
+    case CPU_BENCHMARK_CAST_DOWN:
+    case CPU_BENCHMARK_CAST_UP:
+    case CPU_BENCHMARK_ADD:
+    case CPU_BENCHMARK_MULTIPLY:
+    case CPU_BENCHMARK_SCALE:
+    case CPU_BENCHMARK_REDUCE_SUM:
+    case CPU_BENCHMARK_REDUCE_MAX:
+    case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
+    case CPU_BENCHMARK_MATMUL:
+    case CPU_BENCHMARK_GATHER:
+    case CPU_BENCHMARK_SCATTER_ADD:
+    case CPU_BENCHMARK_SOFTMAX:
+    case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
+    case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
+        return 1;
+    case CPU_BENCHMARK_OPERATION_COUNT:
+        return 0;
     }
     return 0;
 }
@@ -111,11 +194,15 @@ static int compare_double(const void *left, const void *right) {
     return (left_value > right_value) - (left_value < right_value);
 }
 
+static llm_tensor *workload_tensor(cpu_benchmark_workload *workload,
+                                   enum benchmark_tensor_slot slot) {
+    return &workload->tensors[(size_t)slot];
+}
+
 static void workload_destroy(cpu_benchmark_workload *workload) {
-    llm_tensor_destroy(&workload->output);
-    llm_tensor_destroy(&workload->indices);
-    llm_tensor_destroy(&workload->second);
-    llm_tensor_destroy(&workload->first);
+    for (size_t remaining = BENCHMARK_TENSOR_COUNT; remaining > 0U; --remaining) {
+        llm_tensor_destroy(&workload->tensors[remaining - 1U]);
+    }
     llm_backend_destroy(workload->backend);
     *workload = (cpu_benchmark_workload){0};
 }
@@ -129,18 +216,30 @@ static llm_status create_f32_tensor(llm_backend *backend, size_t rank, const siz
     return status;
 }
 
+static llm_status create_reduced_tensor(llm_backend *backend, llm_dtype dtype, size_t rank,
+                                        const size_t *shape, llm_tensor *out_tensor,
+                                        float fill_value) {
+    llm_tensor source = {0};
+    llm_status status = create_f32_tensor(backend, rank, shape, &source, fill_value);
+    if (status == LLM_OK) {
+        status = llm_tensor_create(backend, dtype, rank, shape, out_tensor);
+    }
+    if (status == LLM_OK) {
+        status = llm_cast(backend, &source, out_tensor);
+    }
+    llm_tensor_destroy(&source);
+    return status;
+}
+
 static llm_status create_indices(llm_backend *backend, size_t count, size_t upper_bound,
                                  llm_tensor *out_tensor) {
-    if (upper_bound == 0U || upper_bound > UINT32_MAX) {
+    if (upper_bound == 0U || upper_bound > UINT32_MAX || count > SIZE_MAX / sizeof(uint32_t)) {
         return LLM_INVALID_ARGUMENT;
     }
     const size_t shape[] = {count};
     llm_status status = llm_tensor_create(backend, LLM_DTYPE_U32, 1U, shape, out_tensor);
     if (status != LLM_OK) {
         return status;
-    }
-    if (count > SIZE_MAX / sizeof(uint32_t)) {
-        return LLM_OVERFLOW;
     }
     uint32_t *values = malloc(count * sizeof(*values));
     if (values == NULL) {
@@ -156,12 +255,102 @@ static llm_status create_indices(llm_backend *backend, size_t count, size_t uppe
 
 static llm_status setup_vector_workload(cpu_benchmark_workload *workload) {
     const size_t shape[] = {workload->elements};
-    llm_status status = create_f32_tensor(workload->backend, 1U, shape, &workload->first, 1.25F);
-    if (status == LLM_OK && workload->operation == CPU_BENCHMARK_ADD) {
-        status = create_f32_tensor(workload->backend, 1U, shape, &workload->second, 2.5F);
-    }
-    if (status == LLM_OK) {
-        status = create_f32_tensor(workload->backend, 1U, shape, &workload->output, 0.0F);
+    llm_status status = LLM_OK;
+    switch (workload->operation) {
+    case CPU_BENCHMARK_ZERO:
+    case CPU_BENCHMARK_FILL:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_OUTPUT), 0.75F);
+        break;
+    case CPU_BENCHMARK_COPY:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 1.25F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_CAST_DOWN:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.5F);
+        if (status == LLM_OK) {
+            status = llm_tensor_create(workload->backend, workload->dtype, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT));
+        }
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_SECOND), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_CAST_UP:
+        status = create_reduced_tensor(workload->backend, workload->dtype, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_FIRST), 0.5F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_ADD:
+    case CPU_BENCHMARK_MULTIPLY:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 1.25F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_SECOND), 2.5F);
+        }
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_SCALE:
+    case CPU_BENCHMARK_SILU:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.5F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_ACCUMULATE:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.0001F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.5F);
+        }
+        break;
+    case CPU_BENCHMARK_SILU_BACKWARD:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.5F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_SECOND), 0.25F);
+        }
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_ADAMW:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_OUTPUT), 1.0F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_FIRST), 0.01F);
+        }
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_SECOND), 0.0F);
+        }
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, shape,
+                                       workload_tensor(workload, BENCHMARK_THIRD), 0.0F);
+        }
+        break;
+    default:
+        status = LLM_INVALID_ARGUMENT;
+        break;
     }
     return status;
 }
@@ -169,55 +358,75 @@ static llm_status setup_vector_workload(cpu_benchmark_workload *workload) {
 static llm_status setup_matrix_workload(cpu_benchmark_workload *workload) {
     const size_t matrix_shape[] = {workload->rows, workload->columns};
     const size_t row_shape[] = {workload->rows};
+    const size_t weight_shape[] = {workload->columns};
     llm_status status = LLM_OK;
     switch (workload->operation) {
     case CPU_BENCHMARK_REDUCE_SUM:
-        status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.25F);
+    case CPU_BENCHMARK_REDUCE_MAX:
+    case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
+        status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.25F);
         if (status == LLM_OK) {
-            status = create_f32_tensor(workload->backend, 1U, row_shape, &workload->output, 0.0F);
+            status = create_f32_tensor(workload->backend, 1U, row_shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
         }
         break;
     case CPU_BENCHMARK_GATHER:
-        status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.5F);
-        if (status == LLM_OK) {
-            status = create_indices(workload->backend, workload->rows, workload->rows,
-                                    &workload->indices);
-        }
-        if (status == LLM_OK) {
-            status =
-                create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->output, 0.0F);
-        }
-        break;
     case CPU_BENCHMARK_SCATTER_ADD:
-        status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.5F);
+        status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.0001F);
         if (status == LLM_OK) {
             status = create_indices(workload->backend, workload->rows, workload->rows,
-                                    &workload->indices);
+                                    workload_tensor(workload, BENCHMARK_SECOND));
         }
         if (status == LLM_OK) {
-            status =
-                create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->output, 0.0F);
+            status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
         }
         break;
     case CPU_BENCHMARK_SOFTMAX:
-        status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.0F);
+        status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.0F);
         if (status == LLM_OK) {
-            status =
-                create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->output, 0.0F);
+            status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
         }
         break;
     case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
     case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
-        status = create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->first, 0.0F);
+        status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.0F);
         if (status == LLM_OK) {
             status = create_indices(workload->backend, workload->rows, workload->columns,
-                                    &workload->indices);
+                                    workload_tensor(workload, BENCHMARK_SECOND));
         }
         if (status == LLM_OK && workload->operation == CPU_BENCHMARK_CROSS_ENTROPY_FORWARD) {
-            status = create_f32_tensor(workload->backend, 0U, NULL, &workload->output, 0.0F);
+            status = create_f32_tensor(workload->backend, 0U, NULL,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
         } else if (status == LLM_OK) {
-            status =
-                create_f32_tensor(workload->backend, 2U, matrix_shape, &workload->output, 0.0F);
+            status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        break;
+    case CPU_BENCHMARK_RMS_NORM:
+    case CPU_BENCHMARK_RMS_NORM_BACKWARD:
+        status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.5F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 1U, weight_shape,
+                                       workload_tensor(workload, BENCHMARK_SECOND), 1.0F);
+        }
+        if (status == LLM_OK && workload->operation == CPU_BENCHMARK_RMS_NORM_BACKWARD) {
+            status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                       workload_tensor(workload, BENCHMARK_THIRD), 0.25F);
+        }
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 2U, matrix_shape,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
+        if (status == LLM_OK && workload->operation == CPU_BENCHMARK_RMS_NORM_BACKWARD) {
+            status = create_f32_tensor(workload->backend, 1U, weight_shape,
+                                       workload_tensor(workload, BENCHMARK_FOURTH), 0.0F);
         }
         break;
     default:
@@ -228,57 +437,157 @@ static llm_status setup_matrix_workload(cpu_benchmark_workload *workload) {
 }
 
 static llm_status setup_matmul_workload(cpu_benchmark_workload *workload) {
-    const size_t left_shape[] = {workload->rows, workload->inner_size};
-    const size_t right_shape[] = {workload->inner_size, workload->columns};
+    size_t left_shape[] = {workload->rows, workload->inner_size};
+    size_t right_shape[] = {workload->inner_size, workload->columns};
     const size_t output_shape[] = {workload->rows, workload->columns};
+    if (workload->operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT) {
+        left_shape[0] = workload->inner_size;
+        left_shape[1] = workload->rows;
+    } else if (workload->operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT) {
+        right_shape[0] = workload->columns;
+        right_shape[1] = workload->inner_size;
+    }
     llm_status status = LLM_OK;
     if (workload->dtype == LLM_DTYPE_F32) {
-        status = create_f32_tensor(workload->backend, 2U, left_shape, &workload->first, 0.25F);
+        status = create_f32_tensor(workload->backend, 2U, left_shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.25F);
         if (status == LLM_OK) {
-            status =
-                create_f32_tensor(workload->backend, 2U, right_shape, &workload->second, -0.125F);
+            status = create_f32_tensor(workload->backend, 2U, right_shape,
+                                       workload_tensor(workload, BENCHMARK_SECOND), -0.125F);
         }
     } else {
-        llm_tensor source = {0};
-        status = create_f32_tensor(workload->backend, 2U, left_shape, &source, 0.25F);
+        status = create_reduced_tensor(workload->backend, workload->dtype, 2U, left_shape,
+                                       workload_tensor(workload, BENCHMARK_FIRST), 0.25F);
         if (status == LLM_OK) {
-            status = llm_tensor_create(workload->backend, workload->dtype, 2U, left_shape,
-                                       &workload->first);
+            status = create_reduced_tensor(workload->backend, workload->dtype, 2U, right_shape,
+                                           workload_tensor(workload, BENCHMARK_SECOND), -0.125F);
         }
-        if (status == LLM_OK) {
-            status = llm_cast(workload->backend, &source, &workload->first);
-        }
-        llm_tensor_destroy(&source);
-        if (status == LLM_OK) {
-            status = create_f32_tensor(workload->backend, 2U, right_shape, &source, -0.125F);
-        }
-        if (status == LLM_OK) {
-            status = llm_tensor_create(workload->backend, workload->dtype, 2U, right_shape,
-                                       &workload->second);
-        }
-        if (status == LLM_OK) {
-            status = llm_cast(workload->backend, &source, &workload->second);
-        }
-        llm_tensor_destroy(&source);
     }
     if (status == LLM_OK) {
-        status = create_f32_tensor(workload->backend, 2U, output_shape, &workload->output, 0.0F);
+        status = create_f32_tensor(workload->backend, 2U, output_shape,
+                                   workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
     }
     return status;
+}
+
+static llm_status setup_rope_workload(cpu_benchmark_workload *workload) {
+    const size_t input_shape[] = {workload->batch_size, workload->sequence_length,
+                                  workload->query_head_count, workload->head_dimension};
+    const size_t table_shape[] = {workload->sequence_length, workload->head_dimension / 2U};
+    llm_status status = create_f32_tensor(workload->backend, 4U, input_shape,
+                                          workload_tensor(workload, BENCHMARK_FIRST), 0.5F);
+    if (status == LLM_OK) {
+        status = create_f32_tensor(workload->backend, 2U, table_shape,
+                                   workload_tensor(workload, BENCHMARK_SECOND), 1.0F);
+    }
+    if (status == LLM_OK) {
+        status = create_f32_tensor(workload->backend, 2U, table_shape,
+                                   workload_tensor(workload, BENCHMARK_THIRD), 0.0F);
+    }
+    if (status == LLM_OK) {
+        status = create_f32_tensor(workload->backend, 4U, input_shape,
+                                   workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+    }
+    return status;
+}
+
+static llm_status setup_attention_workload(cpu_benchmark_workload *workload) {
+    const size_t query_shape[] = {workload->batch_size, workload->sequence_length,
+                                  workload->query_head_count, workload->head_dimension};
+    const size_t key_value_shape[] = {workload->batch_size, workload->sequence_length,
+                                      workload->key_value_head_count, workload->head_dimension};
+    llm_status status = create_f32_tensor(workload->backend, 4U, query_shape,
+                                          workload_tensor(workload, BENCHMARK_FIRST), 0.125F);
+    if (status == LLM_OK) {
+        status = create_f32_tensor(workload->backend, 4U, key_value_shape,
+                                   workload_tensor(workload, BENCHMARK_SECOND), 0.125F);
+    }
+    if (status == LLM_OK) {
+        status = create_f32_tensor(workload->backend, 4U, key_value_shape,
+                                   workload_tensor(workload, BENCHMARK_THIRD), 0.25F);
+    }
+    if (status == LLM_OK && workload->operation == CPU_BENCHMARK_ATTENTION_BACKWARD) {
+        status = create_f32_tensor(workload->backend, 4U, query_shape,
+                                   workload_tensor(workload, BENCHMARK_FOURTH), 0.125F);
+    }
+    if (status == LLM_OK) {
+        status = create_f32_tensor(workload->backend, 4U, query_shape,
+                                   workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+    }
+    if (status == LLM_OK && workload->operation == CPU_BENCHMARK_ATTENTION_BACKWARD) {
+        status = create_f32_tensor(workload->backend, 4U, key_value_shape,
+                                   workload_tensor(workload, BENCHMARK_FIFTH), 0.0F);
+    }
+    if (status == LLM_OK && workload->operation == CPU_BENCHMARK_ATTENTION_BACKWARD) {
+        status = create_f32_tensor(workload->backend, 4U, key_value_shape,
+                                   workload_tensor(workload, BENCHMARK_SIXTH), 0.0F);
+    }
+    return status;
+}
+
+static int operation_is_vector(cpu_benchmark_operation operation) {
+    switch (operation) {
+    case CPU_BENCHMARK_ZERO:
+    case CPU_BENCHMARK_FILL:
+    case CPU_BENCHMARK_COPY:
+    case CPU_BENCHMARK_CAST_DOWN:
+    case CPU_BENCHMARK_CAST_UP:
+    case CPU_BENCHMARK_ADD:
+    case CPU_BENCHMARK_MULTIPLY:
+    case CPU_BENCHMARK_SCALE:
+    case CPU_BENCHMARK_ACCUMULATE:
+    case CPU_BENCHMARK_SILU:
+    case CPU_BENCHMARK_SILU_BACKWARD:
+    case CPU_BENCHMARK_ADAMW:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int operation_is_matrix(cpu_benchmark_operation operation) {
+    switch (operation) {
+    case CPU_BENCHMARK_REDUCE_SUM:
+    case CPU_BENCHMARK_REDUCE_MAX:
+    case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
+    case CPU_BENCHMARK_GATHER:
+    case CPU_BENCHMARK_SCATTER_ADD:
+    case CPU_BENCHMARK_RMS_NORM:
+    case CPU_BENCHMARK_RMS_NORM_BACKWARD:
+    case CPU_BENCHMARK_SOFTMAX:
+    case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
+    case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static llm_status workload_setup(runtime_benchmark_backend backend_kind,
                                  cpu_benchmark_operation operation, size_t requested_threads,
                                  const cpu_benchmark_config *config,
                                  cpu_benchmark_workload *out_workload) {
+    llm_dtype dtype = config->matmul_dtype;
+    if ((operation == CPU_BENCHMARK_CAST_DOWN || operation == CPU_BENCHMARK_CAST_UP) &&
+        dtype == LLM_DTYPE_F32) {
+        dtype = LLM_DTYPE_F16;
+    }
     *out_workload = (cpu_benchmark_workload){
         .operation = operation,
         .backend_kind = backend_kind,
-        .dtype = operation == CPU_BENCHMARK_MATMUL ? config->matmul_dtype : LLM_DTYPE_F32,
+        .dtype = (operation == CPU_BENCHMARK_MATMUL || operation == CPU_BENCHMARK_CAST_DOWN ||
+                  operation == CPU_BENCHMARK_CAST_UP)
+                     ? dtype
+                     : LLM_DTYPE_F32,
         .elements = config->elements,
         .rows = config->rows,
         .columns = config->columns,
         .inner_size = config->inner_size,
+        .batch_size = config->batch_size,
+        .sequence_length = config->sequence_length,
+        .query_head_count = config->query_head_count,
+        .key_value_head_count = config->key_value_head_count,
+        .head_dimension = config->head_dimension,
     };
     llm_status status = LLM_INVALID_ARGUMENT;
     if (backend_kind == RUNTIME_BENCHMARK_CPU) {
@@ -293,25 +602,19 @@ static llm_status workload_setup(runtime_benchmark_backend backend_kind,
     if (status != LLM_OK) {
         return status;
     }
-    switch (operation) {
-    case CPU_BENCHMARK_COPY:
-    case CPU_BENCHMARK_ADD:
+    if (operation_is_vector(operation) != 0) {
         status = setup_vector_workload(out_workload);
-        break;
-    case CPU_BENCHMARK_REDUCE_SUM:
-    case CPU_BENCHMARK_GATHER:
-    case CPU_BENCHMARK_SCATTER_ADD:
-    case CPU_BENCHMARK_SOFTMAX:
-    case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
-    case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
+    } else if (operation_is_matrix(operation) != 0) {
         status = setup_matrix_workload(out_workload);
-        break;
-    case CPU_BENCHMARK_MATMUL:
+    } else if (operation == CPU_BENCHMARK_MATMUL ||
+               operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT ||
+               operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT) {
         status = setup_matmul_workload(out_workload);
-        break;
-    case CPU_BENCHMARK_OPERATION_COUNT:
-        status = LLM_INVALID_ARGUMENT;
-        break;
+    } else if (operation == CPU_BENCHMARK_ROPE || operation == CPU_BENCHMARK_ROPE_BACKWARD) {
+        status = setup_rope_workload(out_workload);
+    } else if (operation == CPU_BENCHMARK_ATTENTION ||
+               operation == CPU_BENCHMARK_ATTENTION_BACKWARD) {
+        status = setup_attention_workload(out_workload);
     }
     if (status != LLM_OK) {
         workload_destroy(out_workload);
@@ -320,36 +623,99 @@ static llm_status workload_setup(runtime_benchmark_backend backend_kind,
 }
 
 static llm_status workload_execute(cpu_benchmark_workload *workload) {
+    llm_tensor *first = workload_tensor(workload, BENCHMARK_FIRST);
+    llm_tensor *second = workload_tensor(workload, BENCHMARK_SECOND);
+    llm_tensor *third = workload_tensor(workload, BENCHMARK_THIRD);
+    llm_tensor *fourth = workload_tensor(workload, BENCHMARK_FOURTH);
+    llm_tensor *fifth = workload_tensor(workload, BENCHMARK_FIFTH);
+    llm_tensor *sixth = workload_tensor(workload, BENCHMARK_SIXTH);
+    llm_tensor *output = workload_tensor(workload, BENCHMARK_OUTPUT);
     switch (workload->operation) {
+    case CPU_BENCHMARK_ZERO:
+        return llm_tensor_zero(workload->backend, output);
+    case CPU_BENCHMARK_FILL:
+        return llm_tensor_fill_f32(workload->backend, output, 0.75F);
     case CPU_BENCHMARK_COPY:
-        return llm_tensor_copy(workload->backend, &workload->first, &workload->output);
+        return llm_tensor_copy(workload->backend, first, output);
+    case CPU_BENCHMARK_CAST_DOWN:
+    case CPU_BENCHMARK_CAST_UP:
+        return llm_cast(workload->backend, first, output);
     case CPU_BENCHMARK_ADD:
-        return llm_add(workload->backend, &workload->first, &workload->second, &workload->output);
+        return llm_add(workload->backend, first, second, output);
+    case CPU_BENCHMARK_MULTIPLY:
+        return llm_multiply(workload->backend, first, second, output);
+    case CPU_BENCHMARK_SCALE:
+        return llm_scale(workload->backend, first, 0.5F, output);
+    case CPU_BENCHMARK_ACCUMULATE:
+        return llm_accumulate(workload->backend, first, output);
     case CPU_BENCHMARK_REDUCE_SUM:
-        return llm_reduce_sum_last(workload->backend, &workload->first, &workload->output);
+        return llm_reduce_sum_last(workload->backend, first, output);
+    case CPU_BENCHMARK_REDUCE_MAX:
+        return llm_reduce_max_last(workload->backend, first, output);
+    case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
+        return llm_reduce_mean_square_last(workload->backend, first, output);
     case CPU_BENCHMARK_MATMUL:
         return workload->dtype == LLM_DTYPE_F32
-                   ? llm_matmul(workload->backend, &workload->first, &workload->second,
-                                &workload->output)
-                   : llm_matmul_mixed_f32(workload->backend, &workload->first, &workload->second,
-                                          &workload->output);
+                   ? llm_matmul(workload->backend, first, second, output)
+                   : llm_matmul_mixed_f32(workload->backend, first, second, output);
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT: {
+        const llm_matmul_options options = {.transpose_left = 1, .transpose_right = 0};
+        return llm_matmul_ex(workload->backend, first, second, &options, output);
+    }
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT: {
+        const llm_matmul_options options = {.transpose_left = 0, .transpose_right = 1};
+        return llm_matmul_ex(workload->backend, first, second, &options, output);
+    }
     case CPU_BENCHMARK_GATHER:
-        return llm_gather_rows(workload->backend, &workload->first, &workload->indices,
-                               &workload->output);
-    case CPU_BENCHMARK_SCATTER_ADD: {
-        const llm_status status = llm_tensor_fill_f32(workload->backend, &workload->output, 0.0F);
-        return status == LLM_OK ? llm_scatter_add_rows(workload->backend, &workload->first,
-                                                       &workload->indices, &workload->output)
-                                : status;
+        return llm_gather_rows(workload->backend, first, second, output);
+    case CPU_BENCHMARK_SCATTER_ADD:
+        return llm_scatter_add_rows(workload->backend, first, second, output);
+    case CPU_BENCHMARK_SILU:
+        return llm_silu(workload->backend, first, output);
+    case CPU_BENCHMARK_SILU_BACKWARD:
+        return llm_silu_backward(workload->backend, first, second, output);
+    case CPU_BENCHMARK_RMS_NORM:
+        return llm_rms_norm(workload->backend, first, second, 1.0e-5F, output);
+    case CPU_BENCHMARK_RMS_NORM_BACKWARD:
+        return llm_rms_norm_backward(workload->backend, first, second, third, 1.0e-5F, output,
+                                     fourth);
+    case CPU_BENCHMARK_ROPE:
+        return llm_rope(workload->backend, first, second, third, 0U, output);
+    case CPU_BENCHMARK_ROPE_BACKWARD:
+        return llm_rope_backward(workload->backend, first, second, third, 0U, output);
+    case CPU_BENCHMARK_ATTENTION: {
+        const llm_attention_options options = {
+            .scale = 1.0F / sqrtf((float)workload->head_dimension),
+            .query_position_offset = 0U,
+        };
+        return llm_attention_forward(workload->backend, first, second, third, &options, output);
+    }
+    case CPU_BENCHMARK_ATTENTION_BACKWARD: {
+        const llm_attention_options options = {
+            .scale = 1.0F / sqrtf((float)workload->head_dimension),
+            .query_position_offset = 0U,
+        };
+        return llm_attention_backward(workload->backend, first, second, third, fourth, &options,
+                                      output, fifth, sixth);
     }
     case CPU_BENCHMARK_SOFTMAX:
-        return llm_softmax_last(workload->backend, &workload->first, &workload->output);
+        return llm_softmax_last(workload->backend, first, output);
     case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
-        return llm_cross_entropy_forward(workload->backend, &workload->first, &workload->indices,
-                                         &workload->output);
+        return llm_cross_entropy_forward(workload->backend, first, second, output);
     case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
-        return llm_cross_entropy_backward(workload->backend, &workload->first, &workload->indices,
-                                          &workload->output);
+        return llm_cross_entropy_backward(workload->backend, first, second, output);
+    case CPU_BENCHMARK_ADAMW: {
+        const llm_adamw_options options = {
+            .learning_rate = 1.0e-5F,
+            .beta1 = 0.9F,
+            .beta2 = 0.999F,
+            .epsilon = 1.0e-8F,
+            .weight_decay = 0.01F,
+            .gradient_scale = 1.0F,
+            .step = 1ULL,
+        };
+        return llm_adamw_update(workload->backend, output, first, second, third, &options);
+    }
     case CPU_BENCHMARK_OPERATION_COUNT:
         return LLM_INVALID_ARGUMENT;
     }
@@ -361,39 +727,108 @@ static int close_enough(float actual, float expected) {
     return fabsf(actual - expected) <= 1.0e-4F * scale;
 }
 
-static int workload_verify(cpu_benchmark_workload *workload, double *out_guard_value) {
-    if (workload->output.element_count > SIZE_MAX / sizeof(float)) {
+static int workload_read_first_value(cpu_benchmark_workload *workload, float *out_value) {
+    llm_tensor *result = workload_tensor(workload, BENCHMARK_OUTPUT);
+    if (workload->operation == CPU_BENCHMARK_CAST_DOWN) {
+        llm_tensor *scratch = workload_tensor(workload, BENCHMARK_SECOND);
+        if (llm_cast(workload->backend, result, scratch) != LLM_OK) {
+            return 0;
+        }
+        result = scratch;
+    }
+    if (result->element_count > SIZE_MAX / sizeof(float)) {
         return 0;
     }
-    const size_t byte_count = workload->output.element_count * sizeof(float);
+    const size_t byte_count = result->element_count * sizeof(float);
     float *values = malloc(byte_count);
     if (values == NULL) {
         return 0;
     }
-    if (llm_tensor_read(workload->backend, &workload->output, values, byte_count) != LLM_OK) {
-        free(values);
+    const int valid = llm_tensor_read(workload->backend, result, values, byte_count) == LLM_OK;
+    if (valid != 0) {
+        *out_value = values[0];
+    }
+    free(values);
+    return valid;
+}
+
+static int workload_verify(cpu_benchmark_workload *workload, double *out_guard_value) {
+    float actual = 0.0F;
+    if (workload_read_first_value(workload, &actual) == 0 || !isfinite(actual)) {
         return 0;
     }
-
     float expected = 0.0F;
+    int compare_expected = 1;
     switch (workload->operation) {
+    case CPU_BENCHMARK_ZERO:
+        expected = 0.0F;
+        break;
+    case CPU_BENCHMARK_FILL:
+        expected = 0.75F;
+        break;
     case CPU_BENCHMARK_COPY:
         expected = 1.25F;
+        break;
+    case CPU_BENCHMARK_CAST_DOWN:
+    case CPU_BENCHMARK_CAST_UP:
+        expected = 0.5F;
         break;
     case CPU_BENCHMARK_ADD:
         expected = 3.75F;
         break;
+    case CPU_BENCHMARK_MULTIPLY:
+        expected = 3.125F;
+        break;
+    case CPU_BENCHMARK_SCALE:
+        expected = 0.25F;
+        break;
+    case CPU_BENCHMARK_ACCUMULATE:
+    case CPU_BENCHMARK_SCATTER_ADD:
+    case CPU_BENCHMARK_ADAMW:
+        compare_expected = 0;
+        break;
     case CPU_BENCHMARK_REDUCE_SUM:
         expected = (float)workload->columns * 0.25F;
         break;
+    case CPU_BENCHMARK_REDUCE_MAX:
+        expected = 0.25F;
+        break;
+    case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
+        expected = 0.0625F;
+        break;
     case CPU_BENCHMARK_MATMUL:
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT:
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT:
         expected = (float)workload->inner_size * -0.03125F;
         break;
     case CPU_BENCHMARK_GATHER:
+        expected = 0.0001F;
+        break;
+    case CPU_BENCHMARK_SILU:
+        expected = 0.5F / (1.0F + expf(-0.5F));
+        break;
+    case CPU_BENCHMARK_SILU_BACKWARD: {
+        const float sigmoid = 1.0F / (1.0F + expf(-0.5F));
+        expected = 0.25F * sigmoid * (1.0F + 0.5F * (1.0F - sigmoid));
+        break;
+    }
+    case CPU_BENCHMARK_RMS_NORM:
+        expected = 0.5F / sqrtf(0.25F + 1.0e-5F);
+        break;
+    case CPU_BENCHMARK_RMS_NORM_BACKWARD: {
+        const float inverse_rms = 1.0F / sqrtf(0.25F + 1.0e-5F);
+        expected = 0.25F * inverse_rms - 0.0625F * inverse_rms * inverse_rms * inverse_rms;
+        break;
+    }
+    case CPU_BENCHMARK_ROPE:
+    case CPU_BENCHMARK_ROPE_BACKWARD:
         expected = 0.5F;
         break;
-    case CPU_BENCHMARK_SCATTER_ADD:
-        expected = 0.5F;
+    case CPU_BENCHMARK_ATTENTION:
+        expected = 0.25F;
+        break;
+    case CPU_BENCHMARK_ATTENTION_BACKWARD:
+        expected = 0.0F;
         break;
     case CPU_BENCHMARK_SOFTMAX:
         expected = 1.0F / (float)workload->columns;
@@ -406,33 +841,54 @@ static int workload_verify(cpu_benchmark_workload *workload, double *out_guard_v
                    1.0F / (float)workload->rows;
         break;
     case CPU_BENCHMARK_OPERATION_COUNT:
-        free(values);
         return 0;
     }
-    const int valid = close_enough(values[0], expected);
-    *out_guard_value = (double)values[0];
-    free(values);
-    return valid;
+    *out_guard_value = (double)actual;
+    return compare_expected == 0 || close_enough(actual, expected);
+}
+
+static double attention_pair_count(const cpu_benchmark_workload *workload) {
+    return (double)workload->batch_size * (double)workload->query_head_count *
+           (double)workload->sequence_length * (double)(workload->sequence_length + 1U) * 0.5;
 }
 
 static double workload_throughput(const cpu_benchmark_workload *workload, double seconds,
                                   const char **out_unit) {
     double work = 0.0;
     switch (workload->operation) {
+    case CPU_BENCHMARK_ZERO:
+    case CPU_BENCHMARK_FILL:
+        work = (double)workload->elements * sizeof(float);
+        *out_unit = "GB/s";
+        return work / seconds / 1.0e9;
     case CPU_BENCHMARK_COPY:
+    case CPU_BENCHMARK_SCALE:
+    case CPU_BENCHMARK_SILU:
+    case CPU_BENCHMARK_SILU_BACKWARD:
         work = 2.0 * (double)workload->elements * sizeof(float);
         *out_unit = "GB/s";
         return work / seconds / 1.0e9;
+    case CPU_BENCHMARK_CAST_DOWN:
+    case CPU_BENCHMARK_CAST_UP:
+        work = (double)workload->elements * (sizeof(float) + 2U);
+        *out_unit = "GB/s";
+        return work / seconds / 1.0e9;
     case CPU_BENCHMARK_ADD:
+    case CPU_BENCHMARK_MULTIPLY:
+    case CPU_BENCHMARK_ACCUMULATE:
         work = 3.0 * (double)workload->elements * sizeof(float);
         *out_unit = "GB/s";
         return work / seconds / 1.0e9;
     case CPU_BENCHMARK_REDUCE_SUM:
+    case CPU_BENCHMARK_REDUCE_MAX:
+    case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
         work = ((double)workload->rows * (double)workload->columns + (double)workload->rows) *
                sizeof(float);
         *out_unit = "GB/s";
         return work / seconds / 1.0e9;
     case CPU_BENCHMARK_MATMUL:
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT:
+    case CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT:
         work =
             2.0 * (double)workload->rows * (double)workload->inner_size * (double)workload->columns;
         *out_unit = "GFLOP/s";
@@ -447,11 +903,28 @@ static double workload_throughput(const cpu_benchmark_workload *workload, double
                (double)workload->rows * sizeof(uint32_t);
         *out_unit = "GB/s";
         return work / seconds / 1.0e9;
+    case CPU_BENCHMARK_RMS_NORM:
+    case CPU_BENCHMARK_RMS_NORM_BACKWARD:
     case CPU_BENCHMARK_SOFTMAX:
     case CPU_BENCHMARK_CROSS_ENTROPY_FORWARD:
     case CPU_BENCHMARK_CROSS_ENTROPY_BACKWARD:
         work = (double)workload->rows * (double)workload->columns;
         *out_unit = "M elements/s";
+        return work / seconds / 1.0e6;
+    case CPU_BENCHMARK_ROPE:
+    case CPU_BENCHMARK_ROPE_BACKWARD:
+        work = (double)workload->batch_size * (double)workload->sequence_length *
+               (double)workload->query_head_count * (double)workload->head_dimension;
+        *out_unit = "M elements/s";
+        return work / seconds / 1.0e6;
+    case CPU_BENCHMARK_ATTENTION:
+    case CPU_BENCHMARK_ATTENTION_BACKWARD:
+        work = attention_pair_count(workload);
+        *out_unit = "M token-pairs/s";
+        return work / seconds / 1.0e6;
+    case CPU_BENCHMARK_ADAMW:
+        work = (double)workload->elements;
+        *out_unit = "M parameters/s";
         return work / seconds / 1.0e6;
     case CPU_BENCHMARK_OPERATION_COUNT:
         *out_unit = "unknown";
@@ -461,24 +934,33 @@ static double workload_throughput(const cpu_benchmark_workload *workload, double
     return 0.0;
 }
 
-int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_operation operation,
-                          size_t requested_threads, const cpu_benchmark_config *config,
-                          cpu_benchmark_result *out_result) {
-    if ((backend_kind != RUNTIME_BENCHMARK_CPU && backend_kind != RUNTIME_BENCHMARK_METAL) ||
-        operation < CPU_BENCHMARK_COPY || operation >= CPU_BENCHMARK_OPERATION_COUNT ||
-        config == NULL || out_result == NULL || config->elements == 0U || config->rows == 0U ||
-        config->columns == 0U || config->inner_size == 0U || config->warmup_iterations == 0U ||
-        config->measured_iterations == 0U || config->minimum_sample_seconds <= 0.0 ||
+static int config_is_valid(const cpu_benchmark_config *config) {
+    if (config == NULL || config->elements == 0U || config->rows == 0U || config->columns == 0U ||
+        config->inner_size == 0U || config->batch_size == 0U || config->sequence_length == 0U ||
+        config->query_head_count == 0U || config->key_value_head_count == 0U ||
+        config->head_dimension == 0U || config->head_dimension % 2U != 0U ||
+        config->query_head_count % config->key_value_head_count != 0U ||
+        config->warmup_iterations == 0U || config->measured_iterations == 0U ||
+        config->minimum_sample_seconds <= 0.0 ||
         config->measured_iterations > SIZE_MAX / sizeof(double) ||
         (config->matmul_dtype != LLM_DTYPE_F32 && config->matmul_dtype != LLM_DTYPE_F16 &&
          config->matmul_dtype != LLM_DTYPE_BF16)) {
         return 0;
     }
-    size_t matrix_elements = 0U;
-    if (checked_multiply(config->rows, config->columns, &matrix_elements) == 0) {
+    size_t product = 0U;
+    return checked_multiply(config->rows, config->columns, &product) != 0 &&
+           checked_multiply(config->batch_size, config->sequence_length, &product) != 0;
+}
+
+int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_operation operation,
+                          size_t requested_threads, const cpu_benchmark_config *config,
+                          cpu_benchmark_result *out_result) {
+    if ((backend_kind != RUNTIME_BENCHMARK_CPU && backend_kind != RUNTIME_BENCHMARK_METAL) ||
+        operation < CPU_BENCHMARK_ZERO || operation >= CPU_BENCHMARK_OPERATION_COUNT ||
+        out_result == NULL || config_is_valid(config) == 0 ||
+        runtime_benchmark_operation_supported(backend_kind, operation) == 0) {
         return 0;
     }
-    (void)matrix_elements;
 
     cpu_benchmark_workload workload = {0};
     const llm_status setup_status =
@@ -620,6 +1102,8 @@ int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_
         .p95_seconds = durations[p95_index],
         .mean_seconds = mean,
         .standard_deviation_seconds = sqrt(variance),
+        .nanoseconds_per_call = median * 1.0e9,
+        .calls_per_second = 1.0 / median,
         .guard_value = guard_value,
         .gpu_median_seconds =
             backend_kind == RUNTIME_BENCHMARK_METAL

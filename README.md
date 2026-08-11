@@ -29,16 +29,19 @@ La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
 `.llmdat` e fornisce batch input/target al futuro modello. Il runtime tensoriale
 CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
-riduzioni, matmul, gather/scatter, softmax e cross-entropy. Il backend Metal
+riduzioni, matmul, gather/scatter, softmax, cross-entropy e le primitive F32 di
+training: matmul trasposta, accumulo, SiLU, RMSNorm, RoPE, attention GQA causale
+con backward e AdamW. Il backend Metal
 esegue lo stesso contratto sulla GPU Apple con pool dei buffer, batch asincroni
 espliciti, metriche, kernel paralleli e matmul tiled FP32/FP16/BF16 con accumulo
-FP32. Il prossimo incremento costruira' backward e layer neurali sopra queste
-API. I sorgenti specifici dell'hardware
+FP32. Il prossimo incremento porta le nuove primitive di training su Metal,
+prima di costruire i layer neurali sopra queste API. I sorgenti specifici dell'hardware
 restano separati sotto `src/runtime/backends/`, cosi' CPU, Metal e futuri backend
 CUDA non entrano nel codice del modello.
 
 La suite prestazionale unificata accetta backend, precisione, operazioni, forme
-e liste di thread configurabili; mostra una tabella e puo' produrre JSONL. Uso,
+e liste di thread configurabili; copre tutti i 29 workload CPU, mostra una
+tabella e puo' produrre JSONL confrontabile con una baseline. Uso,
 tempi GPU ed esempi sono nella
 [specifica del backend Metal](docs/backend-metal.md#11-benchmark-riproducibile).
 

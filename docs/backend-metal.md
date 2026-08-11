@@ -231,9 +231,9 @@ Misura FP16 o BF16:
   --rows 512 --inner 512 --columns 512
 ```
 
-`--format jsonl` produce record schema 2 con backend, device, dtype, statistiche
-end-to-end, tempi GPU e startup. Il target storico `runtime_cpu_benchmark` resta
-disponibile e usa la stessa suite, con CPU come backend predefinito.
+`--format jsonl` produce record schema 3 con backend, device, dtype, statistiche
+end-to-end, tempi GPU e startup. Lo stesso eseguibile forza CPU, Metal oppure
+entrambi tramite `--backend`, senza suite separate per hardware.
 
 ### Report automatico della macchina
 
@@ -264,7 +264,8 @@ Metal/CPU per FP32.
 
 Il report hardware serve per esplorare la macchina. Per decidere se una modifica
 ha migliorato o peggiorato il runtime si usa invece `performance_suite.py`.
-La configurazione predefinita richiede indicativamente 40–70 secondi e usa:
+La configurazione predefinita esegue tutti i kernel CPU e tutti quelli Metal
+disponibili. La durata dipende soprattutto dalle forme di attention e matmul e usa:
 
 - 5 iterazioni di warm-up;
 - 40 campioni misurati;
@@ -273,6 +274,8 @@ La configurazione predefinita richiede indicativamente 40–70 secondi e usa:
 - operazioni piccole per misurare la latenza;
 - vettori grandi per la banda di memoria;
 - righe `512 x 2048` per riduzioni, gather, scatter-add, softmax e cross-entropy;
+- RoPE e attention GQA, forward e backward, su forme Transformer dedicate;
+- SiLU, RMSNorm e AdamW nei percorsi CPU di training;
 - matmul `512 x 512 x 512` in FP32, FP16 e BF16;
 - matmul Transformer `512 x 1024 x 4096` in FP32.
 

@@ -46,14 +46,20 @@ La struttura corrente e quella prevista sono:
 
 ```text
 include/runtime/
-  runtime.h
+  types.h
+  backend.h
+  tensor.h
+  operations.h
+  runtime.h              umbrella pubblico
 
 src/runtime/
   backend.c
+  backend_internal.h
   memory.c
+  storage_internal.h
   operations.c
   tensor.c
-  runtime_internal.h
+  tensor_internal.h
   backends/
     cpu/
       cpu_backend.c
@@ -183,7 +189,8 @@ llm_status llm_backend_cpu_create_with_config(
     llm_backend **out_backend);
 ```
 
-Questa API e' implementata in `runtime.h`. La funzione semplice equivale a
+Questa API e' dichiarata in `backend.h`, incluso anche dall'umbrella
+`runtime.h`. La funzione semplice equivale a
 `thread_count = 0` e modalita' deterministica attiva. La funzione
 `llm_backend_cpu_thread_count()` permette di leggere il numero effettivo scelto.
 
@@ -446,15 +453,21 @@ I benchmark sono eseguibili separati dai test. Devono riportare almeno:
 - throughput appropriato: elementi/s, GB/s o GFLOP/s;
 - informazioni essenziali su CPU e build.
 
-La suite implementata misura:
+La suite implementata misura tutti i 29 workload del contratto CPU:
 
-- copy e add;
-- reduce-sum;
-- matmul;
-- gather;
-- softmax;
-- cross-entropy forward e backward;
+- memoria: zero, fill, copy e cast nelle due direzioni;
+- elementwise: add, multiply, scale e accumulate;
+- riduzioni: sum, max e mean-square;
+- matmul normale, mixed precision e con transpose logica sinistra/destra;
+- gather e scatter-add;
+- SiLU, RMSNorm, RoPE e attention GQA causale, forward e backward;
+- softmax e cross-entropy forward/backward;
+- AdamW;
 - ogni lista richiesta di thread, inclusa la scelta automatica.
+
+Per ogni caso registra minimo, mediana, P95, media, deviazione standard,
+coefficiente di variazione, nanosecondi per chiamata, chiamate al secondo,
+throughput specifico dell'operazione e un valore di controllo numerico.
 
 Il benchmark deve impedire che il compilatore elimini il calcolo e deve
 riutilizzare input/output tra iterazioni. Non vengono fissate soglie assolute in
@@ -466,18 +479,20 @@ pensata per la lettura diretta:
 
 ```sh
 cmake --preset release -DLLM_LAB_BUILD_BENCHMARKS=ON
-cmake --build --preset release --target runtime_cpu_benchmark
-./build/release/utils/benchmarks/runtime_cpu_benchmark \
+cmake --build --preset release --target runtime_benchmark
+./build/release/utils/benchmarks/runtime_benchmark \
+  --backend cpu \
   --operations all \
   --threads 1,2,4,8,auto \
   --elements 1048576 \
   --rows 256 --columns 256 --inner 256 \
+  --batch 1 --sequence 128 --query-heads 8 --kv-heads 2 --head-dim 64 \
   --warmup 3 --iterations 20 --sample-ms 10
 ```
 
-Il target unificato `runtime_benchmark` usa gli stessi workload e aggiunge
-`--backend cpu|metal|all` e `--precision f32|f16|bf16`. Il nome storico
-`runtime_cpu_benchmark` resta disponibile per gli script CPU esistenti.
+Il target unico `runtime_benchmark` usa `--backend cpu|metal|all` per forzare il
+backend e `--precision f32|f16|bf16` per scegliere la precisione. CUDA verra'
+aggiunto allo stesso selettore quando il relativo backend sara' disponibile.
 
 La tabella mostra mediana, p95, throughput, speedup ed efficienza rispetto alla
 prima configurazione della lista. I campioni troppo brevi vengono ripetuti
@@ -492,18 +507,31 @@ Per creare e confrontare una baseline sulla **stessa macchina**, con lo stesso
 carico di sistema e la stessa build:
 
 ```sh
-./build/release/utils/benchmarks/runtime_cpu_benchmark \
+./build/release/utils/benchmarks/runtime_benchmark --backend cpu \
   --format jsonl \
   --operations all --threads 1,2,4,8,auto \
   > baseline.jsonl
 
-./build/release/utils/benchmarks/runtime_cpu_benchmark \
+./build/release/utils/benchmarks/runtime_benchmark --backend cpu \
   --format jsonl \
   --operations all --threads 1,2,4,8,auto \
   > current.jsonl
 
 python3 utils/benchmarks/compare_results.py \
   baseline.jsonl current.jsonl \
+  --max-regression-percent 10
+```
+
+In alternativa `performance_suite.py` esegue automaticamente scenari piccoli,
+memory-bound, matriciali e Transformer, salva i record e applica la soglia:
+
+```sh
+python3 utils/benchmarks/performance_suite.py \
+  --output artifacts/benchmarks/local/baseline.jsonl
+
+python3 utils/benchmarks/performance_suite.py \
+  --baseline artifacts/benchmarks/local/baseline.jsonl \
+  --output artifacts/benchmarks/local/current.jsonl \
   --max-regression-percent 10
 ```
 
@@ -558,9 +586,9 @@ loss semplice e deterministica. Il backward e' parallelo per riga.
 - misure di scalabilita' per numero di thread;
 - documentazione dei risultati e delle scelte.
 
-I target `runtime_cpu_benchmark` e `runtime_benchmark` misurano tutte le
-primitive principali con configurazioni di thread arbitrarie e producono JSONL
-confrontabile con una baseline. La matmul usa tile interni e per colonna da 64
+Il target unico `runtime_benchmark` misura tutte le primitive principali con
+backend e configurazioni di thread espliciti e produce JSONL confrontabile con
+una baseline. La matmul usa tile interni e per colonna da 64
 elementi; il tuning per architettura resta futuro.
 
 **Uscita:** miglioramento misurato su forme rappresentative senza regressioni di
@@ -580,9 +608,26 @@ correttezza.
 **Uscita:** il backend seleziona soltanto implementazioni supportate e ogni
 percorso coincide numericamente col riferimento.
 
-## 16. Criterio per procedere all'autograd
+### Incremento CPU-F — Primitive di training Transformer
 
-Il backend CPU non deve essere “perfetto”, ma prima dell'autograd devono essere
+**Stato: implementato come riferimento numerico F32.**
+
+- `cpu_linear.c`: matmul con transpose logica e accumulo in-place;
+- `cpu_transformer.c`: SiLU, RMSNorm, RoPE e attention GQA causale, con forward
+  e backward;
+- `cpu_optimizer.c`: aggiornamento AdamW con correzione del bias;
+- validazione comune nell'API pubblica, senza concetti di modello nei kernel;
+- gradient check numerici per SiLU, RMSNorm e attention;
+- test con AddressSanitizer e UndefinedBehaviorSanitizer.
+
+Queste implementazioni privilegiano leggibilita', determinismo e correttezza.
+In particolare attention backward e RMSNorm backward sono inizialmente seriali
+per evitare accumuli concorrenti sui gradienti condivisi. La parallelizzazione
+e le fusioni verranno guidate dai benchmark dopo la parita' Metal.
+
+## 16. Criterio per procedere ai layer neurali
+
+Il backend CPU non deve essere “perfetto”, ma prima dei layer neurali devono essere
 veri questi punti:
 
 - struttura per backend stabile e comprensibile;
@@ -591,6 +636,7 @@ veri questi punti:
 - operazioni principali parallelizzate senza race;
 - almeno una matmul parallela misurata;
 - test, sanitizer e benchmark documentati;
+- forward, backward e AdamW del contratto F32 disponibili;
 - nessun dettaglio di thread visibile nel futuro codice dei layer.
 
 SIMD completo, BLAS, kernel fusi e tuning per ogni CPU possono proseguire anche

@@ -1,10 +1,3 @@
-add_executable(runtime_cpu_benchmark
-    runtime/benchmark_cpu.c
-    runtime/benchmark_suite.c)
-target_compile_features(runtime_cpu_benchmark PRIVATE c_std_23)
-target_link_libraries(runtime_cpu_benchmark PRIVATE runtime)
-llm_lab_set_warnings(runtime_cpu_benchmark)
-
 add_executable(runtime_benchmark
     runtime/benchmark_cpu.c
     runtime/benchmark_suite.c)
@@ -30,7 +23,8 @@ add_custom_target(runtime_performance_suite
 if(BUILD_TESTING)
     add_test(
         NAME benchmark.cpu.smoke
-        COMMAND runtime_cpu_benchmark
+        COMMAND runtime_benchmark
+            --backend cpu
             --operations all
             --threads 1,2
             --elements 4096
@@ -44,7 +38,8 @@ if(BUILD_TESTING)
 
     add_test(
         NAME benchmark.cpu.jsonl_smoke
-        COMMAND runtime_cpu_benchmark
+        COMMAND runtime_benchmark
+            --backend cpu
             --format jsonl
             --operations add
             --threads 1
