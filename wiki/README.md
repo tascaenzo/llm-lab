@@ -18,7 +18,7 @@ Un LLM non e' soltanto una rete neurale: e' un sistema formato da dati, rapprese
 10. [10 — Runtime tensoriale](10-runtime-tensoriale.md): come i calcoli del modello vengono eseguiti su CPU e, in futuro, GPU.
 11. [11 — Backend CPU](11-backend-cpu.md): come usare thread, core, SIMD e cache conservando kernel leggibili.
 12. [12 — Backend Metal](12-backend-metal.md): come gli stessi tensori diventano buffer e kernel eseguiti dalla GPU Apple.
-13. [13 — Primo modello addestrabile](13-primo-modello-addestrabile.md): il prossimo incremento reale, piccolo e verificabile su CPU.
+13. [13 — Modello Minimal](13-primo-modello-addestrabile.md): la prima rete reale, piccola e verificabile su CPU.
 14. [Glossario](glossario.md): termini chiave.
 
 ## Scala iniziale

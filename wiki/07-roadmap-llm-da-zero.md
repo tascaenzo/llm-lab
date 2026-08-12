@@ -59,7 +59,7 @@ rappresentative.
 
 ## Fase 4 — Core neurale
 
-**Stato: completata con M0.**
+**Stato: completata con il Modello Minimal.**
 
 - costruire config, parametri, gradienti e inizializzazione riproducibile;
 - implementare `embedding -> linear head -> logits -> cross-entropy`;
@@ -67,8 +67,8 @@ rappresentative.
 - mantenere un registry di parametri e aggiornare tutti i pesi con AdamW;
 - fare overfit di una fixture minuscola e verificare i gradienti numericamente.
 
-Il risultato e' M0: un language model autoregressivo addestrabile, non un mock,
-con `layer_count=0`. Config, checkpoint e API restano estendibili.
+Il risultato e' il Modello Minimal: un language model autoregressivo
+addestrabile, non un mock. Config, checkpoint e API restano estendibili.
 
 La CPU e' il riferimento per questo gate perche' soddisfa l'intero contratto
 runtime v1. Il modello non deve dipendere dalla CPU: usera' la stessa API
@@ -81,7 +81,7 @@ un run ripreso da checkpoint coincide con lo stesso run continuo.
 
 ## Fase 5 — Transformer
 
-**Stato: primo gate completato con M1; scalabilita' generica ancora da fare.**
+**Stato: il blocco causale e' nel Modello Minimal; scalabilita' generica ancora da fare.**
 
 - embedding dei token e posizione rappresentata con RoPE;
 - singola testa di attenzione causale;
@@ -92,10 +92,10 @@ un run ripreso da checkpoint coincide con lo stesso run continuo.
 **Verifica:** il modello impara una piccola sequenza nota e cambiare un token
 futuro non modifica le attivazioni delle posizioni precedenti.
 
-M1 implementa un blocco causale CPU con RMSNorm, Q/K/V, RoPE, attention,
+Il Modello Minimal implementa un blocco causale CPU con RMSNorm, Q/K/V, RoPE, attention,
 proiezione e residual. Per mantenere il riferimento numerico semplice accetta
-solo un layer e una head, senza MLP. Il prossimo incremento M2 generalizzera'
-la stessa architettura a piu' layer, multi-head e SwiGLU; non sara' un secondo
+solo un layer e una head, senza MLP. Dopo la parita' Metal, lo stesso modello
+verra' generalizzato a piu' layer, multi-head e SwiGLU; non sara' un secondo
 modello indipendente.
 
 ## Fase 6 — Training affidabile
@@ -117,7 +117,7 @@ modello indipendente.
 ## Fase 8 — Backend accelerati e scalabilita'
 
 **Stato: accelerazione Metal di base validata; il prossimo gate e' la parita'
-di training di M1.**
+di training del Modello Minimal.**
 
 - completare Metal sulle primitive richieste dal modello reale;
 - test di conformita' tra dispositivi;
@@ -144,10 +144,11 @@ training F32/U32. Metal ha una base validata su Apple M4: memoria, batch, GEMM
 (anche trasposto via MPS), embedding, cross-entropy, `accumulate` e SiLU sono
 disponibili; RMSNorm, RoPE, attention GQA e AdamW restano da implementare.
 
-La decisione corrente e' fermare i run CPU lunghi dopo avere validato M1 e
+La decisione corrente e' fermare i run CPU lunghi dopo avere validato il
+Modello Minimal e
 portare a Metal l'intero training step: RMSNorm, RoPE, attention causale,
 backward e AdamW. CPU e' il riferimento numerico per confrontare logits, loss,
 gradienti e parametri aggiornati. Solo dopo questa parita' verranno avviati
-run estesi e M2 multi-layer. CUDA resta fuori dallo scope finche' non esistono
+run estesi e la configurazione multi-layer. CUDA resta fuori dallo scope finche' non esistono
 hardware e CI per testarne correttezza e prestazioni. Mixed precision, KV cache,
 fusion e backend ulteriori richiederanno contratti separati quando necessari.

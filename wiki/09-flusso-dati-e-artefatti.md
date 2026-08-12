@@ -391,13 +391,15 @@ piu' ampie.
 
 - embedding, forward, backward, registry dei parametri e AdamW nel trainer;
 - checkpoint atomici, ripresa, valutazione su validation e generazione greedy;
-- M0 (baseline) e M1 (un blocco Transformer causale CPU).
+- il Modello Minimal: un blocco Transformer causale CPU e un baseline diagnostico.
 
 La prossima milestone non consiste nel raccogliere altri dati o far crescere
-subito il numero di parametri. Consiste nella parita' del training M1 su Metal:
+subito il numero di parametri. Consiste nella parita' del training del Modello
+Minimal su Metal:
 RMSNorm, RoPE, attention causale, backward e AdamW devono produrre risultati
-coerenti con CPU. M1 e' il riferimento piccolo; la configurazione scalabile
-multi-layer/multi-head/SwiGLU seguira' in M2. Il piano e i gate sono descritti
+coerenti con CPU. Il Modello Minimal e' il riferimento piccolo; la
+configurazione scalabile multi-layer/multi-head/SwiGLU seguira' dopo la parita'
+Metal. Il piano e i gate sono descritti
 in [primo modello addestrabile](13-primo-modello-addestrabile.md).
 
 ## 14. Domande di controllo
