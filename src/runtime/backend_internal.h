@@ -14,8 +14,6 @@ typedef struct llm_backend_ops {
     void (*deallocate)(void *context, void *memory);
     llm_status (*zero)(void *context, void *memory, size_t byte_count);
     llm_status (*copy)(void *context, const void *source, void *destination, size_t byte_count);
-    llm_status (*cast)(void *context, const void *input, llm_dtype input_dtype, void *output,
-                       llm_dtype output_dtype, size_t value_count);
     llm_status (*fill_f32)(void *context, float *values, size_t value_count, float value);
     llm_status (*add_f32)(void *context, const float *left, const float *right, float *output,
                           size_t value_count);
@@ -34,9 +32,6 @@ typedef struct llm_backend_ops {
     llm_status (*matmul_ex_f32)(void *context, const float *left, const float *right, float *output,
                                 size_t left_rows, size_t left_columns, size_t right_rows,
                                 size_t right_columns, int transpose_left, int transpose_right);
-    llm_status (*matmul_mixed_f32)(void *context, const void *left, const void *right,
-                                   llm_dtype input_dtype, float *output, size_t rows,
-                                   size_t inner_size, size_t columns);
     llm_status (*gather_rows_f32)(void *context, const float *table, size_t row_count,
                                   size_t row_width, const uint32_t *indices, size_t index_count,
                                   float *output);
@@ -56,23 +51,19 @@ typedef struct llm_backend_ops {
                                         size_t outer_count, size_t row_width);
     llm_status (*rope_f32)(void *context, const float *input, const float *cos_table,
                            const float *sin_table, size_t batch_count, size_t sequence_length,
-                           size_t head_count, size_t head_dimension, size_t table_position_count,
-                           size_t position_offset, float *output);
+                           size_t head_count, size_t head_dimension, float *output);
     llm_status (*rope_backward_f32)(void *context, const float *output_gradient,
                                     const float *cos_table, const float *sin_table,
                                     size_t batch_count, size_t sequence_length, size_t head_count,
-                                    size_t head_dimension, size_t table_position_count,
-                                    size_t position_offset, float *input_gradient);
+                                    size_t head_dimension, float *input_gradient);
     llm_status (*attention_forward_f32)(void *context, const float *query, const float *key,
-                                        const float *value, float scale,
-                                        size_t query_position_offset, size_t batch_count,
-                                        size_t query_length, size_t key_length,
-                                        size_t query_head_count, size_t key_value_head_count,
-                                        size_t head_dimension, float *output);
+                                        const float *value, float scale, size_t batch_count,
+                                        size_t sequence_length, size_t query_head_count,
+                                        size_t key_value_head_count, size_t head_dimension,
+                                        float *output);
     llm_status (*attention_backward_f32)(void *context, const float *query, const float *key,
                                          const float *value, const float *output_gradient,
-                                         float scale, size_t query_position_offset,
-                                         size_t batch_count, size_t query_length, size_t key_length,
+                                         float scale, size_t batch_count, size_t sequence_length,
                                          size_t query_head_count, size_t key_value_head_count,
                                          size_t head_dimension, float *query_gradient,
                                          float *key_gradient, float *value_gradient);

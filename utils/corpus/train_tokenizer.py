@@ -98,9 +98,7 @@ def child_peak_memory_kib() -> Optional[int]:
 
 def parse_args() -> argparse.Namespace:
     project_root = Path(__file__).resolve().parents[2]
-    default_trainer = project_root / "build" / "debug" / (
-        "llm-lab.exe" if sys.platform == "win32" else "llm-lab"
-    )
+    default_trainer = project_root / "build" / "debug" / "llm-lab"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--corpus-manifest",

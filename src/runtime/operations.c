@@ -28,35 +28,6 @@ static int tensors_have_distinct_storage(const llm_tensor *const *tensors, size_
     return 1;
 }
 
-llm_status llm_cast(llm_backend *backend, const llm_tensor *input, llm_tensor *output) {
-    size_t input_bytes = 0U;
-    size_t output_bytes = 0U;
-    llm_status status = llm_tensor_validate(backend, input, &input_bytes);
-    if (status == LLM_OK) {
-        status = llm_tensor_validate(backend, output, &output_bytes);
-    }
-    if (status != LLM_OK) {
-        return status;
-    }
-    (void)input_bytes;
-    (void)output_bytes;
-    const int valid_pair = (input->dtype == LLM_DTYPE_F32 &&
-                            (output->dtype == LLM_DTYPE_F16 || output->dtype == LLM_DTYPE_BF16)) ||
-                           (output->dtype == LLM_DTYPE_F32 &&
-                            (input->dtype == LLM_DTYPE_F16 || input->dtype == LLM_DTYPE_BF16));
-    if (valid_pair == 0) {
-        return LLM_UNSUPPORTED_DTYPE;
-    }
-    if (tensors_have_same_shape(input, output) == 0) {
-        return LLM_INVALID_SHAPE;
-    }
-    if (input->storage == output->storage) {
-        return LLM_INVALID_ARGUMENT;
-    }
-    return backend->ops->cast(backend->context, input->storage->memory, input->dtype,
-                              output->storage->memory, output->dtype, input->element_count);
-}
-
 static llm_status validate_f32_tensor(const llm_backend *backend, const llm_tensor *tensor) {
     size_t payload_bytes = 0U;
     const llm_status status = llm_tensor_validate(backend, tensor, &payload_bytes);
@@ -239,37 +210,6 @@ llm_status llm_matmul(llm_backend *backend, const llm_tensor *left, const llm_te
                                     (const float *)right->storage->memory,
                                     (float *)output->storage->memory, left->shape[0],
                                     left->shape[1], right->shape[1]);
-}
-
-llm_status llm_matmul_mixed_f32(llm_backend *backend, const llm_tensor *left,
-                                const llm_tensor *right, llm_tensor *output) {
-    size_t payload_bytes = 0U;
-    llm_status status = llm_tensor_validate(backend, left, &payload_bytes);
-    if (status == LLM_OK) {
-        status = llm_tensor_validate(backend, right, &payload_bytes);
-    }
-    if (status == LLM_OK) {
-        status = validate_f32_tensor(backend, output);
-    }
-    if (status != LLM_OK) {
-        return status;
-    }
-    (void)payload_bytes;
-    if ((left->dtype != LLM_DTYPE_F16 && left->dtype != LLM_DTYPE_BF16) ||
-        right->dtype != left->dtype) {
-        return LLM_UNSUPPORTED_DTYPE;
-    }
-    if (left->rank != 2U || right->rank != 2U || output->rank != 2U ||
-        left->shape[1] != right->shape[0] || output->shape[0] != left->shape[0] ||
-        output->shape[1] != right->shape[1]) {
-        return LLM_INVALID_SHAPE;
-    }
-    if (output->storage == left->storage || output->storage == right->storage) {
-        return LLM_INVALID_ARGUMENT;
-    }
-    return backend->ops->matmul_mixed_f32(
-        backend->context, left->storage->memory, right->storage->memory, left->dtype,
-        (float *)output->storage->memory, left->shape[0], left->shape[1], right->shape[1]);
 }
 
 static llm_status validate_gather_shapes(const llm_tensor *table, const llm_tensor *indices,
@@ -615,7 +555,7 @@ llm_status llm_rms_norm_backward(llm_backend *backend, const llm_tensor *input,
 
 static llm_status validate_rope_tensors(llm_backend *backend, const llm_tensor *input,
                                         const llm_tensor *cos_table, const llm_tensor *sin_table,
-                                        size_t position_offset, llm_tensor *output) {
+                                        llm_tensor *output) {
     llm_status status = validate_f32_tensor(backend, input);
     if (status == LLM_OK) {
         status = validate_f32_tensor(backend, cos_table);
@@ -632,8 +572,7 @@ static llm_status validate_rope_tensors(llm_backend *backend, const llm_tensor *
     if (input->rank != 4U || cos_table->rank != 2U ||
         tensors_have_same_shape(cos_table, sin_table) == 0 ||
         tensors_have_same_shape(input, output) == 0 || input->shape[3] % 2U != 0U ||
-        cos_table->shape[1] != input->shape[3] / 2U || position_offset > cos_table->shape[0] ||
-        input->shape[1] > cos_table->shape[0] - position_offset) {
+        cos_table->shape[0] != input->shape[1] || cos_table->shape[1] != input->shape[3] / 2U) {
         return LLM_INVALID_SHAPE;
     }
     const llm_tensor *tensors[] = {input, cos_table, sin_table, output};
@@ -642,9 +581,8 @@ static llm_status validate_rope_tensors(llm_backend *backend, const llm_tensor *
 
 static llm_status dispatch_rope(llm_backend *backend, const llm_tensor *input,
                                 const llm_tensor *cos_table, const llm_tensor *sin_table,
-                                size_t position_offset, llm_tensor *output, int backward) {
-    const llm_status status =
-        validate_rope_tensors(backend, input, cos_table, sin_table, position_offset, output);
+                                llm_tensor *output, int backward) {
+    const llm_status status = validate_rope_tensors(backend, input, cos_table, sin_table, output);
     if (status != LLM_OK) {
         return status;
     }
@@ -652,32 +590,31 @@ static llm_status dispatch_rope(llm_backend *backend, const llm_tensor *input,
         if (backend->ops->rope_f32 == NULL) {
             return LLM_UNSUPPORTED_OPERATION;
         }
-        return backend->ops->rope_f32(
-            backend->context, (const float *)input->storage->memory,
-            (const float *)cos_table->storage->memory, (const float *)sin_table->storage->memory,
-            input->shape[0], input->shape[1], input->shape[2], input->shape[3], cos_table->shape[0],
-            position_offset, (float *)output->storage->memory);
+        return backend->ops->rope_f32(backend->context, (const float *)input->storage->memory,
+                                      (const float *)cos_table->storage->memory,
+                                      (const float *)sin_table->storage->memory, input->shape[0],
+                                      input->shape[1], input->shape[2], input->shape[3],
+                                      (float *)output->storage->memory);
     }
     if (backend->ops->rope_backward_f32 == NULL) {
         return LLM_UNSUPPORTED_OPERATION;
     }
-    return backend->ops->rope_backward_f32(
-        backend->context, (const float *)input->storage->memory,
-        (const float *)cos_table->storage->memory, (const float *)sin_table->storage->memory,
-        input->shape[0], input->shape[1], input->shape[2], input->shape[3], cos_table->shape[0],
-        position_offset, (float *)output->storage->memory);
+    return backend->ops->rope_backward_f32(backend->context, (const float *)input->storage->memory,
+                                           (const float *)cos_table->storage->memory,
+                                           (const float *)sin_table->storage->memory,
+                                           input->shape[0], input->shape[1], input->shape[2],
+                                           input->shape[3], (float *)output->storage->memory);
 }
 
 llm_status llm_rope(llm_backend *backend, const llm_tensor *input, const llm_tensor *cos_table,
-                    const llm_tensor *sin_table, size_t position_offset, llm_tensor *output) {
-    return dispatch_rope(backend, input, cos_table, sin_table, position_offset, output, 0);
+                    const llm_tensor *sin_table, llm_tensor *output) {
+    return dispatch_rope(backend, input, cos_table, sin_table, output, 0);
 }
 
 llm_status llm_rope_backward(llm_backend *backend, const llm_tensor *output_gradient,
                              const llm_tensor *cos_table, const llm_tensor *sin_table,
-                             size_t position_offset, llm_tensor *input_gradient) {
-    return dispatch_rope(backend, output_gradient, cos_table, sin_table, position_offset,
-                         input_gradient, 1);
+                             llm_tensor *input_gradient) {
+    return dispatch_rope(backend, output_gradient, cos_table, sin_table, input_gradient, 1);
 }
 
 static llm_status validate_attention_tensors(llm_backend *backend, const llm_tensor *query,
@@ -700,13 +637,10 @@ static llm_status validate_attention_tensors(llm_backend *backend, const llm_ten
     if (status != LLM_OK) {
         return status;
     }
-    if (options->query_position_offset > SIZE_MAX - query->shape[1]) {
-        return LLM_INVALID_ARGUMENT;
-    }
     if (query->rank != 4U || key->rank != 4U || value->rank != 4U ||
         tensors_have_same_shape(key, value) == 0 || tensors_have_same_shape(query, output) == 0 ||
-        query->shape[0] != key->shape[0] || query->shape[3] != key->shape[3] ||
-        query->shape[2] % key->shape[2] != 0U) {
+        query->shape[0] != key->shape[0] || query->shape[1] != key->shape[1] ||
+        query->shape[3] != key->shape[3] || query->shape[2] % key->shape[2] != 0U) {
         return LLM_INVALID_SHAPE;
     }
     return LLM_OK;
@@ -730,8 +664,8 @@ llm_status llm_attention_forward(llm_backend *backend, const llm_tensor *query,
     return backend->ops->attention_forward_f32(
         backend->context, (const float *)query->storage->memory,
         (const float *)key->storage->memory, (const float *)value->storage->memory, options->scale,
-        options->query_position_offset, query->shape[0], query->shape[1], key->shape[1],
-        query->shape[2], key->shape[2], query->shape[3], (float *)output->storage->memory);
+        query->shape[0], query->shape[1], query->shape[2], key->shape[2], query->shape[3],
+        (float *)output->storage->memory);
 }
 
 llm_status llm_attention_backward(llm_backend *backend, const llm_tensor *query,
@@ -769,10 +703,10 @@ llm_status llm_attention_backward(llm_backend *backend, const llm_tensor *query,
     return backend->ops->attention_backward_f32(
         backend->context, (const float *)query->storage->memory,
         (const float *)key->storage->memory, (const float *)value->storage->memory,
-        (const float *)output_gradient->storage->memory, options->scale,
-        options->query_position_offset, query->shape[0], query->shape[1], key->shape[1],
-        query->shape[2], key->shape[2], query->shape[3], (float *)query_gradient->storage->memory,
-        (float *)key_gradient->storage->memory, (float *)value_gradient->storage->memory);
+        (const float *)output_gradient->storage->memory, options->scale, query->shape[0],
+        query->shape[1], query->shape[2], key->shape[2], query->shape[3],
+        (float *)query_gradient->storage->memory, (float *)key_gradient->storage->memory,
+        (float *)value_gradient->storage->memory);
 }
 
 llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, const llm_tensor *gradient,

@@ -5,12 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
 #include <unistd.h>
-#endif
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -42,17 +37,14 @@ typedef struct report_summary {
     int has_fastest_matmul;
     double fastest_matmul_seconds;
     runtime_benchmark_backend fastest_matmul_backend;
-    llm_dtype fastest_matmul_dtype;
     double cpu_f32_matmul_seconds;
     double metal_f32_matmul_seconds;
-    double matmul_seconds[2][3];
-    double matmul_throughput[2][3];
+    double matmul_seconds[2];
+    double matmul_throughput[2];
 } report_summary;
 
 static const char *operating_system_name(void) {
-#ifdef _WIN32
-    return "Windows";
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     return "macOS";
 #elif defined(__linux__)
     return "Linux";
@@ -62,11 +54,11 @@ static const char *operating_system_name(void) {
 }
 
 static const char *architecture_name(void) {
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__)
     return "arm64";
-#elif defined(__x86_64__) || defined(_M_X64)
+#elif defined(__x86_64__)
     return "x86_64";
-#elif defined(__i386__) || defined(_M_IX86)
+#elif defined(__i386__)
     return "x86";
 #else
     return "unknown";
@@ -76,8 +68,6 @@ static const char *architecture_name(void) {
 static const char *compiler_name(void) {
 #if defined(__clang__)
     return "clang " __clang_version__;
-#elif defined(_MSC_VER)
-    return "MSVC";
 #elif defined(__GNUC__)
     return "GCC " __VERSION__;
 #else
@@ -101,28 +91,14 @@ static void copy_text(char *destination, size_t capacity, const char *source) {
 }
 
 static void detect_hostname(machine_information *information) {
-#ifdef _WIN32
-    DWORD capacity = (DWORD)sizeof(information->hostname);
-    if (GetComputerNameA(information->hostname, &capacity) == 0) {
-        copy_text(information->hostname, sizeof(information->hostname), "unknown");
-    }
-#else
     if (gethostname(information->hostname, sizeof(information->hostname)) != 0) {
         copy_text(information->hostname, sizeof(information->hostname), "unknown");
     }
     information->hostname[sizeof(information->hostname) - 1U] = '\0';
-#endif
 }
 
 static void detect_cpu_and_memory(machine_information *information) {
-#ifdef _WIN32
-    const char *identifier = getenv("PROCESSOR_IDENTIFIER");
-    copy_text(information->cpu_name, sizeof(information->cpu_name), identifier);
-    MEMORYSTATUSEX memory = {.dwLength = sizeof(memory)};
-    if (GlobalMemoryStatusEx(&memory) != 0) {
-        information->memory_bytes = memory.ullTotalPhys;
-    }
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     size_t name_size = sizeof(information->cpu_name);
     if (sysctlbyname("machdep.cpu.brand_string", information->cpu_name, &name_size, NULL, 0U) !=
         0) {
@@ -220,8 +196,6 @@ static cpu_benchmark_config profile_config(report_profile profile) {
         .warmup_iterations = 2U,
         .measured_iterations = 7U,
         .minimum_sample_seconds = 0.005,
-        .deterministic = 1,
-        .matmul_dtype = LLM_DTYPE_F32,
     };
     if (profile == REPORT_PROFILE_QUICK) {
         config.elements = 65536U;
@@ -311,10 +285,6 @@ static void print_backend_header(const machine_information *machine,
     (void)fflush(stdout);
 }
 
-static size_t dtype_summary_index(llm_dtype dtype) {
-    return dtype == LLM_DTYPE_F32 ? 0U : dtype == LLM_DTYPE_F16 ? 1U : 2U;
-}
-
 static void format_shape(cpu_benchmark_operation operation, const cpu_benchmark_config *config,
                          char *output, size_t capacity) {
     if (operation <= CPU_BENCHMARK_ACCUMULATE || operation == CPU_BENCHMARK_SILU ||
@@ -341,15 +311,13 @@ static void update_summary(const cpu_benchmark_result *result, report_summary *s
     if (result->operation != CPU_BENCHMARK_MATMUL) {
         return;
     }
-    const size_t dtype_index = dtype_summary_index(result->dtype);
-    summary->matmul_seconds[result->backend][dtype_index] = result->median_seconds;
-    summary->matmul_throughput[result->backend][dtype_index] = result->throughput;
+    summary->matmul_seconds[result->backend] = result->median_seconds;
+    summary->matmul_throughput[result->backend] = result->throughput;
     if (summary->has_fastest_matmul == 0 ||
         result->median_seconds < summary->fastest_matmul_seconds) {
         summary->has_fastest_matmul = 1;
         summary->fastest_matmul_seconds = result->median_seconds;
         summary->fastest_matmul_backend = result->backend;
-        summary->fastest_matmul_dtype = result->dtype;
     }
     if (result->dtype == LLM_DTYPE_F32 && result->backend == RUNTIME_BENCHMARK_CPU) {
         summary->cpu_f32_matmul_seconds = result->median_seconds;
@@ -359,8 +327,7 @@ static void update_summary(const cpu_benchmark_result *result, report_summary *s
 }
 
 static int run_one(runtime_benchmark_backend backend, cpu_benchmark_operation operation,
-                   llm_dtype dtype, cpu_benchmark_config *config, report_summary *summary) {
-    config->matmul_dtype = dtype;
+                   cpu_benchmark_config *config, report_summary *summary) {
     cpu_benchmark_result result = {0};
     char shape[64];
     format_shape(operation, config, shape, sizeof(shape));
@@ -368,7 +335,7 @@ static int run_one(runtime_benchmark_backend backend, cpu_benchmark_operation op
         ++summary->failed_results;
         ++summary->failed_by_backend[backend];
         printf("%-25s %-5s %-17s %11s %11s %11s %20s\n", cpu_benchmark_operation_name(operation),
-               runtime_benchmark_dtype_name(dtype), shape, "ERRORE", "-", "-", "-");
+               "f32", shape, "ERRORE", "-", "-", "-");
         (void)fflush(stdout);
         return 0;
     }
@@ -398,14 +365,9 @@ static void print_backend_summary(runtime_benchmark_backend backend,
     printf("Risultato %s: %zu kernel riusciti, %zu falliti.\n",
            backend == RUNTIME_BENCHMARK_CPU ? "CPU" : "GPU Metal",
            summary->successful_by_backend[backend], summary->failed_by_backend[backend]);
-    const llm_dtype dtypes[] = {LLM_DTYPE_F32, LLM_DTYPE_F16, LLM_DTYPE_BF16};
-    for (size_t index = 0U; index < 3U; ++index) {
-        if (summary->matmul_seconds[backend][index] > 0.0) {
-            printf("  Matmul %-4s: %8.3f GFLOP/s (%8.3f ms)\n",
-                   runtime_benchmark_dtype_name(dtypes[index]),
-                   summary->matmul_throughput[backend][index],
-                   summary->matmul_seconds[backend][index] * 1000.0);
-        }
+    if (summary->matmul_seconds[backend] > 0.0) {
+        printf("  Matmul f32 : %8.3f GFLOP/s (%8.3f ms)\n", summary->matmul_throughput[backend],
+               summary->matmul_seconds[backend] * 1000.0);
     }
 }
 
@@ -417,10 +379,8 @@ static void run_backend(const machine_information *machine, runtime_benchmark_ba
             0) {
             continue;
         }
-        (void)run_one(backend, (cpu_benchmark_operation)operation, LLM_DTYPE_F32, config, summary);
+        (void)run_one(backend, (cpu_benchmark_operation)operation, config, summary);
     }
-    (void)run_one(backend, CPU_BENCHMARK_MATMUL, LLM_DTYPE_F16, config, summary);
-    (void)run_one(backend, CPU_BENCHMARK_MATMUL, LLM_DTYPE_BF16, config, summary);
     print_backend_summary(backend, summary);
 }
 
@@ -429,9 +389,8 @@ static void print_summary(const machine_information *machine, const report_summa
     printf("Totale: %zu kernel riusciti, %zu falliti.\n", summary->successful_results,
            summary->failed_results);
     if (summary->has_fastest_matmul != 0) {
-        printf("Matmul piu' veloce nel profilo: %s/%s in %.3f ms end-to-end.\n",
+        printf("Matmul F32 piu' veloce nel profilo: %s in %.3f ms end-to-end.\n",
                runtime_benchmark_backend_name(summary->fastest_matmul_backend),
-               runtime_benchmark_dtype_name(summary->fastest_matmul_dtype),
                summary->fastest_matmul_seconds * 1000.0);
     }
     if (summary->cpu_f32_matmul_seconds > 0.0 && summary->metal_f32_matmul_seconds > 0.0) {

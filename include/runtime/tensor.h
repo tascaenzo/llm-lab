@@ -55,7 +55,4 @@ llm_status llm_tensor_write(llm_backend *backend, llm_tensor *destination, const
 llm_status llm_tensor_read(llm_backend *backend, const llm_tensor *source, void *destination,
                            size_t byte_count);
 
-/** Converts between FP32 and FP16/BF16 tensors with identical shapes. */
-llm_status llm_cast(llm_backend *backend, const llm_tensor *input, llm_tensor *output);
-
 #endif

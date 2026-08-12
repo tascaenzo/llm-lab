@@ -9,10 +9,9 @@ typedef struct llm_matmul_options {
     int transpose_right;
 } llm_matmul_options;
 
-/** Controls scaling and absolute query positions for causal grouped-query attention. */
+/** Controls scaling for full-sequence causal grouped-query attention. */
 typedef struct llm_attention_options {
     float scale;
-    size_t query_position_offset;
 } llm_attention_options;
 
 /** Hyperparameters and step state for one FP32 AdamW parameter update. */
@@ -56,10 +55,6 @@ llm_status llm_matmul(llm_backend *backend, const llm_tensor *left, const llm_te
 llm_status llm_matmul_ex(llm_backend *backend, const llm_tensor *left, const llm_tensor *right,
                          const llm_matmul_options *options, llm_tensor *output);
 
-/** Multiplies FP16 or BF16 matrices while accumulating into an FP32 output. */
-llm_status llm_matmul_mixed_f32(llm_backend *backend, const llm_tensor *left,
-                                const llm_tensor *right, llm_tensor *output);
-
 /** Selects rows from an FP32 [V,C] table using a U32 tensor of row indices. */
 llm_status llm_gather_rows(llm_backend *backend, const llm_tensor *table, const llm_tensor *indices,
                            llm_tensor *output);
@@ -88,14 +83,14 @@ llm_status llm_rms_norm_backward(llm_backend *backend, const llm_tensor *input,
                                  float epsilon, llm_tensor *input_gradient,
                                  llm_tensor *weight_gradient);
 
-/** Applies RoPE to adjacent pairs in an FP32 [B,S,H,D] tensor using [P,D/2] tables. */
+/** Applies RoPE to adjacent pairs in an FP32 [B,S,H,D] tensor using [S,D/2] tables. */
 llm_status llm_rope(llm_backend *backend, const llm_tensor *input, const llm_tensor *cos_table,
-                    const llm_tensor *sin_table, size_t position_offset, llm_tensor *output);
+                    const llm_tensor *sin_table, llm_tensor *output);
 
 /** Applies the inverse RoPE rotation to an output gradient. */
 llm_status llm_rope_backward(llm_backend *backend, const llm_tensor *output_gradient,
                              const llm_tensor *cos_table, const llm_tensor *sin_table,
-                             size_t position_offset, llm_tensor *input_gradient);
+                             llm_tensor *input_gradient);
 
 /** Computes FP32 causal grouped-query attention for [B,S,H,D] tensors. */
 llm_status llm_attention_forward(llm_backend *backend, const llm_tensor *query,

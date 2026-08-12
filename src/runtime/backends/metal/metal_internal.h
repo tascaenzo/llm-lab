@@ -14,20 +14,12 @@ typedef enum llm_metal_pipeline {
     LLM_METAL_PIPELINE_ADD,
     LLM_METAL_PIPELINE_MULTIPLY,
     LLM_METAL_PIPELINE_SCALE,
-    LLM_METAL_PIPELINE_CAST_F32_F16,
-    LLM_METAL_PIPELINE_CAST_F16_F32,
-    LLM_METAL_PIPELINE_CAST_F32_BF16,
-    LLM_METAL_PIPELINE_CAST_BF16_F32,
     LLM_METAL_PIPELINE_REDUCE_SUM,
     LLM_METAL_PIPELINE_REDUCE_MAX,
     LLM_METAL_PIPELINE_REDUCE_MEAN_SQUARE,
     LLM_METAL_PIPELINE_MATMUL,
     LLM_METAL_PIPELINE_MATMUL_LARGE,
     LLM_METAL_PIPELINE_MATMUL_SIMDGROUP,
-    LLM_METAL_PIPELINE_MATMUL_F16,
-    LLM_METAL_PIPELINE_MATMUL_F16_LARGE,
-    LLM_METAL_PIPELINE_MATMUL_BF16,
-    LLM_METAL_PIPELINE_MATMUL_BF16_LARGE,
     LLM_METAL_PIPELINE_GATHER,
     LLM_METAL_PIPELINE_SCATTER_ADD,
     LLM_METAL_PIPELINE_SOFTMAX,
@@ -84,8 +76,6 @@ llm_status llm_metal_zero(void *context, void *memory, size_t byte_count);
 llm_status llm_metal_copy(void *context, const void *source, void *destination, size_t byte_count);
 
 llm_status llm_metal_fill_f32(void *context, float *values, size_t value_count, float value);
-llm_status llm_metal_cast(void *context, const void *input, llm_dtype input_dtype, void *output,
-                          llm_dtype output_dtype, size_t value_count);
 llm_status llm_metal_add_f32(void *context, const float *left, const float *right, float *output,
                              size_t value_count);
 llm_status llm_metal_multiply_f32(void *context, const float *left, const float *right,
@@ -100,9 +90,6 @@ llm_status llm_metal_reduce_mean_square_last_f32(void *context, const float *inp
                                                  size_t outer_count, size_t reduction_size);
 llm_status llm_metal_matmul_f32(void *context, const float *left, const float *right, float *output,
                                 size_t rows, size_t inner_size, size_t columns);
-llm_status llm_metal_matmul_mixed_f32(void *context, const void *left, const void *right,
-                                      llm_dtype input_dtype, float *output, size_t rows,
-                                      size_t inner_size, size_t columns);
 llm_status llm_metal_gather_rows_f32(void *context, const float *table, size_t row_count,
                                      size_t row_width, const uint32_t *indices, size_t index_count,
                                      float *output);

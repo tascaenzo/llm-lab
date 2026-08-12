@@ -1,9 +1,9 @@
 #include "cpu_simd.h"
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__)
 #include <arm_neon.h>
 #define LLM_CPU_SIMD_NEON 1
-#elif defined(__SSE2__) || defined(_M_X64)
+#elif defined(__SSE2__)
 #include <immintrin.h>
 #define LLM_CPU_SIMD_SSE2 1
 #endif

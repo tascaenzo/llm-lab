@@ -9,8 +9,6 @@
 typedef struct llm_cpu_backend_config {
     /** Total participating threads, including the caller. Zero selects automatically. */
     size_t thread_count;
-    /** Requests stable scheduling and reduction order when non-zero. */
-    int deterministic;
 } llm_cpu_backend_config;
 
 /** Observable counters for profiling a Metal backend without exposing native objects. */

@@ -28,8 +28,6 @@ typedef struct cpu_rope_job {
     size_t sequence_length;
     size_t head_count;
     size_t head_dimension;
-    size_t table_position_count;
-    size_t position_offset;
     int backward;
 } cpu_rope_job;
 
@@ -111,12 +109,8 @@ static llm_status rope_range(void *context, size_t begin, size_t end) {
         const size_t pair_within_position = pair_index % pairs_per_position;
         const size_t pair = pair_within_position % pairs_per_head;
         const size_t sequence = position_index % job->sequence_length;
-        const size_t table_position = job->position_offset + sequence;
-        if (table_position >= job->table_position_count) {
-            return LLM_INVALID_SHAPE;
-        }
         const size_t value_index = pair_index * 2U;
-        const size_t table_index = table_position * pairs_per_head + pair;
+        const size_t table_index = sequence * pairs_per_head + pair;
         const float first = job->input[value_index];
         const float second = job->input[value_index + 1U];
         const float cosine = job->cos_table[table_index];
@@ -249,15 +243,12 @@ llm_status llm_cpu_execute_rms_norm_backward_f32(void *context, const float *inp
 
 static llm_status execute_rope(void *context, const float *input, const float *cos_table,
                                const float *sin_table, size_t batch_count, size_t sequence_length,
-                               size_t head_count, size_t head_dimension,
-                               size_t table_position_count, size_t position_offset, float *output,
+                               size_t head_count, size_t head_dimension, float *output,
                                int backward) {
     llm_cpu_context *cpu = context;
     if (cpu == NULL || input == NULL || cos_table == NULL || sin_table == NULL || output == NULL ||
         batch_count == 0U || sequence_length == 0U || head_count == 0U || head_dimension == 0U ||
-        head_dimension % 2U != 0U || table_position_count == 0U ||
-        position_offset > table_position_count ||
-        sequence_length > table_position_count - position_offset) {
+        head_dimension % 2U != 0U) {
         return LLM_INVALID_ARGUMENT;
     }
     cpu_rope_job job = {
@@ -268,8 +259,6 @@ static llm_status execute_rope(void *context, const float *input, const float *c
         .sequence_length = sequence_length,
         .head_count = head_count,
         .head_dimension = head_dimension,
-        .table_position_count = table_position_count,
-        .position_offset = position_offset,
         .backward = backward,
     };
     const size_t pair_count = batch_count * sequence_length * head_count * head_dimension / 2U;
@@ -280,54 +269,49 @@ static llm_status execute_rope(void *context, const float *input, const float *c
 llm_status llm_cpu_execute_rope_f32(void *context, const float *input, const float *cos_table,
                                     const float *sin_table, size_t batch_count,
                                     size_t sequence_length, size_t head_count,
-                                    size_t head_dimension, size_t table_position_count,
-                                    size_t position_offset, float *output) {
+                                    size_t head_dimension, float *output) {
     return execute_rope(context, input, cos_table, sin_table, batch_count, sequence_length,
-                        head_count, head_dimension, table_position_count, position_offset, output,
-                        0);
+                        head_count, head_dimension, output, 0);
 }
 
 llm_status llm_cpu_execute_rope_backward_f32(void *context, const float *output_gradient,
                                              const float *cos_table, const float *sin_table,
                                              size_t batch_count, size_t sequence_length,
                                              size_t head_count, size_t head_dimension,
-                                             size_t table_position_count, size_t position_offset,
                                              float *input_gradient) {
     return execute_rope(context, output_gradient, cos_table, sin_table, batch_count,
-                        sequence_length, head_count, head_dimension, table_position_count,
-                        position_offset, input_gradient, 1);
+                        sequence_length, head_count, head_dimension, input_gradient, 1);
 }
 
-llm_status llm_cpu_execute_attention_forward_f32(
-    void *context, const float *query, const float *key, const float *value, float scale,
-    size_t query_position_offset, size_t batch_count, size_t query_length, size_t key_length,
-    size_t query_head_count, size_t key_value_head_count, size_t head_dimension, float *output) {
+llm_status llm_cpu_execute_attention_forward_f32(void *context, const float *query,
+                                                 const float *key, const float *value, float scale,
+                                                 size_t batch_count, size_t sequence_length,
+                                                 size_t query_head_count,
+                                                 size_t key_value_head_count, size_t head_dimension,
+                                                 float *output) {
     if (context == NULL || query == NULL || key == NULL || value == NULL || output == NULL ||
-        !isfinite(scale) || scale <= 0.0F || batch_count == 0U || query_length == 0U ||
-        key_length == 0U || query_head_count == 0U || key_value_head_count == 0U ||
-        head_dimension == 0U || query_head_count % key_value_head_count != 0U) {
+        !isfinite(scale) || scale <= 0.0F || batch_count == 0U || sequence_length == 0U ||
+        query_head_count == 0U || key_value_head_count == 0U || head_dimension == 0U ||
+        query_head_count % key_value_head_count != 0U) {
         return LLM_INVALID_ARGUMENT;
     }
     const size_t heads_per_group = query_head_count / key_value_head_count;
     for (size_t batch = 0U; batch < batch_count; ++batch) {
-        for (size_t query_position = 0U; query_position < query_length; ++query_position) {
-            size_t visible_keys = query_position_offset + query_position + 1U;
-            if (visible_keys > key_length) {
-                visible_keys = key_length;
-            }
+        for (size_t query_position = 0U; query_position < sequence_length; ++query_position) {
+            const size_t visible_keys = query_position + 1U;
             for (size_t query_head = 0U; query_head < query_head_count; ++query_head) {
                 const size_t key_value_head = query_head / heads_per_group;
                 const float *query_row =
-                    query + attention_offset(batch, query_position, query_head, query_length,
+                    query + attention_offset(batch, query_position, query_head, sequence_length,
                                              query_head_count, head_dimension);
                 float *output_row =
-                    output + attention_offset(batch, query_position, query_head, query_length,
+                    output + attention_offset(batch, query_position, query_head, sequence_length,
                                               query_head_count, head_dimension);
                 float maximum = -INFINITY;
                 llm_status status = LLM_OK;
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const float *key_row =
-                        key + attention_offset(batch, key_position, key_value_head, key_length,
+                        key + attention_offset(batch, key_position, key_value_head, sequence_length,
                                                key_value_head_count, head_dimension);
                     const float score =
                         attention_score(query_row, key_row, head_dimension, scale, &status);
@@ -341,7 +325,7 @@ llm_status llm_cpu_execute_attention_forward_f32(
                 float denominator = 0.0F;
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const float *key_row =
-                        key + attention_offset(batch, key_position, key_value_head, key_length,
+                        key + attention_offset(batch, key_position, key_value_head, sequence_length,
                                                key_value_head_count, head_dimension);
                     denominator +=
                         expf(attention_score(query_row, key_row, head_dimension, scale, &status) -
@@ -355,11 +339,12 @@ llm_status llm_cpu_execute_attention_forward_f32(
                 }
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const float *key_row =
-                        key + attention_offset(batch, key_position, key_value_head, key_length,
+                        key + attention_offset(batch, key_position, key_value_head, sequence_length,
                                                key_value_head_count, head_dimension);
                     const float *value_row =
-                        value + attention_offset(batch, key_position, key_value_head, key_length,
-                                                 key_value_head_count, head_dimension);
+                        value + attention_offset(batch, key_position, key_value_head,
+                                                 sequence_length, key_value_head_count,
+                                                 head_dimension);
                     const float probability =
                         expf(attention_score(query_row, key_row, head_dimension, scale, &status) -
                              maximum) /
@@ -384,34 +369,32 @@ llm_status llm_cpu_execute_attention_forward_f32(
 
 llm_status llm_cpu_execute_attention_backward_f32(
     void *context, const float *query, const float *key, const float *value,
-    const float *output_gradient, float scale, size_t query_position_offset, size_t batch_count,
-    size_t query_length, size_t key_length, size_t query_head_count, size_t key_value_head_count,
-    size_t head_dimension, float *query_gradient, float *key_gradient, float *value_gradient) {
+    const float *output_gradient, float scale, size_t batch_count, size_t sequence_length,
+    size_t query_head_count, size_t key_value_head_count, size_t head_dimension,
+    float *query_gradient, float *key_gradient, float *value_gradient) {
     if (context == NULL || query == NULL || key == NULL || value == NULL ||
         output_gradient == NULL || query_gradient == NULL || key_gradient == NULL ||
         value_gradient == NULL || !isfinite(scale) || scale <= 0.0F || batch_count == 0U ||
-        query_length == 0U || key_length == 0U || query_head_count == 0U ||
-        key_value_head_count == 0U || head_dimension == 0U ||
-        query_head_count % key_value_head_count != 0U) {
+        sequence_length == 0U || query_head_count == 0U || key_value_head_count == 0U ||
+        head_dimension == 0U || query_head_count % key_value_head_count != 0U) {
         return LLM_INVALID_ARGUMENT;
     }
     (void)memset(query_gradient, 0,
-                 batch_count * query_length * query_head_count * head_dimension * sizeof(float));
+                 batch_count * sequence_length * query_head_count * head_dimension * sizeof(float));
     (void)memset(key_gradient, 0,
-                 batch_count * key_length * key_value_head_count * head_dimension * sizeof(float));
+                 batch_count * sequence_length * key_value_head_count * head_dimension *
+                     sizeof(float));
     (void)memset(value_gradient, 0,
-                 batch_count * key_length * key_value_head_count * head_dimension * sizeof(float));
+                 batch_count * sequence_length * key_value_head_count * head_dimension *
+                     sizeof(float));
     const size_t heads_per_group = query_head_count / key_value_head_count;
     for (size_t batch = 0U; batch < batch_count; ++batch) {
-        for (size_t query_position = 0U; query_position < query_length; ++query_position) {
-            size_t visible_keys = query_position_offset + query_position + 1U;
-            if (visible_keys > key_length) {
-                visible_keys = key_length;
-            }
+        for (size_t query_position = 0U; query_position < sequence_length; ++query_position) {
+            const size_t visible_keys = query_position + 1U;
             for (size_t query_head = 0U; query_head < query_head_count; ++query_head) {
                 const size_t key_value_head = query_head / heads_per_group;
                 const size_t query_index =
-                    attention_offset(batch, query_position, query_head, query_length,
+                    attention_offset(batch, query_position, query_head, sequence_length,
                                      query_head_count, head_dimension);
                 const float *query_row = query + query_index;
                 const float *output_gradient_row = output_gradient + query_index;
@@ -420,7 +403,7 @@ llm_status llm_cpu_execute_attention_backward_f32(
                 llm_status status = LLM_OK;
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const float *key_row =
-                        key + attention_offset(batch, key_position, key_value_head, key_length,
+                        key + attention_offset(batch, key_position, key_value_head, sequence_length,
                                                key_value_head_count, head_dimension);
                     const float score =
                         attention_score(query_row, key_row, head_dimension, scale, &status);
@@ -435,7 +418,7 @@ llm_status llm_cpu_execute_attention_backward_f32(
                 float weighted_probability_gradient = 0.0F;
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const size_t key_index =
-                        attention_offset(batch, key_position, key_value_head, key_length,
+                        attention_offset(batch, key_position, key_value_head, sequence_length,
                                          key_value_head_count, head_dimension);
                     const float score =
                         attention_score(query_row, key + key_index, head_dimension, scale, &status);
@@ -446,7 +429,7 @@ llm_status llm_cpu_execute_attention_backward_f32(
                 }
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const size_t key_index =
-                        attention_offset(batch, key_position, key_value_head, key_length,
+                        attention_offset(batch, key_position, key_value_head, sequence_length,
                                          key_value_head_count, head_dimension);
                     const float probability = expf(attention_score(query_row, key + key_index,
                                                                    head_dimension, scale, &status) -
@@ -465,7 +448,7 @@ llm_status llm_cpu_execute_attention_backward_f32(
                 }
                 for (size_t key_position = 0U; key_position < visible_keys; ++key_position) {
                     const size_t key_index =
-                        attention_offset(batch, key_position, key_value_head, key_length,
+                        attention_offset(batch, key_position, key_value_head, sequence_length,
                                          key_value_head_count, head_dimension);
                     const float probability = expf(attention_score(query_row, key + key_index,
                                                                    head_dimension, scale, &status) -
@@ -490,8 +473,10 @@ llm_status llm_cpu_execute_attention_backward_f32(
             }
         }
     }
-    const size_t query_value_count = batch_count * query_length * query_head_count * head_dimension;
-    const size_t key_value_count = batch_count * key_length * key_value_head_count * head_dimension;
+    const size_t query_value_count =
+        batch_count * sequence_length * query_head_count * head_dimension;
+    const size_t key_value_count =
+        batch_count * sequence_length * key_value_head_count * head_dimension;
     for (size_t index = 0U; index < query_value_count; ++index) {
         if (!isfinite(query_gradient[index])) {
             return LLM_NUMERICAL_ERROR;
