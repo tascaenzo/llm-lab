@@ -19,11 +19,14 @@ static const char *const metal_pipeline_names[LLM_METAL_PIPELINE_COUNT] = {
     "llm_matmul_f32",
     "llm_matmul_f32_tiled32",
     "llm_matmul_f32_simdgroup",
+    "llm_accumulate_f32",
     "llm_gather_rows_f32",
     "llm_scatter_add_rows_f32",
     "llm_softmax_last_f32",
     "llm_cross_entropy_forward_f32",
     "llm_cross_entropy_backward_f32",
+    "llm_silu_f32",
+    "llm_silu_backward_f32",
 };
 
 static char *metal_copy_device_name(id<MTLDevice> device) {
@@ -73,6 +76,13 @@ static void metal_destroy(void *opaque_context) {
         free(tuning);
         tuning = next;
     }
+    llm_metal_mps_gemm *gemm = context->mps_gemms;
+    while (gemm != NULL) {
+        llm_metal_mps_gemm *next = gemm->next;
+        [gemm->kernel release];
+        free(gemm);
+        gemm = next;
+    }
     metal_release_pipelines(context);
     [context->queue release];
     [context->device release];
@@ -106,8 +116,12 @@ static const llm_backend_ops *metal_backend_ops(void) {
         .reduce_max_last_f32 = llm_metal_reduce_max_last_f32,
         .reduce_mean_square_last_f32 = llm_metal_reduce_mean_square_last_f32,
         .matmul_f32 = llm_metal_matmul_f32,
+        .matmul_ex_f32 = llm_metal_matmul_ex_f32,
         .gather_rows_f32 = llm_metal_gather_rows_f32,
         .scatter_add_rows_f32 = llm_metal_scatter_add_rows_f32,
+        .accumulate_f32 = llm_metal_accumulate_f32,
+        .silu_f32 = llm_metal_silu_f32,
+        .silu_backward_f32 = llm_metal_silu_backward_f32,
         .softmax_last_f32 = llm_metal_softmax_last_f32,
         .cross_entropy_forward_f32 = llm_metal_cross_entropy_forward_f32,
         .cross_entropy_backward_f32 = llm_metal_cross_entropy_backward_f32,

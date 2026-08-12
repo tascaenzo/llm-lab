@@ -1,7 +1,9 @@
 # Backend Metal
 
-**Stato:** infrastruttura e primitive di base presenti; parita' col contratto
-training v1 ancora da implementare.
+**Stato (2026-08-12):** accelerazione di base validata su Apple M4; parita'
+col contratto training v1 ancora da implementare. Il lavoro Metal e' in pausa
+mentre viene costruito il primo modello CPU, cosi' le prossime ottimizzazioni
+saranno guidate dalle forme e dai colli di bottiglia del modello reale.
 **Piattaforma:** macOS su Apple Silicon. Nessun fallback CPU.
 
 ## Confine
@@ -30,24 +32,35 @@ inoltrata alla CPU.
 
 ## Primitive presenti
 
-Attualmente Metal copre lifecycle/memoria, elementwise di base, riduzioni,
-matmul F32 senza transpose, gather/scatter-add, softmax e cross-entropy. I test
-Metal verificano queste primitive solo quando un device e' realmente
+Attualmente Metal copre lifecycle/memoria, batch asincroni, elementwise di
+base, `accumulate`, riduzioni, gather/scatter-add, softmax, cross-entropy,
+SiLU forward/backward e GEMM F32. `matmul_ex` usa internamente
+`MPSMatrixMultiplication` per le trasposizioni; l'API pubblica resta invariata.
+
+La build Release e i test Metal sono stati eseguiti fuori dal sandbox su Apple
+M4 reale: il test MPS `matmul_ex` seguito da un kernel Metal nello stesso batch
+passa. Il benchmark GEMM F32 `512x512x512` ha misurato circa 360 GFLOP/s Metal
+end-to-end (circa 0,745 ms) contro circa 95 GFLOP/s CPU a 10 thread. Forme
+piccole restano piu' veloci su CPU per il costo di dispatch GPU.
+
+I test Metal verificano queste primitive solo quando un device e' realmente
 disponibile; su altre macchine compilazione e comportamento “unavailable”
 restano verificabili.
 
-## Lavoro necessario per la parita'
+## Lavoro rimandato per la parita'
 
-Ordine pratico consigliato:
+Prima di dichiarare Metal un backend di training completo restano:
 
-1. `accumulate` e matmul transpose F32;
-2. SiLU forward/backward;
-3. RMSNorm forward/backward;
-4. RoPE full-sequence forward/backward con tabelle `[S,D/2]`;
-5. attention GQA causale full-sequence forward/backward con Q/K/V della stessa S;
-6. AdamW F32;
-7. esecuzione della suite contrattuale condivisa su Metal;
-8. benchmark e ottimizzazione soltanto dopo la parita' numerica.
+1. RMSNorm forward/backward;
+2. RoPE full-sequence forward/backward con tabelle `[S,D/2]`;
+3. attention GQA causale full-sequence forward/backward con Q/K/V della stessa S;
+4. AdamW F32;
+5. esecuzione completa della suite contrattuale condivisa su Metal;
+6. benchmark e ottimizzazione sulle forme del primo modello.
+
+`accumulate`, matmul transpose e SiLU sono completati. Durante la pausa non
+aggiungere CUDA: l'API backend resta portabile, ma senza hardware e CI CUDA non
+ci sarebbe una validazione affidabile della parita' numerica.
 
 Ogni passo deve includere:
 

@@ -17,6 +17,7 @@ prima la pagina wiki e poi la specifica corrispondente.
 6. [Runtime v1: training minimo su Apple Silicon](runtime-v1-architecture.md)
 7. [Backend CPU](backend-cpu.md)
 8. [Backend Metal](backend-metal.md)
+9. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

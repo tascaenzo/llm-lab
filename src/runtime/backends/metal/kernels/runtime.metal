@@ -130,6 +130,48 @@ kernel void llm_scale_f32(device const float *input [[buffer(0)]],
     }
 }
 
+kernel void llm_accumulate_f32(device const float *source [[buffer(0)]],
+                               device float *destination [[buffer(1)]],
+                               constant ElementwiseParameters &parameters [[buffer(2)]],
+                               uint vector_index [[thread_position_in_grid]]) {
+    const uint base = vector_index * 4;
+    if (base + 3 < parameters.count) {
+        reinterpret_cast<device float4 *>(destination)[vector_index] +=
+            reinterpret_cast<device const float4 *>(source)[vector_index];
+    } else {
+        for (uint index = base; index < parameters.count; ++index) {
+            destination[index] += source[index];
+        }
+    }
+}
+
+inline float llm_sigmoid(float value) {
+    return value >= 0.0f ? 1.0f / (1.0f + exp(-value)) : exp(value) / (1.0f + exp(value));
+}
+
+kernel void llm_silu_f32(device const float *input [[buffer(0)]],
+                         device float *output [[buffer(1)]],
+                         constant ElementwiseParameters &parameters [[buffer(2)]],
+                         uint vector_index [[thread_position_in_grid]]) {
+    const uint base = vector_index * 4;
+    for (uint index = base; index < min(base + 4, parameters.count); ++index) {
+        output[index] = input[index] * llm_sigmoid(input[index]);
+    }
+}
+
+kernel void llm_silu_backward_f32(device const float *input [[buffer(0)]],
+                                  device const float *output_gradient [[buffer(1)]],
+                                  device float *input_gradient [[buffer(2)]],
+                                  constant ElementwiseParameters &parameters [[buffer(3)]],
+                                  uint vector_index [[thread_position_in_grid]]) {
+    const uint base = vector_index * 4;
+    for (uint index = base; index < min(base + 4, parameters.count); ++index) {
+        const float sigmoid = llm_sigmoid(input[index]);
+        input_gradient[index] = output_gradient[index] * sigmoid *
+                                (1.0f + input[index] * (1.0f - sigmoid));
+    }
+}
+
 inline void llm_atomic_add_float(device atomic_uint *destination, float value) {
     uint expected = atomic_load_explicit(destination, memory_order_relaxed);
     uint desired = 0;
