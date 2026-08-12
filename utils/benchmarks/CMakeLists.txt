@@ -54,7 +54,6 @@ if(BUILD_TESTING)
         COMMAND runtime_benchmark
             --backend metal
             --operations matmul
-            --precision f16
             --rows 16
             --columns 16
             --inner 16

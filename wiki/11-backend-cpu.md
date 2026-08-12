@@ -136,10 +136,10 @@ l'ordine delle somme puo' produrre differenze minime:
 (a + b) + c  puo' differire leggermente da  a + (b + c)
 ```
 
-Il backend offrira' una modalita' deterministica per test e debugging. Le
-versioni parallele delle riduzioni useranno un ordine definito di combinazione.
-I risultati vengono confrontati con tolleranze dichiarate, non sempre bit per
-bit.
+Il backend non espone una modalita' separata: scheduling e ordine delle
+riduzioni sono stabili a parita' di configurazione. I risultati ottenuti con
+thread count diversi vengono confrontati con tolleranze dichiarate, non sempre
+bit per bit.
 
 ## 8. Perche' questa fase viene prima dell'autograd
 
@@ -154,10 +154,11 @@ L'ordine deciso e' quindi:
 3. executor e parallelizzazione controllata;
 4. benchmark e confronto con il riferimento;
 5. primi kernel SIMD e matmul a blocchi;
-6. autograd e layer neurali.
+6. suite contrattuale condivisa e parita' Metal;
+7. layer con backward esplicito e training engine.
 
-Non serve rendere ogni operazione perfetta prima di creare il modello. Serve
-pero' un backend con confini stabili, testabile e gia' capace di usare piu' core.
+Non serve ottimizzare perfettamente ogni operazione prima del modello. Serve
+pero' la completezza semantica di entrambi i backend sulle primitive richieste.
 
 ## 9. Come valuteremo il backend
 
@@ -183,7 +184,9 @@ thread pool persistente e `parallel_for`. Memoria di grandi dimensioni,
 elementwise, riduzioni per riga, matmul, gather, softmax e backward della
 cross-entropy usano il parallelismo oltre soglie conservative. La matmul usa
 blocchi per la cache. L'executor assegna i chunk con un contatore atomico, cosi'
-i worker non devono contendersi un mutex per ogni porzione di lavoro.
+i worker non devono contendersi un mutex per ogni porzione di lavoro. Una
+chiamata annidata sullo stesso executor viene eseguita inline, evitando che i
+worker attendano un job interno che non potrebbe partire.
 
 La suite benchmark misura le primitive principali con liste come
 `1,2,4,8,auto`, calcola speedup ed efficienza e produce risultati JSON

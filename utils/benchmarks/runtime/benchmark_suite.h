@@ -9,8 +9,6 @@ typedef enum cpu_benchmark_operation {
     CPU_BENCHMARK_ZERO = 0,
     CPU_BENCHMARK_FILL,
     CPU_BENCHMARK_COPY,
-    CPU_BENCHMARK_CAST_DOWN,
-    CPU_BENCHMARK_CAST_UP,
     CPU_BENCHMARK_ADD,
     CPU_BENCHMARK_MULTIPLY,
     CPU_BENCHMARK_SCALE,
@@ -56,8 +54,6 @@ typedef struct cpu_benchmark_config {
     size_t warmup_iterations;
     size_t measured_iterations;
     double minimum_sample_seconds;
-    int deterministic;
-    llm_dtype matmul_dtype;
 } cpu_benchmark_config;
 
 typedef struct cpu_benchmark_result {

@@ -85,21 +85,18 @@ matrice B -> tile B --+
 ```
 
 Il backend dispone di tile 16 x 16, tile 32 x 32 e, sulle GPU recenti, matrici
-SIMD 8 x 8. La prima volta prova le varianti compatibili con una forma e ricorda
-la piu' rapida: la scelta non viene fissata a intuito per tutti i Mac.
+SIMD 8 x 8. La selezione resta un dettaglio interno e non cambia il contratto
+pubblico della matmul F32.
 
-## FP32, FP16 e BF16
+## Perche' il v1 usa soltanto FP32
 
-FP32 usa 32 bit per valore. FP16 e BF16 ne usano 16: occupano meno memoria e
-possono ridurre il traffico verso la GPU.
+FP32 usa 32 bit per valore ed e' il solo formato floating-point del contratto
+v1. FP16 e BF16 possono ridurre memoria e traffico, ma richiedono cast, regole
+di accumulo, loss scaling e nuovi test numerici.
 
-La matmul mista conserva gli input a 16 bit ma accumula la somma a 32 bit. E' un
-compromesso comune: meno memoria senza sommare migliaia di termini con soli 16
-bit.
-
-FP16 e BF16 non sono intercambiabili. FP16 offre piu' precisione vicino allo
-zero; BF16 copre un intervallo simile a FP32. I test controllano separatamente
-conversioni e risultati.
+Per evitare che un solo backend anticipi una semantica non richiesta, storage,
+cast e matmul FP16/BF16 non sono implementati. Gli enum restano riservati per
+una futura revisione comune di documenti, header e suite contrattuale.
 
 ## Come sappiamo se e' veloce
 
@@ -117,13 +114,13 @@ non a promettere la stessa velocita' su ogni Mac.
 
 ## Dove siamo davvero
 
-Il backend ora e' utilizzabile per costruire i primi layer: gestisce memoria,
-batch, precisione ridotta e tutte le primitive gia' presenti nel runtime.
+Il backend gestisce memoria, batch e primitive F32 di base. Prima dei layer deve
+ancora raggiungere la parita' col riferimento CPU per tutte le primitive di
+training e superare la suite contrattuale comune su un device Apple reale.
 
-Non e' ancora un motore pari ai grandi framework: mancano i layer del modello,
-autodifferenziazione, fusion estesa e calcolo distribuito. La
-differenza importante e' che questi pezzi possono essere aggiunti sopra una base
-reale, testata e misurabile.
+Non usa precisione ridotta o fallback CPU. SiLU, RMSNorm, RoPE, attention,
+backward e AdamW sono il prossimo lavoro concreto; fusion e funzionalita' future
+restano fuori finche' il training corrente non le richiede.
 
 I dettagli concreti e i comandi sono in
 [docs/backend-metal.md](../docs/backend-metal.md).

@@ -5,12 +5,7 @@
 #include <string.h>
 #include <time.h>
 
-#ifdef _WIN32
-#include <io.h>
-#include <windows.h>
-#else
 #include <unistd.h>
-#endif
 
 #include "dataset/dataset.h"
 #include "tokenizer/tokenizer.h"
@@ -32,13 +27,7 @@ typedef struct cli_dataset_progress {
 } cli_dataset_progress;
 
 static double current_time_seconds(void) {
-#ifdef _WIN32
-    LARGE_INTEGER counter = {0};
-    LARGE_INTEGER frequency = {0};
-    if (QueryPerformanceCounter(&counter) != 0 && QueryPerformanceFrequency(&frequency) != 0) {
-        return (double)counter.QuadPart / (double)frequency.QuadPart;
-    }
-#elif defined(CLOCK_MONOTONIC)
+#if defined(CLOCK_MONOTONIC)
     struct timespec monotonic = {0};
     if (clock_gettime(CLOCK_MONOTONIC, &monotonic) == 0) {
         return (double)monotonic.tv_sec + (double)monotonic.tv_nsec / 1000000000.0;
@@ -49,13 +38,7 @@ static double current_time_seconds(void) {
     return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
 }
 
-static int standard_error_is_terminal(void) {
-#ifdef _WIN32
-    return _isatty(_fileno(stderr));
-#else
-    return isatty(STDERR_FILENO);
-#endif
-}
+static int standard_error_is_terminal(void) { return isatty(STDERR_FILENO); }
 
 static const char *training_phase_name(tokenizer_train_phase phase) {
     switch (phase) {

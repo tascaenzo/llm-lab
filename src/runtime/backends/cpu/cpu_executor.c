@@ -24,6 +24,17 @@ struct llm_cpu_executor {
     llm_cpu_atomic_int status;
 };
 
+static _Thread_local llm_cpu_executor *current_executor = NULL;
+
+static llm_status execute_range_function(llm_cpu_executor *executor, llm_cpu_range_fn function,
+                                         void *context, size_t begin, size_t end) {
+    llm_cpu_executor *previous_executor = current_executor;
+    current_executor = executor;
+    const llm_status status = function(context, begin, end);
+    current_executor = previous_executor;
+    return status;
+}
+
 static llm_status execute_available_chunks(llm_cpu_executor *executor) {
     for (;;) {
         if ((llm_status)llm_cpu_atomic_int_load(&executor->status) != LLM_OK) {
@@ -41,7 +52,8 @@ static llm_status execute_available_chunks(llm_cpu_executor *executor) {
                       : begin + executor->chunk_size;
         } while (llm_cpu_atomic_size_compare_exchange_weak(&executor->next_item, &begin, end) == 0);
 
-        const llm_status status = executor->function(executor->function_context, begin, end);
+        const llm_status status = execute_range_function(executor, executor->function,
+                                                         executor->function_context, begin, end);
         if (status != LLM_OK) {
             int expected = LLM_OK;
             if (llm_cpu_atomic_int_compare_exchange_strong(&executor->status, &expected,
@@ -196,8 +208,9 @@ llm_status llm_cpu_parallel_for(llm_cpu_executor *executor, size_t item_count,
     if (executor == NULL || item_count == 0U || minimum_items_per_task == 0U || function == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
-    if (executor->worker_count == 0U || item_count <= minimum_items_per_task) {
-        return function(context, 0U, item_count);
+    if (current_executor == executor || executor->worker_count == 0U ||
+        item_count <= minimum_items_per_task) {
+        return execute_range_function(executor, function, context, 0U, item_count);
     }
     if (llm_cpu_mutex_lock(&executor->submission_mutex) != 0) {
         return LLM_BACKEND_ERROR;

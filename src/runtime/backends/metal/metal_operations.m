@@ -160,43 +160,6 @@ llm_status llm_metal_fill_f32(void *opaque_context, float *values, size_t value_
     }
 }
 
-llm_status llm_metal_cast(void *opaque_context, const void *input, llm_dtype input_dtype,
-                          void *output, llm_dtype output_dtype, size_t value_count) {
-    if (opaque_context == NULL || input == NULL || output == NULL) {
-        return LLM_INVALID_ARGUMENT;
-    }
-    llm_metal_pipeline pipeline = LLM_METAL_PIPELINE_COUNT;
-    if (input_dtype == LLM_DTYPE_F32 && output_dtype == LLM_DTYPE_F16) {
-        pipeline = LLM_METAL_PIPELINE_CAST_F32_F16;
-    } else if (input_dtype == LLM_DTYPE_F16 && output_dtype == LLM_DTYPE_F32) {
-        pipeline = LLM_METAL_PIPELINE_CAST_F16_F32;
-    } else if (input_dtype == LLM_DTYPE_F32 && output_dtype == LLM_DTYPE_BF16) {
-        pipeline = LLM_METAL_PIPELINE_CAST_F32_BF16;
-    } else if (input_dtype == LLM_DTYPE_BF16 && output_dtype == LLM_DTYPE_F32) {
-        pipeline = LLM_METAL_PIPELINE_CAST_BF16_F32;
-    } else {
-        return LLM_UNSUPPORTED_DTYPE;
-    }
-    metal_elementwise_parameters parameters = {0};
-    if (metal_size_to_u32(value_count, &parameters.count) == 0) {
-        return LLM_OVERFLOW;
-    }
-    llm_metal_context *context = opaque_context;
-    @autoreleasepool {
-        id<MTLCommandBuffer> command_buffer = nil;
-        id<MTLComputeCommandEncoder> encoder = nil;
-        llm_status status = metal_begin_compute(context, pipeline, &command_buffer, &encoder);
-        if (status != LLM_OK) {
-            return status;
-        }
-        [encoder setBuffer:metal_buffer_handle(input) offset:0U atIndex:0U];
-        [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:1U];
-        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:2U];
-        return metal_dispatch_1d(context, pipeline, command_buffer, encoder,
-                                 metal_elementwise_thread_count(value_count));
-    }
-}
-
 static llm_status metal_binary_elementwise(void *opaque_context, llm_metal_pipeline pipeline,
                                            const float *left, const float *right, float *output,
                                            size_t value_count) {
@@ -320,11 +283,7 @@ llm_status llm_metal_reduce_mean_square_last_f32(void *context, const float *inp
 }
 
 static size_t metal_matmul_pipeline_tile(llm_metal_pipeline pipeline) {
-    return pipeline == LLM_METAL_PIPELINE_MATMUL_LARGE ||
-                   pipeline == LLM_METAL_PIPELINE_MATMUL_F16_LARGE ||
-                   pipeline == LLM_METAL_PIPELINE_MATMUL_BF16_LARGE
-               ? 32U
-               : 16U;
+    return pipeline == LLM_METAL_PIPELINE_MATMUL_LARGE ? 32U : 16U;
 }
 
 static llm_status metal_run_matmul_pipeline(llm_metal_context *context, llm_metal_pipeline pipeline,
@@ -486,8 +445,7 @@ static llm_status metal_select_matmul_pipeline(llm_metal_context *context, llm_d
 }
 
 static llm_status metal_matmul(void *opaque_context, const void *left, const void *right,
-                               llm_dtype dtype, float *output, size_t rows, size_t inner_size,
-                               size_t columns) {
+                               float *output, size_t rows, size_t inner_size, size_t columns) {
     if (opaque_context == NULL || left == NULL || right == NULL || output == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
@@ -499,29 +457,18 @@ static llm_status metal_matmul(void *opaque_context, const void *left, const voi
     }
     llm_metal_pipeline candidates[3] = {0};
     size_t candidate_count = 0U;
-    if (dtype == LLM_DTYPE_F32) {
-        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL;
-        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_LARGE;
-        llm_metal_context *context = opaque_context;
-        if (context->pipelines[LLM_METAL_PIPELINE_MATMUL_SIMDGROUP] != nil && rows % 16U == 0U &&
-            inner_size % 16U == 0U && columns % 16U == 0U) {
-            candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_SIMDGROUP;
-        }
-    } else if (dtype == LLM_DTYPE_F16) {
-        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_F16;
-        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_F16_LARGE;
-    } else if (dtype == LLM_DTYPE_BF16) {
-        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_BF16;
-        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_BF16_LARGE;
-    } else {
-        return LLM_UNSUPPORTED_DTYPE;
+    candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL;
+    candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_LARGE;
+    llm_metal_context *context = opaque_context;
+    if (context->pipelines[LLM_METAL_PIPELINE_MATMUL_SIMDGROUP] != nil && rows % 16U == 0U &&
+        inner_size % 16U == 0U && columns % 16U == 0U) {
+        candidates[candidate_count++] = LLM_METAL_PIPELINE_MATMUL_SIMDGROUP;
     }
 
-    llm_metal_context *context = opaque_context;
     @autoreleasepool {
         llm_metal_pipeline selected = candidates[0];
         llm_status status =
-            metal_select_matmul_pipeline(context, dtype, left, right, output, &parameters,
+            metal_select_matmul_pipeline(context, LLM_DTYPE_F32, left, right, output, &parameters,
                                          candidates, candidate_count, &selected);
         if (status == LLM_OK) {
             status = metal_run_matmul_pipeline(context, selected, left, right, output, &parameters);
@@ -536,13 +483,7 @@ static llm_status metal_matmul(void *opaque_context, const void *left, const voi
 
 llm_status llm_metal_matmul_f32(void *context, const float *left, const float *right, float *output,
                                 size_t rows, size_t inner_size, size_t columns) {
-    return metal_matmul(context, left, right, LLM_DTYPE_F32, output, rows, inner_size, columns);
-}
-
-llm_status llm_metal_matmul_mixed_f32(void *context, const void *left, const void *right,
-                                      llm_dtype input_dtype, float *output, size_t rows,
-                                      size_t inner_size, size_t columns) {
-    return metal_matmul(context, left, right, input_dtype, output, rows, inner_size, columns);
+    return metal_matmul(context, left, right, output, rows, inner_size, columns);
 }
 
 static int metal_indices_are_valid(llm_metal_context *context, const uint32_t *indices,
