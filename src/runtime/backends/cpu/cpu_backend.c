@@ -1,10 +1,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#ifdef _WIN32
-#include <malloc.h>
-#endif
-
 #include "cpu_internal.h"
 
 #define LLM_CPU_ALIGNMENT 64U
@@ -22,8 +18,7 @@ static int cpu_supports_dtype(const void *context, llm_dtype dtype) {
     if (context == NULL) {
         return 0;
     }
-    return dtype == LLM_DTYPE_F32 || dtype == LLM_DTYPE_U32 || dtype == LLM_DTYPE_F16 ||
-           dtype == LLM_DTYPE_BF16;
+    return dtype == LLM_DTYPE_F32 || dtype == LLM_DTYPE_U32;
 }
 
 static llm_status cpu_allocate(void *context, size_t byte_count, void **out_memory) {
@@ -39,11 +34,7 @@ static llm_status cpu_allocate(void *context, size_t byte_count, void **out_memo
     }
     const size_t allocation_size =
         (byte_count + (LLM_CPU_ALIGNMENT - 1U)) & ~(LLM_CPU_ALIGNMENT - 1U);
-#ifdef _WIN32
-    void *memory = _aligned_malloc(allocation_size, LLM_CPU_ALIGNMENT);
-#else
     void *memory = aligned_alloc(LLM_CPU_ALIGNMENT, allocation_size);
-#endif
     if (memory == NULL) {
         return LLM_ALLOCATION_FAILED;
     }
@@ -53,11 +44,7 @@ static llm_status cpu_allocate(void *context, size_t byte_count, void **out_memo
 
 static void cpu_deallocate(void *context, void *memory) {
     (void)context;
-#ifdef _WIN32
-    _aligned_free(memory);
-#else
     free(memory);
-#endif
 }
 
 static llm_status cpu_synchronize(void *context) {
@@ -72,7 +59,6 @@ static const llm_backend_ops *cpu_backend_ops(void) {
         .deallocate = cpu_deallocate,
         .zero = llm_cpu_execute_zero,
         .copy = llm_cpu_execute_copy,
-        .cast = llm_cpu_execute_cast,
         .fill_f32 = llm_cpu_execute_fill_f32,
         .add_f32 = llm_cpu_execute_add_f32,
         .multiply_f32 = llm_cpu_execute_multiply_f32,
@@ -82,7 +68,6 @@ static const llm_backend_ops *cpu_backend_ops(void) {
         .reduce_mean_square_last_f32 = llm_cpu_execute_reduce_mean_square_last_f32,
         .matmul_f32 = llm_cpu_execute_matmul_f32,
         .matmul_ex_f32 = llm_cpu_execute_matmul_ex_f32,
-        .matmul_mixed_f32 = llm_cpu_execute_matmul_mixed_f32,
         .gather_rows_f32 = llm_cpu_execute_gather_rows_f32,
         .scatter_add_rows_f32 = llm_cpu_execute_scatter_add_rows_f32,
         .accumulate_f32 = llm_cpu_execute_accumulate_f32,
@@ -106,7 +91,6 @@ static const llm_backend_ops *cpu_backend_ops(void) {
 llm_status llm_backend_cpu_create(llm_backend **out_backend) {
     const llm_cpu_backend_config config = {
         .thread_count = 0U,
-        .deterministic = 1,
     };
     return llm_backend_cpu_create_with_config(&config, out_backend);
 }
@@ -117,8 +101,7 @@ llm_status llm_backend_cpu_create_with_config(const llm_cpu_backend_config *conf
         return LLM_INVALID_ARGUMENT;
     }
     *out_backend = NULL;
-    if (config == NULL || (config->deterministic != 0 && config->deterministic != 1) ||
-        config->thread_count > LLM_CPU_MAX_THREADS) {
+    if (config == NULL || config->thread_count > LLM_CPU_MAX_THREADS) {
         return LLM_INVALID_ARGUMENT;
     }
 
@@ -135,7 +118,6 @@ llm_status llm_backend_cpu_create_with_config(const llm_cpu_backend_config *conf
         return LLM_ALLOCATION_FAILED;
     }
     context->thread_count = thread_count;
-    context->deterministic = config->deterministic;
     const llm_status executor_status = llm_cpu_executor_create(thread_count, &context->executor);
     if (executor_status != LLM_OK) {
         free(context);

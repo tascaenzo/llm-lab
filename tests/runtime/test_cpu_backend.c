@@ -12,6 +12,12 @@ typedef struct visit_job {
     size_t failure_index;
 } visit_job;
 
+typedef struct nested_visit_job {
+    llm_cpu_executor *executor;
+    uint32_t *visits;
+    size_t nested_item_count;
+} nested_visit_job;
+
 static llm_status visit_range(void *context, size_t begin, size_t end) {
     visit_job *job = context;
     if (job->failure_index >= begin && job->failure_index < end) {
@@ -19,6 +25,23 @@ static llm_status visit_range(void *context, size_t begin, size_t end) {
     }
     for (size_t index = begin; index < end; ++index) {
         ++job->visits[index];
+    }
+    return LLM_OK;
+}
+
+static llm_status nested_visit_range(void *context, size_t begin, size_t end) {
+    nested_visit_job *job = context;
+    visit_job nested_job = {
+        .visits = job->visits + begin * job->nested_item_count,
+        .failure_index = SIZE_MAX,
+    };
+    for (size_t index = begin; index < end; ++index) {
+        nested_job.visits = job->visits + index * job->nested_item_count;
+        const llm_status status = llm_cpu_parallel_for(job->executor, job->nested_item_count, 1U,
+                                                       visit_range, &nested_job);
+        if (status != LLM_OK) {
+            return status;
+        }
     }
     return LLM_OK;
 }
@@ -46,6 +69,22 @@ static int test_executor(void) {
     job.failure_index = SIZE_MAX;
     TEST_ASSERT(llm_cpu_parallel_for(executor, 17U, 64U, visit_range, &job) == LLM_OK);
 
+    const size_t outer_count = 64U;
+    const size_t nested_item_count = 32U;
+    uint32_t *nested_visits = calloc(outer_count * nested_item_count, sizeof(*nested_visits));
+    TEST_ASSERT(nested_visits != NULL);
+    nested_visit_job nested_job = {
+        .executor = executor,
+        .visits = nested_visits,
+        .nested_item_count = nested_item_count,
+    };
+    TEST_ASSERT(llm_cpu_parallel_for(executor, outer_count, 1U, nested_visit_range, &nested_job) ==
+                LLM_OK);
+    for (size_t index = 0U; index < outer_count * nested_item_count; ++index) {
+        TEST_ASSERT(nested_visits[index] == 1U);
+    }
+
+    free(nested_visits);
     free(visits);
     llm_cpu_executor_destroy(executor);
     return EXIT_SUCCESS;
@@ -53,23 +92,15 @@ static int test_executor(void) {
 
 static int test_configuration(void) {
     llm_backend *backend = NULL;
-    const llm_cpu_backend_config invalid_determinism = {
-        .thread_count = 1U,
-        .deterministic = 2,
-    };
     const llm_cpu_backend_config too_many_threads = {
         .thread_count = SIZE_MAX,
-        .deterministic = 1,
     };
     TEST_ASSERT(llm_backend_cpu_create_with_config(NULL, &backend) == LLM_INVALID_ARGUMENT);
-    TEST_ASSERT(llm_backend_cpu_create_with_config(&invalid_determinism, &backend) ==
-                LLM_INVALID_ARGUMENT);
     TEST_ASSERT(llm_backend_cpu_create_with_config(&too_many_threads, &backend) ==
                 LLM_INVALID_ARGUMENT);
 
     const llm_cpu_backend_config single_thread = {
         .thread_count = 1U,
-        .deterministic = 1,
     };
     TEST_ASSERT(llm_backend_cpu_create_with_config(&single_thread, &backend) == LLM_OK);
     TEST_ASSERT(llm_backend_cpu_thread_count(backend) == 1U);
@@ -77,7 +108,6 @@ static int test_configuration(void) {
 
     const llm_cpu_backend_config four_threads = {
         .thread_count = 4U,
-        .deterministic = 1,
     };
     backend = NULL;
     TEST_ASSERT(llm_backend_cpu_create_with_config(&four_threads, &backend) == LLM_OK);
@@ -88,7 +118,7 @@ static int test_configuration(void) {
 }
 
 static int test_parallel_elementwise_and_memory(void) {
-    const llm_cpu_backend_config config = {.thread_count = 4U, .deterministic = 1};
+    const llm_cpu_backend_config config = {.thread_count = 4U};
     llm_backend *backend = NULL;
     TEST_ASSERT(llm_backend_cpu_create_with_config(&config, &backend) == LLM_OK);
 
@@ -152,7 +182,7 @@ static int test_parallel_elementwise_and_memory(void) {
 }
 
 static int test_parallel_reductions_and_matmul(void) {
-    const llm_cpu_backend_config config = {.thread_count = 4U, .deterministic = 1};
+    const llm_cpu_backend_config config = {.thread_count = 4U};
     llm_backend *backend = NULL;
     TEST_ASSERT(llm_backend_cpu_create_with_config(&config, &backend) == LLM_OK);
 
@@ -212,7 +242,7 @@ static int test_parallel_reductions_and_matmul(void) {
 }
 
 static int test_parallel_language_operations(void) {
-    const llm_cpu_backend_config config = {.thread_count = 4U, .deterministic = 1};
+    const llm_cpu_backend_config config = {.thread_count = 4U};
     llm_backend *backend = NULL;
     TEST_ASSERT(llm_backend_cpu_create_with_config(&config, &backend) == LLM_OK);
 

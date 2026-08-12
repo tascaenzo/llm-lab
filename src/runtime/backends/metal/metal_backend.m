@@ -13,20 +13,12 @@ static const char *const metal_pipeline_names[LLM_METAL_PIPELINE_COUNT] = {
     "llm_add_f32",
     "llm_multiply_f32",
     "llm_scale_f32",
-    "llm_cast_f32_f16",
-    "llm_cast_f16_f32",
-    "llm_cast_f32_bf16",
-    "llm_cast_bf16_f32",
     "llm_reduce_sum_last_f32",
     "llm_reduce_max_last_f32",
     "llm_reduce_mean_square_last_f32",
     "llm_matmul_f32",
     "llm_matmul_f32_tiled32",
     "llm_matmul_f32_simdgroup",
-    "llm_matmul_f16_f32",
-    "llm_matmul_f16_f32_tiled32",
-    "llm_matmul_bf16_f32",
-    "llm_matmul_bf16_f32_tiled32",
     "llm_gather_rows_f32",
     "llm_scatter_add_rows_f32",
     "llm_softmax_last_f32",
@@ -90,8 +82,7 @@ static void metal_destroy(void *opaque_context) {
 }
 
 static int metal_supports_dtype(const void *opaque_context, llm_dtype dtype) {
-    return opaque_context != NULL && (dtype == LLM_DTYPE_F32 || dtype == LLM_DTYPE_U32 ||
-                                      dtype == LLM_DTYPE_F16 || dtype == LLM_DTYPE_BF16);
+    return opaque_context != NULL && (dtype == LLM_DTYPE_F32 || dtype == LLM_DTYPE_U32);
 }
 
 static llm_status metal_synchronize(void *opaque_context) {
@@ -107,7 +98,6 @@ static const llm_backend_ops *metal_backend_ops(void) {
         .deallocate = llm_metal_deallocate,
         .zero = llm_metal_zero,
         .copy = llm_metal_copy,
-        .cast = llm_metal_cast,
         .fill_f32 = llm_metal_fill_f32,
         .add_f32 = llm_metal_add_f32,
         .multiply_f32 = llm_metal_multiply_f32,
@@ -116,7 +106,6 @@ static const llm_backend_ops *metal_backend_ops(void) {
         .reduce_max_last_f32 = llm_metal_reduce_max_last_f32,
         .reduce_mean_square_last_f32 = llm_metal_reduce_mean_square_last_f32,
         .matmul_f32 = llm_metal_matmul_f32,
-        .matmul_mixed_f32 = llm_metal_matmul_mixed_f32,
         .gather_rows_f32 = llm_metal_gather_rows_f32,
         .scatter_add_rows_f32 = llm_metal_scatter_add_rows_f32,
         .softmax_last_f32 = llm_metal_softmax_last_f32,

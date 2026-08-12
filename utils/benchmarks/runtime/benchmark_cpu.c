@@ -28,7 +28,7 @@ static void print_usage(const char *program) {
     printf("Options:\n");
     printf("  --backend NAME      cpu (default), metal, or all\n");
     printf("  --operations LIST   all or comma-separated kernel names\n");
-    printf("                      memory: zero,fill,copy,cast_down,cast_up\n");
+    printf("                      memory: zero,fill,copy\n");
     printf("                      math: add,multiply,scale,accumulate,reduce_*,matmul*\n");
     printf("                      training: silu*,rms_norm*,rope*,attention*,adamw\n");
     printf("  --threads LIST      comma-separated thread counts; use auto for detection\n");
@@ -41,11 +41,9 @@ static void print_usage(const char *program) {
     printf("  --query-heads N     attention query heads (default: 4)\n");
     printf("  --kv-heads N        attention key/value heads (default: 2)\n");
     printf("  --head-dim N        even attention head dimension (default: 32)\n");
-    printf("  --precision NAME    matmul/cast precision: f32, f16, or bf16\n");
     printf("  --warmup N          warm-up iterations (default: 2)\n");
     printf("  --iterations N      measured iterations (default: 10)\n");
     printf("  --sample-ms N       minimum duration per timing sample (default: 10)\n");
-    printf("  --deterministic 0|1 deterministic backend mode (default: 1)\n");
     printf("  --format FORMAT     human (default) or jsonl for automation\n");
     printf("  --help              show this help\n\n");
     printf("Legacy matmul syntax remains accepted: %s rows inner columns iterations\n", program);
@@ -229,17 +227,6 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
             if (parse_size(value, 0, &config->workload.head_dimension) == 0) {
                 return 0;
             }
-        } else if (strcmp(option, "--precision") == 0) {
-            if (strcmp(value, "f32") == 0) {
-                config->workload.matmul_dtype = LLM_DTYPE_F32;
-            } else if (strcmp(value, "f16") == 0) {
-                config->workload.matmul_dtype = LLM_DTYPE_F16;
-            } else if (strcmp(value, "bf16") == 0) {
-                config->workload.matmul_dtype = LLM_DTYPE_BF16;
-            } else {
-                fprintf(stderr, "invalid precision: %s (expected f32, f16, or bf16)\n", value);
-                return 0;
-            }
         } else if (strcmp(option, "--warmup") == 0) {
             if (parse_size(value, 0, &config->workload.warmup_iterations) == 0) {
                 return 0;
@@ -254,12 +241,6 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
                 return 0;
             }
             config->workload.minimum_sample_seconds = milliseconds / 1000.0;
-        } else if (strcmp(option, "--deterministic") == 0) {
-            size_t deterministic = 0U;
-            if (parse_size(value, 1, &deterministic) == 0 || deterministic > 1U) {
-                return 0;
-            }
-            config->workload.deterministic = (int)deterministic;
         } else if (strcmp(option, "--format") == 0) {
             if (strcmp(value, "human") == 0) {
                 config->output_format = BENCHMARK_OUTPUT_HUMAN;
@@ -278,9 +259,7 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
 }
 
 static const char *operating_system_name(void) {
-#ifdef _WIN32
-    return "windows";
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
     return "macos";
 #elif defined(__linux__)
     return "linux";
@@ -290,9 +269,9 @@ static const char *operating_system_name(void) {
 }
 
 static const char *architecture_name(void) {
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__)
     return "arm64";
-#elif defined(__x86_64__) || defined(_M_X64)
+#elif defined(__x86_64__)
     return "x86_64";
 #else
     return "unknown";
@@ -302,8 +281,6 @@ static const char *architecture_name(void) {
 static const char *compiler_name(void) {
 #if defined(__clang__)
     return "clang";
-#elif defined(_MSC_VER)
-    return "msvc";
 #elif defined(__GNUC__)
     return "gcc";
 #else
@@ -384,15 +361,14 @@ static void print_jsonl_result(const cpu_benchmark_result *result,
     const double variation = result->mean_seconds > 0.0
                                  ? result->standard_deviation_seconds / result->mean_seconds
                                  : 0.0;
-    printf("{\"type\":\"result\",\"schema_version\":3,\"backend\":\"%s\","
+    printf("{\"type\":\"result\",\"schema_version\":4,\"backend\":\"%s\","
            "\"device\":\"%s\",\"dtype\":\"%s\",\"operation\":\"%s\","
            "\"requested_threads\":%zu,\"actual_threads\":%zu,\"baseline_threads\":%zu,"
-           "\"repetitions_per_sample\":%zu,\"deterministic\":%s,\"dimensions\":",
+           "\"repetitions_per_sample\":%zu,\"dimensions\":",
            runtime_benchmark_backend_name(result->backend), result->device_name,
            runtime_benchmark_dtype_name(result->dtype),
            cpu_benchmark_operation_name(result->operation), result->requested_threads,
-           result->actual_threads, baseline_threads, result->repetitions_per_sample,
-           config->deterministic != 0 ? "true" : "false");
+           result->actual_threads, baseline_threads, result->repetitions_per_sample);
     print_jsonl_dimensions(result->operation, config);
     printf(",\"minimum_seconds\":%.9f,\"median_seconds\":%.9f,\"p95_seconds\":%.9f,"
            "\"mean_seconds\":%.9f,\"standard_deviation_seconds\":%.9f,"
@@ -496,8 +472,6 @@ int main(int argc, char **argv) {
                 .warmup_iterations = 2U,
                 .measured_iterations = 10U,
                 .minimum_sample_seconds = 0.01,
-                .deterministic = 1,
-                .matmul_dtype = LLM_DTYPE_F32,
             },
         .selected_backends = {1, 0},
         .requested_threads = {1U, 0U},

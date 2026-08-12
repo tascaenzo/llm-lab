@@ -1,10 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#ifdef _WIN32
-#include <io.h>
-#endif
-
 #include "dataset_internal.h"
 
 static lm_dataset_status sha256_file(const char *path, unsigned char checksum[32]) {
@@ -35,16 +31,6 @@ static lm_dataset_status sha256_file(const char *path, unsigned char checksum[32
 }
 
 static lm_dataset_status file_size_and_rewind(FILE *file, uint64_t *out_size) {
-#ifdef _WIN32
-    if (_fseeki64(file, 0, SEEK_END) != 0) {
-        return LM_DATASET_IO_ERROR;
-    }
-    const __int64 size = _ftelli64(file);
-    if (size < 0 || _fseeki64(file, 0, SEEK_SET) != 0) {
-        return LM_DATASET_IO_ERROR;
-    }
-    *out_size = (uint64_t)size;
-#else
     if (fseek(file, 0L, SEEK_END) != 0) {
         return LM_DATASET_IO_ERROR;
     }
@@ -53,7 +39,6 @@ static lm_dataset_status file_size_and_rewind(FILE *file, uint64_t *out_size) {
         return LM_DATASET_IO_ERROR;
     }
     *out_size = (uint64_t)size;
-#endif
     return LM_DATASET_OK;
 }
 

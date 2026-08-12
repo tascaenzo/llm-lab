@@ -4,10 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <io.h>
-#endif
-
 #include "dataset_internal.h"
 
 #define TOKENIZER_CHECKSUM_OFFSET 56U
@@ -47,17 +43,10 @@ uint64_t lm_dataset_load_u64(const unsigned char *bytes) {
 }
 
 static int file_seek(FILE *file, uint64_t offset, int origin) {
-#ifdef _WIN32
-    if (offset > INT64_MAX) {
-        return -1;
-    }
-    return _fseeki64(file, (__int64)offset, origin);
-#else
     if (offset > (uint64_t)LONG_MAX) {
         return -1;
     }
     return fseek(file, (long)offset, origin);
-#endif
 }
 
 static char *append_suffix(const char *prefix, const char *suffix) {

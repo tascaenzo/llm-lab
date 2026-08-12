@@ -23,8 +23,6 @@ ALL_OPERATIONS = {
     "zero",
     "fill",
     "copy",
-    "cast_down",
-    "cast_up",
     "add",
     "multiply",
     "scale",
@@ -73,8 +71,6 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         (
             "--operations",
             "all",
-            "--precision",
-            "f32",
             "--elements",
             "65536",
             "--rows",
@@ -89,10 +85,8 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         "vector-throughput-f32",
         (
             "--operations",
-            "zero,fill,copy,cast_down,cast_up,add,multiply,scale,accumulate,"
+            "zero,fill,copy,add,multiply,scale,accumulate,"
             "silu,silu_backward,adamw",
-            "--precision",
-            "f32",
             "--elements",
             "8388608",
         ),
@@ -103,8 +97,6 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
             "--operations",
             "reduce_sum,reduce_max,reduce_mean_square,gather,scatter_add,rms_norm,"
             "rms_norm_backward,softmax,cross_entropy_forward,cross_entropy_backward",
-            "--precision",
-            "f32",
             "--rows",
             "512",
             "--columns",
@@ -118,55 +110,12 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         (
             "--operations",
             "matmul,matmul_transpose_left,matmul_transpose_right",
-            "--precision",
-            "f32",
             "--rows",
             "512",
             "--columns",
             "512",
             "--inner",
             "512",
-        ),
-    ),
-    (
-        "matmul-square-f16",
-        (
-            "--operations",
-            "matmul",
-            "--precision",
-            "f16",
-            "--rows",
-            "512",
-            "--columns",
-            "512",
-            "--inner",
-            "512",
-        ),
-    ),
-    (
-        "matmul-square-bf16",
-        (
-            "--operations",
-            "matmul",
-            "--precision",
-            "bf16",
-            "--rows",
-            "512",
-            "--columns",
-            "512",
-            "--inner",
-            "512",
-        ),
-    ),
-    (
-        "cast-throughput-bf16",
-        (
-            "--operations",
-            "cast_down,cast_up",
-            "--precision",
-            "bf16",
-            "--elements",
-            "8388608",
         ),
     ),
     (
@@ -174,8 +123,6 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         (
             "--operations",
             "rope,rope_backward,attention,attention_backward",
-            "--precision",
-            "f32",
             "--batch",
             "1",
             "--sequence",
@@ -193,8 +140,6 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         (
             "--operations",
             "matmul",
-            "--precision",
-            "f32",
             "--rows",
             "512",
             "--columns",
@@ -212,8 +157,6 @@ SMOKE_SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         (
             "--operations",
             "add,matmul",
-            "--precision",
-            "f32",
             "--elements",
             "4096",
             "--rows",

@@ -119,10 +119,10 @@ backend diversi senza modificare i layer.
 
 ## Decisione corrente
 
-Il runtime tensoriale CPU di riferimento e il backend Metal sono implementati.
-Metal dispone di pool dei buffer, batch asincroni espliciti, metriche GPU,
-riduzioni parallele, matmul tiled FP32/FP16/BF16 e benchmark riproducibile. Il
-codice hardware-specifico resta isolato sotto `src/runtime/backends/`. Il
-prossimo incremento funzionale puo' quindi costruire autograd e layer neurali
-sopra l'API comune; fusion, autotuning persistente, CUDA e BLAS rimangono
-ottimizzazioni o backend successivi.
+Il runtime tensoriale CPU di riferimento implementa l'intero contratto di
+training F32/U32. Metal dispone di pool dei buffer, batch asincroni, metriche e
+primitive F32 di base, ma deve ancora portare SiLU, RMSNorm, RoPE, attention,
+backward e AdamW fino alla parita' con la suite comune. Il prossimo incremento
+e' quindi il completamento Metal senza fallback CPU; layer e training engine
+vengono costruiti dopo questa parita'. Mixed precision, KV cache, fusion e
+backend ulteriori richiederanno contratti separati quando saranno necessari.
