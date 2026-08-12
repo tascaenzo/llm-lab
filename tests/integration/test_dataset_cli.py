@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 import json
+import hashlib
+import math
+import struct
 import subprocess
 import sys
 import tempfile
@@ -15,6 +18,28 @@ def run(command, expected_returncode=0):
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+def write_tiny_training_dataset(path):
+    tokens = [0, 1] * 64
+    payload = struct.pack(f"<{len(tokens)}I", *tokens)
+    header = struct.pack(
+        "<8sIIIIIIQQQ32s32s8s",
+        b"LLMDATA\n",
+        1,
+        128,
+        2,
+        3,
+        2,
+        0,
+        len(tokens),
+        1,
+        len(payload),
+        bytes(32),
+        hashlib.sha256(payload).digest(),
+        bytes(8),
+    )
+    path.write_bytes(header + payload)
 
 
 def main():
@@ -52,6 +77,137 @@ def main():
             path = Path(f"{prefix}.{split}.llmdat")
             if not path.is_file() or path.stat().st_size <= 128:
                 raise AssertionError(f"artefatto assente o vuoto: {path}")
+
+        generation_checkpoint = root / "generation.llmckpt"
+        trained = run(
+            [
+                str(cli),
+                "model",
+                "train",
+                f"{prefix}.train.llmdat",
+                "4",
+                "--batch-size",
+                "1",
+                "--context",
+                "1",
+                "--hidden",
+                "4",
+                "--learning-rate",
+                "0.01",
+                "--seed",
+                "123",
+                "--checkpoint",
+                str(generation_checkpoint),
+            ]
+        )
+        training_report = json.loads(trained.stdout)
+        if training_report["schema"] != "llm-lab-model-training-v1":
+            raise AssertionError(training_report)
+        if training_report["steps"] != 4 or not math.isfinite(training_report["loss"]):
+            raise AssertionError(training_report)
+        if training_report["vocabulary_size"] != 265:
+            raise AssertionError(training_report)
+        if "Verifica dataset:" not in trained.stderr or "Training modello:" not in trained.stderr:
+            raise AssertionError(f"avanzamento model assente:\n{trained.stderr}")
+        generated = run(
+            [str(cli), "model", "generate", str(generation_checkpoint), str(model), "2", "ciao"]
+        )
+        if not generated.stdout.strip():
+            raise AssertionError("generazione vuota")
+        evaluated = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "evaluate",
+                    f"{prefix}.validation.llmdat",
+                    str(generation_checkpoint),
+                    "2",
+                    "--batch-size",
+                    "1",
+                    "--seed",
+                    "123",
+                ]
+            ).stdout
+        )
+        if evaluated["schema"] != "llm-lab-model-evaluation-v1" or not math.isfinite(
+            evaluated["loss"]
+        ):
+            raise AssertionError(evaluated)
+
+        overfit_dataset = root / "overfit.train.llmdat"
+        write_tiny_training_dataset(overfit_dataset)
+        training_command = [
+            str(cli),
+            "model",
+            "train",
+            str(overfit_dataset),
+            "1",
+            "--batch-size",
+            "1",
+            "--context",
+            "1",
+            "--hidden",
+            "4",
+            "--learning-rate",
+            "0.05",
+            "--seed",
+            "19",
+        ]
+        initial_loss = json.loads(run(training_command).stdout)["loss"]
+        training_command[4] = "200"
+        final_loss = json.loads(run(training_command).stdout)["loss"]
+        if not final_loss < initial_loss * 0.5:
+            raise AssertionError((initial_loss, final_loss))
+
+        continuous_checkpoint = root / "continuous.llmckpt"
+        continuous_command = [
+            str(cli),
+            "model",
+            "train",
+            str(overfit_dataset),
+            "5",
+            "--batch-size",
+            "1",
+            "--context",
+            "1",
+            "--hidden",
+            "4",
+            "--learning-rate",
+            "0.05",
+            "--seed",
+            "19",
+            "--checkpoint",
+            str(continuous_checkpoint),
+        ]
+        continuous = json.loads(run(continuous_command).stdout)
+        resume_checkpoint = root / "resume.llmckpt"
+        split_command = continuous_command.copy()
+        split_command[4] = "3"
+        split_command[-1] = str(resume_checkpoint)
+        run(split_command)
+        resumed_checkpoint = root / "resumed.llmckpt"
+        resumed = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "train",
+                    str(overfit_dataset),
+                    "2",
+                    "--resume",
+                    str(resume_checkpoint),
+                    "--checkpoint",
+                    str(resumed_checkpoint),
+                ]
+            ).stdout
+        )
+        if not continuous_checkpoint.is_file() or not resumed_checkpoint.is_file():
+            raise AssertionError("checkpoint non scritto")
+        if resumed["steps"] != 5 or not math.isclose(
+            resumed["loss"], continuous["loss"], rel_tol=0.0, abs_tol=1e-7
+        ):
+            raise AssertionError((continuous, resumed))
 
         repeated = subprocess.run(
             [str(cli), "dataset", "prepare", str(model), str(documents), str(prefix)],

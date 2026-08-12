@@ -59,15 +59,29 @@ rappresentative.
 
 ## Fase 4 — Core neurale
 
-- aggiungere backward e registrazione delle operazioni;
-- costruire embedding e layer lineari;
-- implementare RMSNorm, RoPE e SwiGLU;
-- verificare i gradienti numericamente.
+**Stato: completata con il Modello Minimal.**
 
-**Verifica:** una piccola rete composta dai layer riduce una loss nota e ogni
-gradiente coincide con una stima numerica entro la tolleranza dichiarata.
+- costruire config, parametri, gradienti e inizializzazione riproducibile;
+- implementare `embedding -> linear head -> logits -> cross-entropy`;
+- calcolare backward di embedding e layer lineare con le primitive runtime;
+- mantenere un registry di parametri e aggiornare tutti i pesi con AdamW;
+- fare overfit di una fixture minuscola e verificare i gradienti numericamente.
+
+Il risultato e' il Modello Minimal: un language model autoregressivo
+addestrabile, non un mock. Config, checkpoint e API restano estendibili.
+
+La CPU e' il riferimento per questo gate perche' soddisfa l'intero contratto
+runtime v1. Il modello non deve dipendere dalla CPU: usera' la stessa API
+backend-agnostic che in futuro permettera' di eseguire lo stesso test su Metal.
+La guida operativa e' in [primo modello addestrabile](13-primo-modello-addestrabile.md).
+
+**Verifica:** con seed fisso, gradienti di embedding/proiezione coincidono con
+le differenze finite, un corpus minuscolo viene overfittato con loss in calo e
+un run ripreso da checkpoint coincide con lo stesso run continuo.
 
 ## Fase 5 — Transformer
+
+**Stato: il blocco causale e' nel Modello Minimal; scalabilita' generica ancora da fare.**
 
 - embedding dei token e posizione rappresentata con RoPE;
 - singola testa di attenzione causale;
@@ -78,11 +92,16 @@ gradiente coincide con una stima numerica entro la tolleranza dichiarata.
 **Verifica:** il modello impara una piccola sequenza nota e cambiare un token
 futuro non modifica le attivazioni delle posizioni precedenti.
 
+Il Modello Minimal implementa un blocco causale CPU con RMSNorm, Q/K/V, RoPE, attention,
+proiezione e residual. Per mantenere il riferimento numerico semplice accetta
+solo un layer e una head, senza MLP. Dopo la parita' Metal, lo stesso modello
+verra' generalizzato a piu' layer, multi-head e SwiGLU; non sara' un secondo
+modello indipendente.
+
 ## Fase 6 — Training affidabile
 
-- AdamW, scheduler del learning rate e gradient clipping;
+- scheduler del learning rate e gradient clipping;
 - validation periodica;
-- checkpoint e ripresa del training;
 - seed e logging delle metriche.
 
 **Verifica:** un run interrotto riparte correttamente e la validation loss e' tracciata.
@@ -97,9 +116,10 @@ futuro non modifica le attivazioni delle posizioni precedenti.
 
 ## Fase 8 — Backend accelerati e scalabilita'
 
-**Stato: backend Metal accelerato implementato e misurato; layer e fusion futuri.**
+**Stato: accelerazione Metal di base validata; il prossimo gate e' la parita'
+di training del Modello Minimal.**
 
-- backend Metal e CUDA;
+- completare Metal sulle primitive richieste dal modello reale;
 - test di conformita' tra dispositivi;
 - mixed precision;
 - kernel fusi e profiling.
@@ -120,9 +140,15 @@ backend diversi senza modificare i layer.
 ## Decisione corrente
 
 Il runtime tensoriale CPU di riferimento implementa l'intero contratto di
-training F32/U32. Metal dispone di pool dei buffer, batch asincroni, metriche e
-primitive F32 di base, ma deve ancora portare SiLU, RMSNorm, RoPE, attention,
-backward e AdamW fino alla parita' con la suite comune. Il prossimo incremento
-e' quindi il completamento Metal senza fallback CPU; layer e training engine
-vengono costruiti dopo questa parita'. Mixed precision, KV cache, fusion e
-backend ulteriori richiederanno contratti separati quando saranno necessari.
+training F32/U32. Metal ha una base validata su Apple M4: memoria, batch, GEMM
+(anche trasposto via MPS), embedding, cross-entropy, `accumulate` e SiLU sono
+disponibili; RMSNorm, RoPE, attention GQA e AdamW restano da implementare.
+
+La decisione corrente e' fermare i run CPU lunghi dopo avere validato il
+Modello Minimal e
+portare a Metal l'intero training step: RMSNorm, RoPE, attention causale,
+backward e AdamW. CPU e' il riferimento numerico per confrontare logits, loss,
+gradienti e parametri aggiornati. Solo dopo questa parita' verranno avviati
+run estesi e la configurazione multi-layer. CUDA resta fuori dallo scope finche' non esistono
+hardware e CI per testarne correttezza e prestazioni. Mixed precision, KV cache,
+fusion e backend ulteriori richiederanno contratti separati quando necessari.

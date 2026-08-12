@@ -172,6 +172,18 @@ size_t lm_batcher_context_length(const lm_batcher *batcher) {
     return batcher == NULL ? 0U : batcher->context_length;
 }
 
+uint64_t lm_batcher_random_state(const lm_batcher *batcher) {
+    return batcher == NULL ? 0U : batcher->random_state;
+}
+
+lm_dataset_status lm_batcher_set_random_state(lm_batcher *batcher, uint64_t state) {
+    if (batcher == NULL || state == 0U) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    batcher->random_state = state;
+    return LM_DATASET_OK;
+}
+
 lm_dataset_status lm_batcher_next(lm_batcher *batcher, token_id *out_inputs,
                                   token_id *out_targets) {
     if (batcher == NULL || out_inputs == NULL || out_targets == NULL) {

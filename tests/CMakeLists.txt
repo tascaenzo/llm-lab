@@ -79,6 +79,13 @@ target_compile_definitions(dataset_test PRIVATE
 llm_lab_set_warnings(dataset_test)
 add_test(NAME dataset.unit COMMAND dataset_test)
 
+add_executable(model_test model/test_model.c)
+target_compile_features(model_test PRIVATE c_std_23)
+target_link_libraries(model_test PRIVATE model)
+target_include_directories(model_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+llm_lab_set_warnings(model_test)
+add_test(NAME model.unit COMMAND model_test)
+
 add_test(
     NAME python.unit
     COMMAND ${Python3_EXECUTABLE} -m unittest discover
