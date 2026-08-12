@@ -1,18 +1,20 @@
-# Toolchain multipiattaforma
+# Toolchain macOS e Linux
 
 ## Componenti scelti
 
 | Componente | Scelta | Motivo |
 |---|---|---|
 | Linguaggio | C23 | Standard C moderno, con funzionalita' contemporanee e supporto nei compilatori aggiornati. |
-| Build system | CMake >= 3.24 | Genera build native per Ninja, Make e Visual Studio. |
-| Builder | Ninja | Veloce, semplice e identico su macOS, Linux e Windows. |
-| Compilatore | Clang, GCC o MSVC | Il progetto verifica esplicitamente queste tre famiglie. |
+| Build system | CMake >= 3.24 | Genera build native riproducibili. |
+| Builder | Ninja | Veloce e identico su macOS e Linux. |
+| Compilatore | Clang o GCC | Il progetto verifica queste due famiglie. |
 | Formattazione | clang-format | Stile riproducibile. |
 | Test | CTest + unittest | Test C e Python senza framework esterni. |
-| CI | GitHub Actions | Compilazione su tre sistemi operativi. |
+| CI | GitHub Actions | Compilazione e test su macOS e Linux. |
 
-Il codice richiede C23, non estensioni specifiche di un compilatore. Servono quindi versioni aggiornate di Clang, GCC o MSVC; la CI rilevera' subito eventuali regressioni di compatibilita'.
+Il codice richiede C23, non estensioni specifiche di un compilatore. Servono
+quindi versioni aggiornate di Clang o GCC; la CI rileva regressioni di
+compatibilita' sulle piattaforme supportate.
 
 ## Installazione
 
@@ -38,13 +40,10 @@ sudo dnf install gcc cmake ninja-build clang-tools-extra
 
 ### Windows
 
-Installare Visual Studio 2022 Build Tools con il workload **Desktop development with C++**, poi in PowerShell:
-
-```powershell
-winget install Kitware.CMake Ninja-build.Ninja LLVM.LLVM
-```
-
-Aprire una shell "Developer PowerShell for VS 2022" per rendere disponibile `cl.exe`.
+Windows non e' supportato in questa fase e non viene eseguito nella CI. CMake
+rifiuta intenzionalmente la configurazione invece di produrre una build non
+verificata. Il supporto verra' rivalutato soltanto quando potra' essere mantenuto
+e testato in modo continuativo.
 
 ## Build
 

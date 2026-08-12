@@ -103,9 +103,9 @@ non includere questi programmi, incorpora anche il sorgente e usa
 sola volta per backend e `pipeline_compilation_seconds` rende visibile il costo
 di startup.
 
-Linux e Windows compilano `metal_backend_stub.c`: le stesse API esistono, ma il
-device risulta non disponibile. In questo modo il progetto e la CI restano
-portabili.
+Linux compila `metal_backend_stub.c`: le stesse API esistono, ma il device
+risulta non disponibile. In questo modo il progetto conserva una build CPU
+verificabile anche senza Metal.
 
 ## 6. Memoria e pool
 

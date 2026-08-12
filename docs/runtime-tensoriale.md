@@ -514,7 +514,7 @@ La prima versione deve essere:
 - deterministica con gli stessi input;
 - priva di allocazioni nel ciclo interno;
 - scritta con cicli espliciti;
-- compilabile con Clang, GCC e MSVC;
+- compilabile con Clang o GCC su macOS e Linux;
 - indipendente da librerie esterne.
 
 Il kernel di riferimento non deve essere cancellato quando arrivera' una versione
@@ -652,7 +652,7 @@ lineari e loss senza inserire cicli hardware-specifici nel modello.
 Il runtime CPU v1 e' completo quando:
 
 - tutte le API pubbliche hanno comportamento e ownership documentati;
-- tutti i test richiesti passano su macOS, Linux e Windows;
+- tutti i test richiesti passano su macOS e Linux;
 - non esistono cicli numerici specifici della CPU nel futuro codice del modello;
 - gli errori non lasciano oggetti parzialmente validi;
 - il backend CPU rappresenta un riferimento confrontabile con backend futuri;

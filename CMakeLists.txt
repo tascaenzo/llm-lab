@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 
+if(WIN32)
+    message(FATAL_ERROR
+        "Windows is not supported by llm-lab at this stage. Use macOS or Linux.")
+endif()
+
 project(
     llm_lab
     VERSION 0.1.0

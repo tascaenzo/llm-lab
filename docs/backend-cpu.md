@@ -30,7 +30,7 @@ Il backend deve:
 - poter selezionare kernel scalari, SIMD o di libreria a runtime/build time;
 - mantenere ownership e ciclo di vita delle risorse espliciti;
 - produrre risultati verificabili contro il percorso di riferimento;
-- compilare con Clang, GCC e MSVC su macOS, Linux e Windows.
+- compilare con Clang o GCC sulle piattaforme supportate, macOS e Linux.
 
 Non deve:
 
@@ -73,7 +73,7 @@ src/runtime/
       cpu_executor.h
       cpu_atomic.h         atomiche C/Interlocked portabili
       cpu_features.c       rilevamento dei processori disponibili
-      cpu_threads.c        astrazione pthread/Windows
+      cpu_threads.c        astrazione dei thread del backend
       cpu_threads.h
     metal/                 backend GPU Apple separato
     cuda/                  futuro
@@ -231,10 +231,9 @@ ritornata. L'asincronia tra operazioni e' un problema separato e futuro.
 
 ### 6.1 Portabilita' dei thread
 
-`cpu_threads.c` incapsula pthread su macOS/Linux e thread, critical section e
-condition variable Win32 su Windows. Questa scelta evita di dipendere da
-`<threads.h>`, che non e' disponibile in tutte le toolchain C23 supportate. Le
-API di sistema non escono da `backends/cpu/`.
+`cpu_threads.c` incapsula pthread su macOS e Linux. Questa scelta evita di
+dipendere da `<threads.h>`, che non e' disponibile in tutte le toolchain C23
+supportate. Le API di sistema non escono da `backends/cpu/`.
 
 ### 6.2 Scheduling
 
