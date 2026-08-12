@@ -85,18 +85,25 @@ native del dispositivo.
 
 ## 5. Organizzazione proposta
 
-Per mantenere il progetto facile da seguire, il runtime usa un solo header
-pubblico e pochi file sorgenti organizzati per responsabilita':
+Per mantenere il progetto facile da seguire, l'API pubblica e i contratti
+privati sono divisi per responsabilita'. `runtime.h` resta un umbrella
+compatibile per i chiamanti che desiderano l'intera API:
 
 ```text
 include/runtime/
-  runtime.h          tipi e API pubblica
+  types.h            status, dtype, device e tipi opachi
+  backend.h          lifecycle e configurazione dei backend
+  tensor.h           descrittore, ownership e memoria dei tensori
+  operations.h       operazioni numeriche pubbliche
+  runtime.h          umbrella dei quattro header pubblici
 
 src/runtime/
   tensor.c           forma, stride e ciclo di vita
   memory.c           storage, allocazione e copie
   backend.c          creazione, capacita' e dispatch
-  runtime_internal.h strutture e contratti privati
+  backend_internal.h contratto privato Runtime -> Backend
+  storage_internal.h storage e allocazione privati
+  tensor_internal.h  validazione tensoriale privata
   operations.c       controlli comuni delle operazioni
   backends/
     cpu/
@@ -243,9 +250,9 @@ shape   = [2, 3]
 strides = [3, 1]
 ```
 
-`strides` e `offset` vengono conservati fin dalla v1 per rendere possibile una
-successiva API di viste. Le prime operazioni possono rifiutare con uno stato
-esplicito i layout non contigui che non supportano.
+`llm_tensor_reshape` crea una view contigua modificando shape e stride senza
+duplicare i dati. `offset` resta zero. View non contigue, transpose e slice
+verranno aggiunte soltanto quando richieste dal modello.
 
 ### 7.3 Ciclo di vita
 
@@ -261,6 +268,11 @@ void llm_tensor_destroy(llm_tensor *tensor);
 llm_status llm_tensor_move(llm_tensor *source,
                            llm_tensor *destination);
 
+llm_status llm_tensor_reshape(const llm_tensor *input,
+                              size_t rank,
+                              const size_t *shape,
+                              llm_tensor *out_view);
+
 int llm_tensor_is_contiguous(const llm_tensor *tensor);
 
 llm_device_type llm_tensor_device(const llm_tensor *tensor);
@@ -271,16 +283,14 @@ Il chiamante inizializza `out_tensor` a zero prima della creazione.
 tensore vuoto in caso di ogni altro errore.
 `llm_tensor_destroy` accetta anche un tensore vuoto e lo azzera dopo il rilascio.
 `llm_tensor_move` trasferisce l'ownership in una destinazione vuota e azzera la
-sorgente, evitando copie proprietarie accidentali.
-
-Nella v1 ogni tensore creato possiede il proprio storage. Le viste e la
-condivisione dello storage verranno specificate in un incremento successivo;
-`offset` e `strides` evitano di dover cambiare la rappresentazione pubblica.
+sorgente, evitando copie proprietarie accidentali. `llm_tensor_reshape` richiede
+un input contiguo, lo stesso numero di elementi e un output vuoto. Incrementa il
+reference count dello storage; distruggere l'originale non invalida la view.
 
 Una struttura `llm_tensor` proprietaria non deve essere copiata con una semplice
-assegnazione C, perche' due strutture finirebbero per credere di possedere lo
-stesso storage. Il trasferimento di ownership dovra' usare una funzione dedicata
-oppure avvenire tramite il puntatore fornito dal chiamante.
+assegnazione C, perche' non incrementerebbe il reference count dello storage.
+Il trasferimento usa `llm_tensor_move`; la condivisione usa una funzione di view
+come `llm_tensor_reshape`.
 
 ## 8. Gestione della memoria
 
@@ -504,7 +514,7 @@ La prima versione deve essere:
 - deterministica con gli stessi input;
 - priva di allocazioni nel ciclo interno;
 - scritta con cicli espliciti;
-- compilabile con Clang, GCC e MSVC;
+- compilabile con Clang o GCC su macOS e Linux;
 - indipendente da librerie esterne.
 
 Il kernel di riferimento non deve essere cancellato quando arrivera' una versione
@@ -642,7 +652,7 @@ lineari e loss senza inserire cicli hardware-specifici nel modello.
 Il runtime CPU v1 e' completo quando:
 
 - tutte le API pubbliche hanno comportamento e ownership documentati;
-- tutti i test richiesti passano su macOS, Linux e Windows;
+- tutti i test richiesti passano su macOS e Linux;
 - non esistono cicli numerici specifici della CPU nel futuro codice del modello;
 - gli errori non lasciano oggetti parzialmente validi;
 - il backend CPU rappresenta un riferimento confrontabile con backend futuri;

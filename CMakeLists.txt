@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.24)
 
+if(WIN32)
+    message(FATAL_ERROR
+        "Windows is not supported by llm-lab at this stage. Use macOS or Linux.")
+endif()
+
 project(
     llm_lab
     VERSION 0.1.0
@@ -24,8 +29,11 @@ add_library(runtime STATIC
     src/runtime/backends/cpu/cpu_executor.c
     src/runtime/backends/cpu/cpu_features.c
     src/runtime/backends/cpu/cpu_kernels.c
+    src/runtime/backends/cpu/cpu_linear.c
     src/runtime/backends/cpu/cpu_operations.c
+    src/runtime/backends/cpu/cpu_optimizer.c
     src/runtime/backends/cpu/cpu_simd.c
+    src/runtime/backends/cpu/cpu_transformer.c
     src/runtime/backends/cpu/cpu_threads.c
     src/runtime/memory.c
     src/runtime/operations.c

@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <stdint.h>
 
-#include "runtime_internal.h"
+#include "backend_internal.h"
 
 #ifdef __OBJC__
 #import <Metal/Metal.h>

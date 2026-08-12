@@ -17,6 +17,8 @@ La struttura separa le responsabilita':
 - `fixtures/`: corpus e modelli minimi, deterministici e versionabili.
 
 Lo smoke test `benchmark.runtime.report_smoke` esegue il report hardware rapido.
+Il report comprende tutti i kernel CPU, incluse le operazioni Transformer e
+AdamW, e verifica il valore prodotto prima di accettare una misura.
 Su macOS misura anche Metal quando il runner espone realmente il device; sugli
 altri sistemi verifica il percorso CPU e lo stub portabile.
 `benchmark.runtime.performance_suite_smoke` controlla invece che l'orchestratore

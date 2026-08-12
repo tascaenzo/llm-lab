@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "runtime/runtime.h"
+#include "runtime/types.h"
 
 llm_status llm_cpu_add_f32(const float *left, const float *right, float *output,
                            size_t value_count);

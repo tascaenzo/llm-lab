@@ -4,7 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "runtime/runtime.h"
+#include "runtime/backend.h"
+#include "runtime/operations.h"
 #include "test_support.h"
 
 static int close_enough(float left, float right) { return fabsf(left - right) < 2.0e-5F; }
@@ -57,6 +58,43 @@ static int test_memory_and_elementwise(llm_backend *backend) {
     llm_tensor_destroy(&output);
     llm_tensor_destroy(&right);
     llm_tensor_destroy(&left);
+    return EXIT_SUCCESS;
+}
+
+static int test_reshape_shared_storage(llm_backend *backend) {
+    llm_metal_backend_metrics baseline = {0};
+    TEST_ASSERT(llm_backend_metal_get_metrics(backend, &baseline) == LLM_OK);
+
+    const size_t source_shape[] = {2U, 3U};
+    const size_t view_shape[] = {6U};
+    llm_tensor source = {0};
+    llm_tensor view = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, source_shape, &source) == LLM_OK);
+
+    llm_metal_backend_metrics after_create = {0};
+    TEST_ASSERT(llm_backend_metal_get_metrics(backend, &after_create) == LLM_OK);
+    TEST_ASSERT(after_create.active_buffer_count == baseline.active_buffer_count + 1U);
+
+    TEST_ASSERT(llm_tensor_reshape(&source, 1U, view_shape, &view) == LLM_OK);
+    llm_metal_backend_metrics after_reshape = {0};
+    TEST_ASSERT(llm_backend_metal_get_metrics(backend, &after_reshape) == LLM_OK);
+    TEST_ASSERT(after_reshape.active_buffer_count == after_create.active_buffer_count);
+
+    const float expected[] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
+    TEST_ASSERT(llm_tensor_write(backend, &source, expected, sizeof(expected)) == LLM_OK);
+    llm_tensor_destroy(&source);
+    llm_metal_backend_metrics after_source_destroy = {0};
+    TEST_ASSERT(llm_backend_metal_get_metrics(backend, &after_source_destroy) == LLM_OK);
+    TEST_ASSERT(after_source_destroy.active_buffer_count == after_create.active_buffer_count);
+
+    float actual[6] = {0};
+    TEST_ASSERT(llm_tensor_read(backend, &view, actual, sizeof(actual)) == LLM_OK);
+    TEST_ASSERT(memcmp(expected, actual, sizeof(expected)) == 0);
+
+    llm_tensor_destroy(&view);
+    llm_metal_backend_metrics after_view_destroy = {0};
+    TEST_ASSERT(llm_backend_metal_get_metrics(backend, &after_view_destroy) == LLM_OK);
+    TEST_ASSERT(after_view_destroy.active_buffer_count == baseline.active_buffer_count);
     return EXIT_SUCCESS;
 }
 
@@ -417,6 +455,7 @@ int main(void) {
     llm_backend_destroy(cpu);
 
     const int result = test_memory_and_elementwise(backend) == EXIT_SUCCESS &&
+                               test_reshape_shared_storage(backend) == EXIT_SUCCESS &&
                                test_batch_metrics_and_buffer_pool(backend) == EXIT_SUCCESS &&
                                test_reductions_and_matmul(backend) == EXIT_SUCCESS &&
                                test_matmul_tile_boundaries(backend) == EXIT_SUCCESS &&

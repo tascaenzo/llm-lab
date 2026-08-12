@@ -1,4 +1,4 @@
-#include "runtime/runtime.h"
+#include "runtime/backend.h"
 
 int llm_backend_metal_is_available(void) { return 0; }
 

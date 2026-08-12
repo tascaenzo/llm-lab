@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -27,8 +27,9 @@ jobs:
           cmake --build --preset debug --parallel --target
           encode_decode model_io pretokenizer training dataset_test
           runtime_test runtime_operations_test runtime_language_operations_test
-          runtime_cpu_backend_test runtime_metal_backend_test
-          runtime_cpu_benchmark runtime_benchmark runtime_benchmark_report
+          runtime_cpu_backend_test runtime_cpu_transformer_test
+          runtime_metal_backend_test
+          runtime_benchmark runtime_benchmark_report
 
       - name: Run unit tests
         run: >
@@ -53,7 +54,8 @@ jobs:
         run: >
           cmake --build build/sanitizers --parallel --target
           runtime_test runtime_operations_test runtime_language_operations_test
-          runtime_cpu_backend_test runtime_metal_backend_test
+          runtime_cpu_backend_test runtime_cpu_transformer_test
+          runtime_metal_backend_test
 
       - name: Run runtime tests
         run: >

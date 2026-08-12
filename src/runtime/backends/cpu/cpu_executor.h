@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 
-#include "runtime/runtime.h"
+#include "runtime/types.h"
 
 typedef struct llm_cpu_executor llm_cpu_executor;
 

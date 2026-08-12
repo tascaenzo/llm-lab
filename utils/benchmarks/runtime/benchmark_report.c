@@ -212,6 +212,11 @@ static cpu_benchmark_config profile_config(report_profile profile) {
         .rows = 256U,
         .columns = 256U,
         .inner_size = 256U,
+        .batch_size = 1U,
+        .sequence_length = 32U,
+        .query_head_count = 4U,
+        .key_value_head_count = 2U,
+        .head_dimension = 32U,
         .warmup_iterations = 2U,
         .measured_iterations = 7U,
         .minimum_sample_seconds = 0.005,
@@ -223,6 +228,7 @@ static cpu_benchmark_config profile_config(report_profile profile) {
         config.rows = 64U;
         config.columns = 128U;
         config.inner_size = 64U;
+        config.sequence_length = 16U;
         config.warmup_iterations = 1U;
         config.measured_iterations = 3U;
         config.minimum_sample_seconds = 0.001;
@@ -231,6 +237,10 @@ static cpu_benchmark_config profile_config(report_profile profile) {
         config.rows = 1024U;
         config.columns = 1024U;
         config.inner_size = 1024U;
+        config.sequence_length = 128U;
+        config.query_head_count = 8U;
+        config.key_value_head_count = 2U;
+        config.head_dimension = 64U;
         config.warmup_iterations = 3U;
         config.measured_iterations = 15U;
         config.minimum_sample_seconds = 0.02;
@@ -307,11 +317,19 @@ static size_t dtype_summary_index(llm_dtype dtype) {
 
 static void format_shape(cpu_benchmark_operation operation, const cpu_benchmark_config *config,
                          char *output, size_t capacity) {
-    if (operation == CPU_BENCHMARK_COPY || operation == CPU_BENCHMARK_ADD) {
+    if (operation <= CPU_BENCHMARK_ACCUMULATE || operation == CPU_BENCHMARK_SILU ||
+        operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW) {
         (void)snprintf(output, capacity, "%zu elementi", config->elements);
-    } else if (operation == CPU_BENCHMARK_MATMUL) {
+    } else if (operation == CPU_BENCHMARK_MATMUL ||
+               operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT ||
+               operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT) {
         (void)snprintf(output, capacity, "%zux%zux%zu", config->rows, config->inner_size,
                        config->columns);
+    } else if (operation == CPU_BENCHMARK_ROPE || operation == CPU_BENCHMARK_ROPE_BACKWARD ||
+               operation == CPU_BENCHMARK_ATTENTION ||
+               operation == CPU_BENCHMARK_ATTENTION_BACKWARD) {
+        (void)snprintf(output, capacity, "B%zu S%zu H%zu D%zu", config->batch_size,
+                       config->sequence_length, config->query_head_count, config->head_dimension);
     } else {
         (void)snprintf(output, capacity, "%zux%zu", config->rows, config->columns);
     }
@@ -395,6 +413,10 @@ static void run_backend(const machine_information *machine, runtime_benchmark_ba
                         cpu_benchmark_config *config, report_summary *summary) {
     print_backend_header(machine, backend);
     for (size_t operation = 0U; operation < CPU_BENCHMARK_OPERATION_COUNT; ++operation) {
+        if (runtime_benchmark_operation_supported(backend, (cpu_benchmark_operation)operation) ==
+            0) {
+            continue;
+        }
         (void)run_one(backend, (cpu_benchmark_operation)operation, LLM_DTYPE_F32, config, summary);
     }
     (void)run_one(backend, CPU_BENCHMARK_MATMUL, LLM_DTYPE_F16, config, summary);
