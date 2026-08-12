@@ -30,7 +30,9 @@ Per studiare l'intero percorso e il ruolo di ogni file consulta la
 
 La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
-`.llmdat` e fornisce batch input/target al futuro modello. Il runtime tensoriale
+`.llmdat` e fornisce batch input/target al modello M0. M0 e' un language model
+CPU reale, piccolo e backend-agnostic: embedding, output head, cross-entropy,
+backward esplicito e AdamW. Il runtime tensoriale
 CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
 riduzioni, matmul, gather/scatter, softmax, cross-entropy e le primitive F32 di
 training: matmul trasposta, accumulo, SiLU, RMSNorm, RoPE, attention GQA causale
@@ -39,9 +41,10 @@ asincroni espliciti, metriche e primitive F32 di base; il prossimo incremento
 porta tutte le primitive di training sul device fino alla parita' con la suite
 contrattuale CPU. Il runtime v1 accetta soltanto F32/U32: F16/BF16 sono
 riservati e cast o mixed precision non fanno parte del contratto corrente.
-Le primitive Metal vengono completate prima di costruire i layer neurali sopra
-queste API. I sorgenti specifici dell'hardware restano separati sotto
-`src/runtime/backends/`, cosi' CPU e Metal non entrano nel codice del modello.
+Le primitive Metal mancanti vengono completate dopo M0, guidate dalle forme e
+dai colli di bottiglia del modello reale. I sorgenti specifici dell'hardware
+restano separati sotto `src/runtime/backends/`, cosi' CPU e Metal non entrano
+nel codice del modello.
 
 La suite prestazionale unificata accetta backend, operazioni, forme e liste di
 thread configurabili; copre tutti i 27 workload CPU, mostra una
@@ -157,6 +160,60 @@ finale mostra documenti e token prodotti per ogni split; durante il lavoro stand
 error mostra percentuale, throughput ed ETA. Formato, token `<EOD>` e batcher sono
 specificati in [docs/dataset.md](docs/dataset.md).
 
+## Addestrare il primo Transformer M1
+
+M1 usa `embedding -> RMSNorm -> Q/K/V + RoPE -> causal attention -> residual
+-> output head`.
+E' un primo Transformer con contesto causale, addestrato su CPU ma indipendente
+dal backend. M0 resta disponibile con `--layers 0` per confronti e compatibilita'.
+
+```sh
+./build/debug/llm-lab model train \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1.train.llmdat \
+  100 --batch-size 2 --context 32 --hidden 64 \
+  --learning-rate 0.001 --seed 1
+```
+
+Il comando stampa loss e configurazione in JSON. Per conservare il risultato,
+aggiungi `--checkpoint artifacts/models/m1.llmckpt`; per continuare da quel
+file usa `--resume artifacts/models/m1.llmckpt --checkpoint ...`. Il checkpoint
+salva pesi, momenti AdamW, step, configurazione e stato del batcher, cosi' la
+sequenza dei batch prosegue identica. La valutazione su validation e'
+disponibile con `model evaluate`; scheduler, clipping e checkpoint periodici
+restano fuori dalla milestone corrente. I contratti tecnici sono in
+[M0](docs/model-m0.md) e [M1](docs/model-m1-transformer.md).
+
+Prima del primo aggiornamento il comando valida tutto il `.llmdat` (checksum e
+intervallo degli ID). Sul dataset Wikipedia la lettura di circa 5,8 GiB e' quindi
+normale; `Verifica dataset` ne mostra avanzamento e ETA, poi `Training modello`
+mostra step, loss e velocita'.
+
+Per provare un checkpoint con decoding greedy:
+
+```sh
+./build/debug/llm-lab model generate artifacts/models/m1-step-10000.llmckpt \
+  artifacts/tokenizers/italiano-wikipedia-v1.llmtok 32 "La capitale d'Italia"
+```
+
+M1 ha un solo blocco causale: questa prova verifica il percorso checkpoint →
+token → logits → testo, ma un modello piccolo e addestrato per pochi step non
+produce ancora articoli o dialoghi affidabili.
+
+Per misurare invece il checkpoint sullo split non visto:
+
+```sh
+./build/debug/llm-lab model evaluate \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1.validation.llmdat \
+  artifacts/models/m1-step-10000.llmckpt 100 --batch-size 2 --seed 1
+```
+
+M1 e' volutamente un riferimento ristretto: al momento accetta soltanto zero
+layer (M0) oppure un layer e una head, senza MLP. La configurazione contiene
+gia' `hidden_size`, `layer_count`, `head_count` e `feed_forward_size`, ma il
+decoder realmente scalabile arrivera' in M2 con multi-head, SwiGLU e una pila
+di blocchi. Prima si porta M1 a parita' di training su Metal, poi M2 potra'
+usare gli stessi checkpoint, trainer e confini backend-agnostic.
+
 ## Struttura
 
 ```text
@@ -165,6 +222,7 @@ artifacts/ tokenizer addestrati e versionati
 utils/benchmarks/ strumenti per misure prestazionali e confronto delle regressioni
 include/   header pubblici dei moduli implementati
 src/       implementazione dei moduli implementati
+src/model/ implementazione del modello, parametri, layer e trainer M0/M1
 utils/     piccole utility riproducibili per dati e sviluppo
 tests/     test C, test Python, integrazione CLI e fixture minime
 data/      corpus locali: originali, puliti e derivati (non versionati)

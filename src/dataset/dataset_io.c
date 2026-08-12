@@ -254,7 +254,9 @@ static lm_dataset_status validate_header(const unsigned char header[LM_DATASET_H
     return LM_DATASET_OK;
 }
 
-lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset) {
+lm_dataset_status lm_dataset_open_with_progress(const char *path,
+                                                lm_dataset_open_progress_callback progress_callback,
+                                                void *progress_context, lm_dataset **out_dataset) {
     if (path == NULL || out_dataset == NULL) {
         return LM_DATASET_INVALID_ARGUMENT;
     }
@@ -277,6 +279,11 @@ lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset) {
     tokenizer_sha256_context sha256;
     tokenizer_sha256_init(&sha256);
     uint64_t remaining = dataset == NULL ? 0U : dataset->token_count;
+    const uint64_t total_payload_bytes = remaining * LM_DATASET_TOKEN_SIZE;
+    uint64_t checked_payload_bytes = 0U;
+    if (status == LM_DATASET_OK && progress_callback != NULL) {
+        progress_callback(checked_payload_bytes, total_payload_bytes, progress_context);
+    }
     unsigned char buffer[64U * 1024U];
     while (status == LM_DATASET_OK && remaining != 0U) {
         const uint64_t maximum_tokens = sizeof(buffer) / LM_DATASET_TOKEN_SIZE;
@@ -296,6 +303,10 @@ lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset) {
             }
         }
         remaining -= tokens_to_read;
+        checked_payload_bytes += bytes_to_read;
+        if (progress_callback != NULL) {
+            progress_callback(checked_payload_bytes, total_payload_bytes, progress_context);
+        }
     }
     unsigned char checksum[32] = {0};
     tokenizer_sha256_final(&sha256, checksum);
@@ -322,6 +333,10 @@ lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset) {
     dataset->file = file;
     *out_dataset = dataset;
     return LM_DATASET_OK;
+}
+
+lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset) {
+    return lm_dataset_open_with_progress(path, NULL, NULL, out_dataset);
 }
 
 void lm_dataset_close(lm_dataset *dataset) {

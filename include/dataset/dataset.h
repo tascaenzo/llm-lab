@@ -41,6 +41,10 @@ typedef void (*lm_dataset_progress_callback)(uint64_t bytes_read, uint64_t total
                                              uint64_t documents_processed,
                                              const uint64_t token_counts[3], void *context);
 
+/** Reports payload bytes checked while an existing .llmdat artifact is opened. */
+typedef void (*lm_dataset_open_progress_callback)(uint64_t bytes_read, uint64_t total_bytes,
+                                                  void *context);
+
 /**
  * Converts a documents.jsonl file into PREFIX.train.llmdat,
  * PREFIX.validation.llmdat and PREFIX.test.llmdat.
@@ -58,6 +62,11 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
 
 /** Opens and fully validates an .llmdat artifact. */
 lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset);
+
+/** Like lm_dataset_open, with optional progress notifications during full payload validation. */
+lm_dataset_status lm_dataset_open_with_progress(const char *path,
+                                                lm_dataset_open_progress_callback progress_callback,
+                                                void *progress_context, lm_dataset **out_dataset);
 
 void lm_dataset_close(lm_dataset *dataset);
 
@@ -80,6 +89,10 @@ void lm_batcher_destroy(lm_batcher *batcher);
 
 size_t lm_batcher_batch_size(const lm_batcher *batcher);
 size_t lm_batcher_context_length(const lm_batcher *batcher);
+
+/** Returns/restores the PRNG state used for deterministic batch selection. */
+uint64_t lm_batcher_random_state(const lm_batcher *batcher);
+lm_dataset_status lm_batcher_set_random_state(lm_batcher *batcher, uint64_t state);
 
 /** Fills batch_size * context_length input and target tokens. */
 lm_dataset_status lm_batcher_next(lm_batcher *batcher, token_id *out_inputs, token_id *out_targets);

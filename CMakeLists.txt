@@ -159,9 +159,24 @@ target_compile_features(dataset PUBLIC c_std_23)
 target_link_libraries(dataset PUBLIC tokenizer)
 llm_lab_set_warnings(dataset)
 
+add_library(model STATIC
+    src/model/model.c
+    src/model/checkpoint.c
+    src/model/parameter.c
+    src/model/trainer.c
+    src/model/layers/embedding.c
+    src/model/layers/transformer.c
+    src/model/layers/output_head.c)
+target_include_directories(model
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/model)
+target_compile_features(model PUBLIC c_std_23)
+target_link_libraries(model PUBLIC dataset runtime)
+llm_lab_set_warnings(model)
+
 add_executable(llm_lab_cli apps/llm-lab/main.c)
 target_compile_features(llm_lab_cli PRIVATE c_std_23)
-target_link_libraries(llm_lab_cli PRIVATE dataset tokenizer)
+target_link_libraries(llm_lab_cli PRIVATE model dataset tokenizer)
 llm_lab_set_warnings(llm_lab_cli)
 set_target_properties(llm_lab_cli PROPERTIES OUTPUT_NAME llm-lab)
 

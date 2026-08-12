@@ -387,22 +387,18 @@ piu' ampie.
 - CLI con avanzamento;
 - test unitari, integrazione e sanitizer.
 
-### Non ancora implementato
+### Modello implementato e prossimo gate
 
-- embedding del modello;
-- forward e backward;
-- optimizer;
-- Transformer;
-- checkpoint del modello;
-- ciclo di validation/test;
-- generazione autoregressiva del modello.
+- embedding, forward, backward, registry dei parametri e AdamW nel trainer;
+- checkpoint atomici, ripresa, valutazione su validation e generazione greedy;
+- M0 (baseline) e M1 (un blocco Transformer causale CPU).
 
-La prossima milestone non consiste quindi nel raccogliere altri dati. Consiste
-nel completare lo strato di esecuzione parallela del backend CPU e misurarne i
-kernel principali. Backward e primi layer verranno costruiti subito dopo, senza
-inserire calcoli hardware-specifici nel modello. La teoria e' in
-[runtime tensoriale](10-runtime-tensoriale.md) e
-[backend CPU](11-backend-cpu.md).
+La prossima milestone non consiste nel raccogliere altri dati o far crescere
+subito il numero di parametri. Consiste nella parita' del training M1 su Metal:
+RMSNorm, RoPE, attention causale, backward e AdamW devono produrre risultati
+coerenti con CPU. M1 e' il riferimento piccolo; la configurazione scalabile
+multi-layer/multi-head/SwiGLU seguira' in M2. Il piano e i gate sono descritti
+in [primo modello addestrabile](13-primo-modello-addestrabile.md).
 
 ## 14. Domande di controllo
 
