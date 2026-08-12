@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "runtime/runtime.h"
+#include "runtime/backend.h"
+#include "runtime/operations.h"
+#include "runtime/tensor.h"
 #include "test_support.h"
 
 static int test_backend_lifecycle(void) {
@@ -72,6 +74,93 @@ static int test_tensor_layout_and_lifecycle(void) {
     llm_tensor_destroy(&invalid);
     llm_tensor_destroy(NULL);
     TEST_ASSERT(llm_tensor_device(&moved) == LLM_DEVICE_NONE);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
+static int test_tensor_reshape_and_shared_storage(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+
+    const size_t source_shape[] = {2U, 3U, 4U};
+    const size_t matrix_shape[] = {6U, 4U};
+    const size_t vector_shape[] = {24U};
+    llm_tensor source = {0};
+    llm_tensor matrix_view = {0};
+    llm_tensor vector_view = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 3U, source_shape, &source) == LLM_OK);
+    TEST_ASSERT(llm_tensor_reshape(&source, 2U, matrix_shape, &matrix_view) == LLM_OK);
+    TEST_ASSERT(matrix_view.storage == source.storage);
+    TEST_ASSERT(matrix_view.rank == 2U && matrix_view.shape[0] == 6U && matrix_view.shape[1] == 4U);
+    TEST_ASSERT(matrix_view.strides[0] == 4U && matrix_view.strides[1] == 1U);
+    TEST_ASSERT(matrix_view.element_count == source.element_count);
+    TEST_ASSERT(matrix_view.dtype == source.dtype);
+    TEST_ASSERT(llm_tensor_device(&matrix_view) == LLM_DEVICE_CPU);
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, 1U, vector_shape, &vector_view) == LLM_OK);
+    TEST_ASSERT(vector_view.storage == source.storage);
+
+    float input[24] = {0};
+    for (size_t index = 0U; index < 24U; ++index) {
+        input[index] = (float)index * 0.25F;
+    }
+    TEST_ASSERT(llm_tensor_write(backend, &source, input, sizeof(input)) == LLM_OK);
+    float output[24] = {0};
+    TEST_ASSERT(llm_tensor_read(backend, &vector_view, output, sizeof(output)) == LLM_OK);
+    TEST_ASSERT(memcmp(input, output, sizeof(input)) == 0);
+
+    TEST_ASSERT(llm_tensor_fill_f32(backend, &matrix_view, 3.5F) == LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &source, output, sizeof(output)) == LLM_OK);
+    for (size_t index = 0U; index < 24U; ++index) {
+        TEST_ASSERT(output[index] == 3.5F);
+    }
+
+    llm_tensor_destroy(&source);
+    TEST_ASSERT(llm_tensor_device(&source) == LLM_DEVICE_NONE);
+    TEST_ASSERT(llm_tensor_fill_f32(backend, &matrix_view, -2.0F) == LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &vector_view, output, sizeof(output)) == LLM_OK);
+    for (size_t index = 0U; index < 24U; ++index) {
+        TEST_ASSERT(output[index] == -2.0F);
+    }
+
+    const size_t wrong_shape[] = {5U, 5U};
+    const size_t zero_shape[] = {24U, 0U};
+    llm_tensor invalid = {0};
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, 2U, wrong_shape, &invalid) == LLM_INVALID_SHAPE);
+    TEST_ASSERT(invalid.storage == NULL);
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, 2U, zero_shape, &invalid) == LLM_INVALID_SHAPE);
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, LLM_TENSOR_MAX_RANK + 1U, source_shape,
+                                   &invalid) == LLM_INVALID_SHAPE);
+    TEST_ASSERT(llm_tensor_reshape(NULL, 1U, vector_shape, &invalid) == LLM_INVALID_ARGUMENT);
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, 1U, vector_shape, NULL) == LLM_INVALID_ARGUMENT);
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, 1U, vector_shape, &matrix_view) ==
+                LLM_INVALID_ARGUMENT);
+
+    llm_tensor malformed = matrix_view;
+    malformed.strides[0] = 5U;
+    TEST_ASSERT(llm_tensor_reshape(&malformed, 1U, vector_shape, &invalid) ==
+                LLM_UNSUPPORTED_LAYOUT);
+
+    llm_tensor occupied = {0};
+    const size_t occupied_shape[] = {1U};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 1U, occupied_shape, &occupied) == LLM_OK);
+    llm_storage *occupied_storage = occupied.storage;
+    TEST_ASSERT(llm_tensor_reshape(&matrix_view, 1U, vector_shape, &occupied) ==
+                LLM_INVALID_ARGUMENT);
+    TEST_ASSERT(occupied.storage == occupied_storage);
+
+    llm_tensor scalar_source = {0};
+    llm_tensor scalar_view = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 1U, occupied_shape, &scalar_source) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_reshape(&scalar_source, 0U, NULL, &scalar_view) == LLM_OK);
+    TEST_ASSERT(scalar_view.rank == 0U && scalar_view.element_count == 1U);
+
+    llm_tensor_destroy(&scalar_source);
+    llm_tensor_destroy(&scalar_view);
+    llm_tensor_destroy(&occupied);
+    llm_tensor_destroy(&invalid);
+    llm_tensor_destroy(&matrix_view);
+    llm_tensor_destroy(&vector_view);
     llm_backend_destroy(backend);
     return EXIT_SUCCESS;
 }
@@ -250,6 +339,7 @@ static int test_u32_tensor_memory(void) {
 int main(void) {
     if (test_backend_lifecycle() != EXIT_SUCCESS ||
         test_tensor_layout_and_lifecycle() != EXIT_SUCCESS ||
+        test_tensor_reshape_and_shared_storage() != EXIT_SUCCESS ||
         test_tensor_memory_operations() != EXIT_SUCCESS ||
         test_u32_tensor_memory() != EXIT_SUCCESS ||
         test_reduced_precision_operations() != EXIT_SUCCESS) {

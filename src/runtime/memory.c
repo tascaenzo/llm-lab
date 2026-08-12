@@ -1,6 +1,7 @@
+#include <stdint.h>
 #include <stdlib.h>
 
-#include "runtime_internal.h"
+#include "tensor_internal.h"
 
 llm_status llm_storage_create(llm_backend *backend, size_t byte_count, llm_storage **out_storage) {
     if (backend == NULL || backend->ops == NULL || backend->ops->allocate == NULL ||
@@ -20,12 +21,28 @@ llm_status llm_storage_create(llm_backend *backend, size_t byte_count, llm_stora
     }
     storage->backend = backend;
     storage->byte_count = byte_count;
+    storage->reference_count = 1U;
     *out_storage = storage;
     return LLM_OK;
 }
 
-void llm_storage_destroy(llm_storage *storage) {
-    if (storage == NULL) {
+llm_status llm_storage_retain(llm_storage *storage) {
+    if (storage == NULL || storage->reference_count == 0U) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    if (storage->reference_count == SIZE_MAX) {
+        return LLM_OVERFLOW;
+    }
+    ++storage->reference_count;
+    return LLM_OK;
+}
+
+void llm_storage_release(llm_storage *storage) {
+    if (storage == NULL || storage->reference_count == 0U) {
+        return;
+    }
+    --storage->reference_count;
+    if (storage->reference_count != 0U) {
         return;
     }
     if (storage->backend != NULL && storage->backend->ops != NULL &&

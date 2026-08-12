@@ -1,7 +1,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#include "runtime_internal.h"
+#include "backend_internal.h"
 
 void llm_backend_destroy(llm_backend *backend) {
     if (backend == NULL) {
@@ -58,6 +58,8 @@ const char *llm_status_string(llm_status status) {
         return "unsupported data type";
     case LLM_UNSUPPORTED_DEVICE:
         return "unsupported device";
+    case LLM_UNSUPPORTED_OPERATION:
+        return "unsupported operation";
     case LLM_UNSUPPORTED_LAYOUT:
         return "unsupported tensor layout";
     case LLM_DEVICE_MISMATCH:

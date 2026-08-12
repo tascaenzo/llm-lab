@@ -249,16 +249,10 @@ in questo modo il manifesto punta a uno snapshot preciso, non a un "latest" che
 cambia nel tempo. Il file viene inoltre scaricato dalla directory datata dello
 snapshot, non dall'alias `latest`.
 
-Da macOS o Linux:
+Sulle piattaforme supportate, macOS o Linux:
 
 ```sh
 python3 utils/corpus/download_wikipedia.py
-```
-
-Da Windows PowerShell:
-
-```powershell
-py utils/corpus/download_wikipedia.py
 ```
 
 Il download occupa vari GiB e non viene eseguito automaticamente dal progetto.

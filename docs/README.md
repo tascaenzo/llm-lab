@@ -14,8 +14,9 @@ prima la pagina wiki e poi la specifica corrispondente.
 3. [Tokenizer](tokenizer.md)
 4. [Dataset autoregressivo](dataset.md)
 5. [Runtime tensoriale](runtime-tensoriale.md)
-6. [Backend CPU](backend-cpu.md)
-7. [Backend Metal](backend-metal.md)
+6. [Runtime v1: training minimo su Apple Silicon](runtime-v1-architecture.md)
+7. [Backend CPU](backend-cpu.md)
+8. [Backend Metal](backend-metal.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

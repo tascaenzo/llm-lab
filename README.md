@@ -2,7 +2,10 @@
 
 Un laboratorio in C per capire e costruire, passo dopo passo, un piccolo language model autoregressivo.
 
-Il progetto privilegia chiarezza e portabilita' tra macOS, Linux e Windows. Usa C23, lo standard C piu' recente, e non usa framework di deep learning: ogni componente viene implementato quando diventa necessario e resta osservabile dalla CLI.
+Il progetto privilegia chiarezza e un percorso di sviluppo mirato ad Apple
+Silicon, mantenendo la build CPU disponibile anche su Linux. Usa C23, lo
+standard C piu' recente, e non usa framework di deep learning: ogni componente
+viene implementato quando diventa necessario e resta osservabile dalla CLI.
 
 L'[indice della documentazione implementativa](docs/README.md) raccoglie le
 specifiche tecniche; la [wiki](wiki/README.md) spiega prima la teoria con un
@@ -29,16 +32,19 @@ La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
 `.llmdat` e fornisce batch input/target al futuro modello. Il runtime tensoriale
 CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
-riduzioni, matmul, gather/scatter, softmax e cross-entropy. Il backend Metal
+riduzioni, matmul, gather/scatter, softmax, cross-entropy e le primitive F32 di
+training: matmul trasposta, accumulo, SiLU, RMSNorm, RoPE, attention GQA causale
+con backward e AdamW. Il backend Metal
 esegue lo stesso contratto sulla GPU Apple con pool dei buffer, batch asincroni
 espliciti, metriche, kernel paralleli e matmul tiled FP32/FP16/BF16 con accumulo
-FP32. Il prossimo incremento costruira' backward e layer neurali sopra queste
-API. I sorgenti specifici dell'hardware
+FP32. Il prossimo incremento porta le nuove primitive di training su Metal,
+prima di costruire i layer neurali sopra queste API. I sorgenti specifici dell'hardware
 restano separati sotto `src/runtime/backends/`, cosi' CPU, Metal e futuri backend
 CUDA non entrano nel codice del modello.
 
 La suite prestazionale unificata accetta backend, precisione, operazioni, forme
-e liste di thread configurabili; mostra una tabella e puo' produrre JSONL. Uso,
+e liste di thread configurabili; copre tutti i 29 workload CPU, mostra una
+tabella e puo' produrre JSONL confrontabile con una baseline. Uso,
 tempi GPU ed esempi sono nella
 [specifica del backend Metal](docs/backend-metal.md#11-benchmark-riproducibile).
 
@@ -76,7 +82,7 @@ Baseline e confronto automatico sono descritti nella
 
 - CMake 3.24 o superiore;
 - Ninja;
-- compilatore C con supporto C23: Clang, GCC o MSVC recente;
+- compilatore C con supporto C23: Clang o GCC recente;
 - Git (solo per clonare il progetto).
 - Python 3.8 o superiore (per utility del corpus e test automatici).
 
@@ -88,8 +94,11 @@ Le istruzioni d'installazione per ogni sistema operativo sono in [docs/TOOLCHAIN
 cmake --preset debug
 cmake --build --preset debug
 ./build/debug/llm-lab        # macOS/Linux
-build\debug\llm-lab.exe         # Windows PowerShell
 ```
+
+Windows non e' supportato in questa fase: la configurazione CMake termina con
+un errore esplicito. Il supporto potra' essere riaperto quando esisteranno una
+necessita' concreta e una CI dedicata.
 
 Oppure, su macOS/Linux, sono disponibili le scorciatoie:
 
@@ -165,8 +174,8 @@ wiki/      teoria e roadmap dell'LLM
 
 ## Qualita' e riproducibilita'
 
-- I preset CMake definiscono build Debug e Release in modo identico sui tre sistemi.
-- Gli avvisi importanti del compilatore sono abilitati per Clang, GCC e MSVC.
+- I preset CMake definiscono build Debug e Release su macOS e Linux.
+- Gli avvisi importanti del compilatore sono abilitati per Clang e GCC.
 - `clang-format` impone uno stile consistente.
 - CTest esegue test unitari C, pulizia del corpus e flussi CLI senza dipendenze esterne.
 

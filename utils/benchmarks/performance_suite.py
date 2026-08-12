@@ -19,6 +19,53 @@ DEFAULT_BENCHMARK = (
     PROJECT_ROOT / "build" / "release" / "utils" / "benchmarks" / "runtime_benchmark"
 )
 
+ALL_OPERATIONS = {
+    "zero",
+    "fill",
+    "copy",
+    "cast_down",
+    "cast_up",
+    "add",
+    "multiply",
+    "scale",
+    "accumulate",
+    "reduce_sum",
+    "reduce_max",
+    "reduce_mean_square",
+    "matmul",
+    "matmul_transpose_left",
+    "matmul_transpose_right",
+    "gather",
+    "scatter_add",
+    "silu",
+    "silu_backward",
+    "rms_norm",
+    "rms_norm_backward",
+    "rope",
+    "rope_backward",
+    "attention",
+    "attention_backward",
+    "softmax",
+    "cross_entropy_forward",
+    "cross_entropy_backward",
+    "adamw",
+}
+
+METAL_OPERATIONS = ALL_OPERATIONS - {
+    "matmul_transpose_left",
+    "matmul_transpose_right",
+    "accumulate",
+    "silu",
+    "silu_backward",
+    "rms_norm",
+    "rms_norm_backward",
+    "rope",
+    "rope_backward",
+    "attention",
+    "attention_backward",
+    "adamw",
+}
+
 
 SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
     (
@@ -42,7 +89,8 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         "vector-throughput-f32",
         (
             "--operations",
-            "copy,add",
+            "zero,fill,copy,cast_down,cast_up,add,multiply,scale,accumulate,"
+            "silu,silu_backward,adamw",
             "--precision",
             "f32",
             "--elements",
@@ -53,7 +101,8 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         "row-throughput-f32",
         (
             "--operations",
-            "reduce_sum,gather,scatter_add,softmax,cross_entropy_forward,cross_entropy_backward",
+            "reduce_sum,reduce_max,reduce_mean_square,gather,scatter_add,rms_norm,"
+            "rms_norm_backward,softmax,cross_entropy_forward,cross_entropy_backward",
             "--precision",
             "f32",
             "--rows",
@@ -68,7 +117,7 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
         "matmul-square-f32",
         (
             "--operations",
-            "matmul",
+            "matmul,matmul_transpose_left,matmul_transpose_right",
             "--precision",
             "f32",
             "--rows",
@@ -107,6 +156,36 @@ SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
             "512",
             "--inner",
             "512",
+        ),
+    ),
+    (
+        "cast-throughput-bf16",
+        (
+            "--operations",
+            "cast_down,cast_up",
+            "--precision",
+            "bf16",
+            "--elements",
+            "8388608",
+        ),
+    ),
+    (
+        "transformer-kernels-f32",
+        (
+            "--operations",
+            "rope,rope_backward,attention,attention_backward",
+            "--precision",
+            "f32",
+            "--batch",
+            "1",
+            "--sequence",
+            "128",
+            "--query-heads",
+            "8",
+            "--kv-heads",
+            "2",
+            "--head-dim",
+            "64",
         ),
     ),
     (
@@ -151,7 +230,7 @@ SMOKE_SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run a 40-70 second representative benchmark suite on every available backend."
+            "Run a representative benchmark suite for every runtime kernel."
         )
     )
     parser.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
@@ -205,19 +284,24 @@ def common_arguments(smoke: bool) -> List[str]:
     ]
 
 
-def operation_count(arguments: Sequence[str]) -> int:
+def selected_operations(arguments: Sequence[str]) -> set[str]:
     try:
         operations = arguments[arguments.index("--operations") + 1]
     except (IndexError, ValueError) as error:
         raise ValueError("scenario has no --operations argument") from error
-    return 9 if operations == "all" else len(set(operations.split(",")))
+    return ALL_OPERATIONS if operations == "all" else set(operations.split(","))
 
 
 def expected_result_count(
     scenarios: Sequence[Tuple[str, Sequence[str]]], metal_available: bool
 ) -> int:
-    backend_count = 2 if metal_available else 1
-    return sum(operation_count(arguments) for _, arguments in scenarios) * backend_count
+    total = 0
+    for _, arguments in scenarios:
+        operations = selected_operations(arguments)
+        total += len(operations)
+        if metal_available:
+            total += len(operations & METAL_OPERATIONS)
+    return total
 
 
 def parse_json_line(line: str, scenario: str, line_number: int) -> Dict[str, Any]:
@@ -325,6 +409,11 @@ def dimensions_text(dimensions: Dict[str, Any]) -> str:
         return str(dimensions["elements"])
     if "inner" in dimensions:
         return f'{dimensions["rows"]}x{dimensions["inner"]}x{dimensions["columns"]}'
+    if "batch" in dimensions:
+        return (
+            f'B{dimensions["batch"]}xS{dimensions["sequence"]}x'
+            f'H{dimensions["query_heads"]}xD{dimensions["head_dimension"]}'
+        )
     return f'{dimensions["rows"]}x{dimensions["columns"]}'
 
 

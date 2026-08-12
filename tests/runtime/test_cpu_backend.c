@@ -3,7 +3,8 @@
 #include <stdlib.h>
 
 #include "cpu_executor.h"
-#include "runtime/runtime.h"
+#include "runtime/backend.h"
+#include "runtime/operations.h"
 #include "test_support.h"
 
 typedef struct visit_job {

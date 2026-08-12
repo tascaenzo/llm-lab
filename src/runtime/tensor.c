@@ -1,6 +1,6 @@
 #include <stdint.h>
 
-#include "runtime_internal.h"
+#include "tensor_internal.h"
 
 static llm_status calculate_layout(size_t rank, const size_t *shape, size_t *out_element_count,
                                    size_t out_strides[LLM_TENSOR_MAX_RANK]) {
@@ -68,7 +68,7 @@ void llm_tensor_destroy(llm_tensor *tensor) {
     if (tensor == NULL) {
         return;
     }
-    llm_storage_destroy(tensor->storage);
+    llm_storage_release(tensor->storage);
     *tensor = (llm_tensor){0};
 }
 
@@ -79,6 +79,47 @@ llm_status llm_tensor_move(llm_tensor *source, llm_tensor *destination) {
     }
     *destination = *source;
     *source = (llm_tensor){0};
+    return LLM_OK;
+}
+
+llm_status llm_tensor_reshape(const llm_tensor *input, size_t rank, const size_t *shape,
+                              llm_tensor *out_view) {
+    if (input == NULL || out_view == NULL || input == out_view || input->storage == NULL ||
+        out_view->storage != NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    *out_view = (llm_tensor){0};
+
+    size_t payload_bytes = 0U;
+    llm_status status = llm_tensor_validate(input->storage->backend, input, &payload_bytes);
+    if (status != LLM_OK) {
+        return status;
+    }
+    (void)payload_bytes;
+
+    size_t strides[LLM_TENSOR_MAX_RANK] = {0};
+    size_t element_count = 0U;
+    status = calculate_layout(rank, shape, &element_count, strides);
+    if (status != LLM_OK) {
+        return status;
+    }
+    if (element_count != input->element_count) {
+        return LLM_INVALID_SHAPE;
+    }
+
+    status = llm_storage_retain(input->storage);
+    if (status != LLM_OK) {
+        return status;
+    }
+
+    out_view->storage = input->storage;
+    out_view->rank = rank;
+    out_view->element_count = element_count;
+    out_view->dtype = input->dtype;
+    for (size_t index = 0U; index < rank; ++index) {
+        out_view->shape[index] = shape[index];
+        out_view->strides[index] = strides[index];
+    }
     return LLM_OK;
 }
 

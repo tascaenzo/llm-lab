@@ -27,15 +27,21 @@ static void print_usage(const char *program) {
     printf("Usage: %s [options]\n\n", program);
     printf("Options:\n");
     printf("  --backend NAME      cpu (default), metal, or all\n");
-    printf("  --operations LIST   all or comma-separated: copy,add,reduce_sum,matmul,\n");
-    printf("                      gather,scatter_add,softmax,cross_entropy_forward,\n");
-    printf("                      cross_entropy_backward\n");
+    printf("  --operations LIST   all or comma-separated kernel names\n");
+    printf("                      memory: zero,fill,copy,cast_down,cast_up\n");
+    printf("                      math: add,multiply,scale,accumulate,reduce_*,matmul*\n");
+    printf("                      training: silu*,rms_norm*,rope*,attention*,adamw\n");
     printf("  --threads LIST      comma-separated thread counts; use auto for detection\n");
     printf("  --elements N        vector elements for copy/add (default: 1048576)\n");
     printf("  --rows N            matrix rows (default: 256)\n");
     printf("  --columns N         matrix columns/vocabulary (default: 256)\n");
     printf("  --inner N           matmul inner dimension (default: 256)\n");
-    printf("  --precision NAME    matmul inputs: f32 (default), f16, or bf16\n");
+    printf("  --batch N           Transformer batch size (default: 1)\n");
+    printf("  --sequence N        Transformer sequence length (default: 32)\n");
+    printf("  --query-heads N     attention query heads (default: 4)\n");
+    printf("  --kv-heads N        attention key/value heads (default: 2)\n");
+    printf("  --head-dim N        even attention head dimension (default: 32)\n");
+    printf("  --precision NAME    matmul/cast precision: f32, f16, or bf16\n");
     printf("  --warmup N          warm-up iterations (default: 2)\n");
     printf("  --iterations N      measured iterations (default: 10)\n");
     printf("  --sample-ms N       minimum duration per timing sample (default: 10)\n");
@@ -203,6 +209,26 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
             if (parse_size(value, 0, &config->workload.inner_size) == 0) {
                 return 0;
             }
+        } else if (strcmp(option, "--batch") == 0) {
+            if (parse_size(value, 0, &config->workload.batch_size) == 0) {
+                return 0;
+            }
+        } else if (strcmp(option, "--sequence") == 0) {
+            if (parse_size(value, 0, &config->workload.sequence_length) == 0) {
+                return 0;
+            }
+        } else if (strcmp(option, "--query-heads") == 0) {
+            if (parse_size(value, 0, &config->workload.query_head_count) == 0) {
+                return 0;
+            }
+        } else if (strcmp(option, "--kv-heads") == 0) {
+            if (parse_size(value, 0, &config->workload.key_value_head_count) == 0) {
+                return 0;
+            }
+        } else if (strcmp(option, "--head-dim") == 0) {
+            if (parse_size(value, 0, &config->workload.head_dimension) == 0) {
+                return 0;
+            }
         } else if (strcmp(option, "--precision") == 0) {
             if (strcmp(value, "f32") == 0) {
                 config->workload.matmul_dtype = LLM_DTYPE_F32;
@@ -316,13 +342,33 @@ static void print_jsonl_metadata(const benchmark_cli_config *config) {
     (void)fflush(stdout);
 }
 
+static int operation_uses_vector_shape(cpu_benchmark_operation operation) {
+    return operation <= CPU_BENCHMARK_ACCUMULATE || operation == CPU_BENCHMARK_SILU ||
+           operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW;
+}
+
+static int operation_uses_matmul_shape(cpu_benchmark_operation operation) {
+    return operation == CPU_BENCHMARK_MATMUL || operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT ||
+           operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT;
+}
+
+static int operation_uses_transformer_shape(cpu_benchmark_operation operation) {
+    return operation == CPU_BENCHMARK_ROPE || operation == CPU_BENCHMARK_ROPE_BACKWARD ||
+           operation == CPU_BENCHMARK_ATTENTION || operation == CPU_BENCHMARK_ATTENTION_BACKWARD;
+}
+
 static void print_jsonl_dimensions(cpu_benchmark_operation operation,
                                    const cpu_benchmark_config *config) {
-    if (operation == CPU_BENCHMARK_COPY || operation == CPU_BENCHMARK_ADD) {
+    if (operation_uses_vector_shape(operation) != 0) {
         printf("{\"elements\":%zu}", config->elements);
-    } else if (operation == CPU_BENCHMARK_MATMUL) {
+    } else if (operation_uses_matmul_shape(operation) != 0) {
         printf("{\"rows\":%zu,\"inner\":%zu,\"columns\":%zu}", config->rows, config->inner_size,
                config->columns);
+    } else if (operation_uses_transformer_shape(operation) != 0) {
+        printf("{\"batch\":%zu,\"sequence\":%zu,\"query_heads\":%zu,"
+               "\"kv_heads\":%zu,\"head_dimension\":%zu}",
+               config->batch_size, config->sequence_length, config->query_head_count,
+               config->key_value_head_count, config->head_dimension);
     } else {
         printf("{\"rows\":%zu,\"columns\":%zu}", config->rows, config->columns);
     }
@@ -338,7 +384,7 @@ static void print_jsonl_result(const cpu_benchmark_result *result,
     const double variation = result->mean_seconds > 0.0
                                  ? result->standard_deviation_seconds / result->mean_seconds
                                  : 0.0;
-    printf("{\"type\":\"result\",\"schema_version\":2,\"backend\":\"%s\","
+    printf("{\"type\":\"result\",\"schema_version\":3,\"backend\":\"%s\","
            "\"device\":\"%s\",\"dtype\":\"%s\",\"operation\":\"%s\","
            "\"requested_threads\":%zu,\"actual_threads\":%zu,\"baseline_threads\":%zu,"
            "\"repetitions_per_sample\":%zu,\"deterministic\":%s,\"dimensions\":",
@@ -350,15 +396,17 @@ static void print_jsonl_result(const cpu_benchmark_result *result,
     print_jsonl_dimensions(result->operation, config);
     printf(",\"minimum_seconds\":%.9f,\"median_seconds\":%.9f,\"p95_seconds\":%.9f,"
            "\"mean_seconds\":%.9f,\"standard_deviation_seconds\":%.9f,"
+           "\"nanoseconds_per_call\":%.3f,\"calls_per_second\":%.3f,"
            "\"coefficient_of_variation\":%.6f,\"throughput\":%.6f,"
            "\"throughput_unit\":\"%s\",\"speedup\":%.6f,"
            "\"parallel_efficiency\":%.6f,\"gpu_median_seconds\":%.9f,"
            "\"gpu_p95_seconds\":%.9f,\"pipeline_compilation_seconds\":%.9f,"
            "\"guard\":%.9g}\n",
            result->minimum_seconds, result->median_seconds, result->p95_seconds,
-           result->mean_seconds, result->standard_deviation_seconds, variation, result->throughput,
-           result->throughput_unit, speedup, efficiency, result->gpu_median_seconds,
-           result->gpu_p95_seconds, result->pipeline_compilation_seconds, result->guard_value);
+           result->mean_seconds, result->standard_deviation_seconds, result->nanoseconds_per_call,
+           result->calls_per_second, variation, result->throughput, result->throughput_unit,
+           speedup, efficiency, result->gpu_median_seconds, result->gpu_p95_seconds,
+           result->pipeline_compilation_seconds, result->guard_value);
     (void)fflush(stdout);
 }
 
@@ -376,10 +424,13 @@ static void print_human_metadata(const benchmark_cli_config *config) {
 static void print_human_operation_title(cpu_benchmark_operation operation,
                                         const cpu_benchmark_config *config) {
     printf("\n%s (", cpu_benchmark_operation_name(operation));
-    if (operation == CPU_BENCHMARK_COPY || operation == CPU_BENCHMARK_ADD) {
+    if (operation_uses_vector_shape(operation) != 0) {
         printf("%zu elements", config->elements);
-    } else if (operation == CPU_BENCHMARK_MATMUL) {
+    } else if (operation_uses_matmul_shape(operation) != 0) {
         printf("%zu x %zu x %zu", config->rows, config->inner_size, config->columns);
+    } else if (operation_uses_transformer_shape(operation) != 0) {
+        printf("B%zu S%zu Hq%zu Hkv%zu D%zu", config->batch_size, config->sequence_length,
+               config->query_head_count, config->key_value_head_count, config->head_dimension);
     } else {
         printf("%zu x %zu", config->rows, config->columns);
     }
@@ -437,6 +488,11 @@ int main(int argc, char **argv) {
                 .rows = 256U,
                 .columns = 256U,
                 .inner_size = 256U,
+                .batch_size = 1U,
+                .sequence_length = 32U,
+                .query_head_count = 4U,
+                .key_value_head_count = 2U,
+                .head_dimension = 32U,
                 .warmup_iterations = 2U,
                 .measured_iterations = 10U,
                 .minimum_sample_seconds = 0.01,
@@ -499,6 +555,13 @@ int main(int argc, char **argv) {
             }
         }
         if (config.selected_backends[RUNTIME_BENCHMARK_METAL] != 0) {
+            if (runtime_benchmark_operation_supported(
+                    RUNTIME_BENCHMARK_METAL, (cpu_benchmark_operation)operation_index) == 0) {
+                if (config.output_format == BENCHMARK_OUTPUT_HUMAN) {
+                    printf("Metal: operation not implemented, skipped\n");
+                }
+                continue;
+            }
             if (llm_backend_metal_is_available() == 0) {
                 if (config.output_format == BENCHMARK_OUTPUT_HUMAN) {
                     printf("Metal unavailable: operation skipped\n");
