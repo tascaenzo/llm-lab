@@ -266,6 +266,55 @@ static int test_matmul_tile_boundaries(llm_backend *metal_backend) {
     return EXIT_SUCCESS;
 }
 
+static int test_mps_matmul_ex_in_batch(llm_backend *backend) {
+    const size_t left_shape[] = {3U, 2U};
+    const size_t right_shape[] = {4U, 3U};
+    const size_t output_shape[] = {2U, 4U};
+    llm_tensor left = {0};
+    llm_tensor right = {0};
+    llm_tensor output = {0};
+    llm_tensor source = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, left_shape, &left) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, right_shape, &right) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, output_shape, &output) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, output_shape, &source) == LLM_OK);
+    const float left_values[] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
+    const float right_values[] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F,
+                                  7.0F, 8.0F, 9.0F, 1.0F, 0.0F, 1.0F};
+    TEST_ASSERT(llm_tensor_write(backend, &left, left_values, sizeof(left_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &right, right_values, sizeof(right_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_fill_f32(backend, &source, 0.5F) == LLM_OK);
+    TEST_ASSERT(llm_backend_metal_reset_metrics(backend) == LLM_OK);
+
+    const llm_matmul_options options = {.transpose_left = 1, .transpose_right = 1};
+    TEST_ASSERT(llm_backend_metal_begin_batch(backend) == LLM_OK);
+    TEST_ASSERT(llm_matmul_ex(backend, &left, &right, &options, &output) == LLM_OK);
+    TEST_ASSERT(llm_accumulate(backend, &source, &output) == LLM_OK);
+    TEST_ASSERT(llm_backend_metal_end_batch(backend) == LLM_OK);
+
+    float actual[8] = {0};
+    TEST_ASSERT(llm_tensor_read(backend, &output, actual, sizeof(actual)) == LLM_OK);
+    for (size_t row = 0U; row < 2U; ++row) {
+        for (size_t column = 0U; column < 4U; ++column) {
+            float expected = 0.5F;
+            for (size_t inner = 0U; inner < 3U; ++inner) {
+                expected += left_values[inner * 2U + row] * right_values[column * 3U + inner];
+            }
+            TEST_ASSERT(close_enough(actual[row * 4U + column], expected));
+        }
+    }
+    llm_metal_backend_metrics metrics = {0};
+    TEST_ASSERT(llm_backend_metal_get_metrics(backend, &metrics) == LLM_OK);
+    TEST_ASSERT(metrics.submitted_command_buffers == 1U);
+    TEST_ASSERT(metrics.kernel_dispatches == 2U);
+
+    llm_tensor_destroy(&source);
+    llm_tensor_destroy(&output);
+    llm_tensor_destroy(&right);
+    llm_tensor_destroy(&left);
+    return EXIT_SUCCESS;
+}
+
 static int test_language_operations(llm_backend *backend) {
     const size_t table_shape[] = {4U, 3U};
     const size_t indices_shape[] = {3U};
@@ -377,6 +426,7 @@ int main(void) {
                                test_batch_metrics_and_buffer_pool(backend) == EXIT_SUCCESS &&
                                test_reductions_and_matmul(backend) == EXIT_SUCCESS &&
                                test_matmul_tile_boundaries(backend) == EXIT_SUCCESS &&
+                               test_mps_matmul_ex_in_batch(backend) == EXIT_SUCCESS &&
                                test_language_operations(backend) == EXIT_SUCCESS
                            ? EXIT_SUCCESS
                            : EXIT_FAILURE;

@@ -8,6 +8,7 @@
 
 #ifdef __OBJC__
 #import <Metal/Metal.h>
+#import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 
 typedef enum llm_metal_pipeline {
     LLM_METAL_PIPELINE_FILL = 0,
@@ -20,11 +21,14 @@ typedef enum llm_metal_pipeline {
     LLM_METAL_PIPELINE_MATMUL,
     LLM_METAL_PIPELINE_MATMUL_LARGE,
     LLM_METAL_PIPELINE_MATMUL_SIMDGROUP,
+    LLM_METAL_PIPELINE_ACCUMULATE,
     LLM_METAL_PIPELINE_GATHER,
     LLM_METAL_PIPELINE_SCATTER_ADD,
     LLM_METAL_PIPELINE_SOFTMAX,
     LLM_METAL_PIPELINE_CROSS_ENTROPY_FORWARD,
     LLM_METAL_PIPELINE_CROSS_ENTROPY_BACKWARD,
+    LLM_METAL_PIPELINE_SILU,
+    LLM_METAL_PIPELINE_SILU_BACKWARD,
     LLM_METAL_PIPELINE_COUNT
 } llm_metal_pipeline;
 
@@ -44,6 +48,18 @@ typedef struct llm_metal_matmul_tuning {
     struct llm_metal_matmul_tuning *next;
 } llm_metal_matmul_tuning;
 
+/** Cached MPS GEMM object. Matrices are deliberately not cached: they wrap caller buffers. */
+typedef struct llm_metal_mps_gemm {
+    uint32_t left_rows;
+    uint32_t left_columns;
+    uint32_t right_rows;
+    uint32_t right_columns;
+    uint8_t transpose_left;
+    uint8_t transpose_right;
+    MPSMatrixMultiplication *kernel;
+    struct llm_metal_mps_gemm *next;
+} llm_metal_mps_gemm;
+
 typedef struct llm_metal_context {
     id<MTLDevice> device;
     id<MTLCommandQueue> queue;
@@ -52,6 +68,8 @@ typedef struct llm_metal_context {
     llm_metal_buffer *cached_buffers;
     llm_metal_matmul_tuning *matmul_tunings;
     size_t matmul_tuning_count;
+    llm_metal_mps_gemm *mps_gemms;
+    size_t mps_gemm_count;
     pthread_mutex_t buffer_mutex;
     char *device_name;
     id<MTLCommandBuffer> batch_command_buffer;
@@ -90,6 +108,17 @@ llm_status llm_metal_reduce_mean_square_last_f32(void *context, const float *inp
                                                  size_t outer_count, size_t reduction_size);
 llm_status llm_metal_matmul_f32(void *context, const float *left, const float *right, float *output,
                                 size_t rows, size_t inner_size, size_t columns);
+llm_status llm_metal_matmul_ex_f32(void *context, const float *left, const float *right,
+                                   float *output, size_t left_rows, size_t left_columns,
+                                   size_t right_rows, size_t right_columns, int transpose_left,
+                                   int transpose_right);
+llm_status llm_metal_accumulate_f32(void *context, const float *source, float *destination,
+                                    size_t value_count);
+llm_status llm_metal_silu_f32(void *context, const float *input, float *output,
+                              size_t value_count);
+llm_status llm_metal_silu_backward_f32(void *context, const float *input,
+                                       const float *output_gradient, float *input_gradient,
+                                       size_t value_count);
 llm_status llm_metal_gather_rows_f32(void *context, const float *table, size_t row_count,
                                      size_t row_width, const uint32_t *indices, size_t index_count,
                                      float *output);

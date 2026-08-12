@@ -43,6 +43,7 @@ if(APPLE)
     enable_language(OBJC)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
+    find_library(METAL_PERFORMANCE_SHADERS_FRAMEWORK MetalPerformanceShaders REQUIRED)
 
     set(LLM_METAL_KERNEL_SOURCE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/backends/metal/kernels/runtime.metal)
@@ -116,7 +117,8 @@ if(APPLE)
         src/runtime/backends/metal/metal_memory.m
         src/runtime/backends/metal/metal_operations.m)
     target_include_directories(runtime PRIVATE ${LLM_METAL_GENERATED_DIRECTORY})
-    target_link_libraries(runtime PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK})
+    target_link_libraries(runtime PUBLIC ${FOUNDATION_FRAMEWORK} ${METAL_FRAMEWORK}
+                                         ${METAL_PERFORMANCE_SHADERS_FRAMEWORK})
 else()
     target_sources(runtime PRIVATE src/runtime/backends/metal/metal_backend_stub.c)
 endif()
