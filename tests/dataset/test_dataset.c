@@ -13,6 +13,12 @@ typedef struct progress_observation {
     uint64_t tokens;
 } progress_observation;
 
+typedef struct open_progress_observation {
+    size_t calls;
+    uint64_t bytes_read;
+    uint64_t total_bytes;
+} open_progress_observation;
+
 static void observe_progress(uint64_t bytes_read, uint64_t total_bytes,
                              uint64_t documents_processed, const uint64_t token_counts[3],
                              void *context) {
@@ -22,6 +28,13 @@ static void observe_progress(uint64_t bytes_read, uint64_t total_bytes,
     observation->total_bytes = total_bytes;
     observation->documents = documents_processed;
     observation->tokens = token_counts[0] + token_counts[1] + token_counts[2];
+}
+
+static void observe_open_progress(uint64_t bytes_read, uint64_t total_bytes, void *context) {
+    open_progress_observation *observation = context;
+    ++observation->calls;
+    observation->bytes_read = bytes_read;
+    observation->total_bytes = total_bytes;
 }
 
 static void build_path(char *buffer, size_t capacity, const char *name) {
@@ -43,7 +56,12 @@ static void cleanup_outputs(const char *prefix) {
 static int verify_split(const char *path, lm_dataset_split expected_split,
                         uint64_t expected_documents) {
     lm_dataset *dataset = NULL;
-    TEST_ASSERT(lm_dataset_open(path, &dataset) == LM_DATASET_OK);
+    open_progress_observation progress = {0};
+    TEST_ASSERT(lm_dataset_open_with_progress(path, observe_open_progress, &progress, &dataset) ==
+                LM_DATASET_OK);
+    TEST_ASSERT(progress.calls >= 2U);
+    TEST_ASSERT(progress.total_bytes > 0U);
+    TEST_ASSERT(progress.bytes_read == progress.total_bytes);
     TEST_ASSERT(lm_dataset_get_split(dataset) == expected_split);
     TEST_ASSERT(lm_dataset_document_count(dataset) == expected_documents);
     TEST_ASSERT(lm_dataset_token_count(dataset) >= expected_documents);

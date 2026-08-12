@@ -31,3 +31,6 @@ __pycache__/
 
 # Baseline e risultati prestazionali locali, dipendenti dalla macchina.
 /artifacts/benchmarks/local/
+
+# Checkpoint locali del training: grandi e dipendenti dall'esperimento.
+/artifacts/models/

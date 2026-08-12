@@ -1,0 +1,291 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "model_internal.h"
+
+#define LM_CHECKPOINT_HEADER_SIZE 160U
+#define LM_CHECKPOINT_VERSION UINT32_C(1)
+
+static const unsigned char checkpoint_magic[8] = {'L', 'L', 'M', 'C', 'K', 'P', 'T', '\n'};
+
+static void store_u32(unsigned char *bytes, uint32_t value) {
+    for (size_t index = 0U; index < 4U; ++index) {
+        bytes[index] = (unsigned char)(value >> (index * 8U));
+    }
+}
+
+static void store_u64(unsigned char *bytes, uint64_t value) {
+    for (size_t index = 0U; index < 8U; ++index) {
+        bytes[index] = (unsigned char)(value >> (index * 8U));
+    }
+}
+
+static uint32_t load_u32(const unsigned char *bytes) {
+    uint32_t value = 0U;
+    for (size_t index = 0U; index < 4U; ++index) {
+        value |= (uint32_t)bytes[index] << (index * 8U);
+    }
+    return value;
+}
+
+static uint64_t load_u64(const unsigned char *bytes) {
+    uint64_t value = 0U;
+    for (size_t index = 0U; index < 8U; ++index) {
+        value |= (uint64_t)bytes[index] << (index * 8U);
+    }
+    return value;
+}
+
+static void store_f32(unsigned char *bytes, float value) {
+    uint32_t bits = 0U;
+    memcpy(&bits, &value, sizeof(bits));
+    store_u32(bytes, bits);
+}
+
+static float load_f32(const unsigned char *bytes) {
+    const uint32_t bits = load_u32(bytes);
+    float value = 0.0F;
+    memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static int write_exact(FILE *file, const void *data, size_t byte_count) {
+    return fwrite(data, 1U, byte_count, file) == byte_count;
+}
+
+static int read_exact(FILE *file, void *data, size_t byte_count) {
+    return fread(data, 1U, byte_count, file) == byte_count;
+}
+
+static llm_status payload_size(const lm_model *model, uint64_t *out_size) {
+    if (model == NULL || out_size == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    uint64_t total = 0U;
+    for (size_t index = 0U; index < model->parameter_count; ++index) {
+        const uint64_t count = model->parameters[index].value.element_count;
+        if (count > UINT64_MAX / (UINT64_C(3) * sizeof(float)) ||
+            total > UINT64_MAX - count * UINT64_C(3) * sizeof(float)) {
+            return LLM_OVERFLOW;
+        }
+        total += count * UINT64_C(3) * sizeof(float);
+    }
+    *out_size = total;
+    return LLM_OK;
+}
+
+static llm_status write_tensor(FILE *file, llm_backend *backend, const llm_tensor *tensor) {
+    if (tensor->element_count > SIZE_MAX / sizeof(float)) {
+        return LLM_OVERFLOW;
+    }
+    const size_t byte_count = tensor->element_count * sizeof(float);
+    float *values = malloc(byte_count);
+    if (values == NULL) {
+        return LLM_ALLOCATION_FAILED;
+    }
+    llm_status status = llm_tensor_read(backend, tensor, values, byte_count);
+    if (status == LLM_OK && write_exact(file, values, byte_count) == 0) {
+        status = LLM_BACKEND_ERROR;
+    }
+    free(values);
+    return status;
+}
+
+static llm_status read_tensor(FILE *file, llm_backend *backend, llm_tensor *tensor) {
+    if (tensor->element_count > SIZE_MAX / sizeof(float)) {
+        return LLM_OVERFLOW;
+    }
+    const size_t byte_count = tensor->element_count * sizeof(float);
+    float *values = malloc(byte_count);
+    if (values == NULL) {
+        return LLM_ALLOCATION_FAILED;
+    }
+    llm_status status = read_exact(file, values, byte_count) != 0 ? LLM_OK : LLM_INVALID_ARGUMENT;
+    if (status == LLM_OK) {
+        status = llm_tensor_write(backend, tensor, values, byte_count);
+    }
+    free(values);
+    return status;
+}
+
+static char *temporary_path(const char *path) {
+    const size_t length = strlen(path);
+    if (length > SIZE_MAX - sizeof(".part")) {
+        return NULL;
+    }
+    char *result = malloc(length + sizeof(".part"));
+    if (result != NULL) {
+        (void)snprintf(result, length + sizeof(".part"), "%s.part", path);
+    }
+    return result;
+}
+
+llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset,
+                                      const char *path) {
+    if (trainer == NULL || trainer->model == NULL || dataset == NULL || path == NULL ||
+        lm_dataset_get_split(dataset) != LM_DATASET_TRAIN) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    const lm_model *model = trainer->model;
+    uint64_t saved_payload_size = 0U;
+    llm_status status = payload_size(model, &saved_payload_size);
+    if (status != LLM_OK) {
+        return status;
+    }
+    char *part_path = temporary_path(path);
+    if (part_path == NULL) {
+        return LLM_ALLOCATION_FAILED;
+    }
+    FILE *file = fopen(part_path, "wb");
+    if (file == NULL) {
+        free(part_path);
+        return LLM_BACKEND_ERROR;
+    }
+    unsigned char header[LM_CHECKPOINT_HEADER_SIZE] = {0};
+    memcpy(header, checkpoint_magic, sizeof(checkpoint_magic));
+    store_u32(header + 8U, LM_CHECKPOINT_VERSION);
+    store_u32(header + 12U, LM_CHECKPOINT_HEADER_SIZE);
+    store_u32(header + 16U, model->config.vocabulary_size);
+    store_u32(header + 20U, (uint32_t)lm_dataset_get_split(dataset));
+    store_u64(header + 24U, model->config.context_length);
+    store_u64(header + 32U, model->config.hidden_size);
+    store_u64(header + 40U, model->config.layer_count);
+    store_u64(header + 48U, model->config.head_count);
+    store_u64(header + 56U, model->config.feed_forward_size);
+    store_u64(header + 64U, model->config.seed);
+    store_u64(header + 72U, trainer->config.batch_size);
+    store_u64(header + 80U, trainer->config.context_length);
+    store_u64(header + 88U, trainer->config.seed);
+    store_f32(header + 96U, trainer->config.learning_rate);
+    store_f32(header + 100U, trainer->config.beta1);
+    store_f32(header + 104U, trainer->config.beta2);
+    store_f32(header + 108U, trainer->config.epsilon);
+    store_f32(header + 112U, trainer->config.weight_decay);
+    store_u64(header + 116U, trainer->step);
+    store_u64(header + 124U, lm_batcher_random_state(trainer->batcher));
+    store_u64(header + 132U, lm_dataset_token_count(dataset));
+    store_u64(header + 140U, lm_dataset_document_count(dataset));
+    store_u64(header + 148U, saved_payload_size);
+    if (write_exact(file, header, sizeof(header)) == 0) {
+        status = LLM_BACKEND_ERROR;
+    }
+    for (size_t index = 0U; status == LLM_OK && index < model->parameter_count; ++index) {
+        const lm_model_parameter *parameter = &model->parameters[index];
+        status = write_tensor(file, model->backend, &parameter->value);
+        if (status == LLM_OK) {
+            status = write_tensor(file, model->backend, &parameter->first_moment);
+        }
+        if (status == LLM_OK) {
+            status = write_tensor(file, model->backend, &parameter->second_moment);
+        }
+    }
+    if (fclose(file) != 0 && status == LLM_OK) {
+        status = LLM_BACKEND_ERROR;
+    }
+    if (status == LLM_OK && rename(part_path, path) != 0) {
+        status = LLM_BACKEND_ERROR;
+    }
+    if (status != LLM_OK) {
+        (void)remove(part_path);
+    }
+    free(part_path);
+    return status;
+}
+
+llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
+                                      lm_model **out_model, lm_trainer **out_trainer) {
+    if (backend == NULL || path == NULL || out_model == NULL ||
+        (dataset != NULL && (out_trainer == NULL || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
+        (dataset == NULL && out_trainer != NULL)) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    *out_model = NULL;
+    if (out_trainer != NULL) {
+        *out_trainer = NULL;
+    }
+    FILE *file = fopen(path, "rb");
+    if (file == NULL) {
+        return LLM_BACKEND_ERROR;
+    }
+    unsigned char header[LM_CHECKPOINT_HEADER_SIZE] = {0};
+    llm_status status = read_exact(file, header, sizeof(header)) != 0 ? LLM_OK : LLM_INVALID_ARGUMENT;
+    const uint32_t split = load_u32(header + 20U);
+    lm_model_config model_config = {.vocabulary_size = load_u32(header + 16U),
+                                    .context_length = (size_t)load_u64(header + 24U),
+                                    .hidden_size = (size_t)load_u64(header + 32U),
+                                    .layer_count = (size_t)load_u64(header + 40U),
+                                    .head_count = (size_t)load_u64(header + 48U),
+                                    .feed_forward_size = (size_t)load_u64(header + 56U),
+                                    .seed = load_u64(header + 64U)};
+    lm_trainer_config trainer_config = {.batch_size = (size_t)load_u64(header + 72U),
+                                        .context_length = (size_t)load_u64(header + 80U),
+                                        .seed = load_u64(header + 88U),
+                                        .learning_rate = load_f32(header + 96U),
+                                        .beta1 = load_f32(header + 100U),
+                                        .beta2 = load_f32(header + 104U),
+                                        .epsilon = load_f32(header + 108U),
+                                        .weight_decay = load_f32(header + 112U)};
+    const unsigned long long step = load_u64(header + 116U);
+    const uint64_t batcher_state = load_u64(header + 124U);
+    const uint64_t token_count = load_u64(header + 132U);
+    const uint64_t document_count = load_u64(header + 140U);
+    const uint64_t saved_payload_size = load_u64(header + 148U);
+    if (status == LLM_OK &&
+        (memcmp(header, checkpoint_magic, sizeof(checkpoint_magic)) != 0 ||
+         load_u32(header + 8U) != LM_CHECKPOINT_VERSION ||
+         load_u32(header + 12U) != LM_CHECKPOINT_HEADER_SIZE || split != LM_DATASET_TRAIN ||
+         batcher_state == 0U ||
+         (dataset != NULL &&
+          (model_config.vocabulary_size != lm_dataset_model_vocabulary_size(dataset) ||
+           token_count != lm_dataset_token_count(dataset) ||
+           document_count != lm_dataset_document_count(dataset))))) {
+        status = LLM_INVALID_ARGUMENT;
+    }
+    lm_model *model = NULL;
+    lm_trainer *trainer = NULL;
+    if (status == LLM_OK) {
+        status = lm_model_create(backend, &model_config, &model);
+    }
+    uint64_t expected_payload_size = 0U;
+    if (status == LLM_OK) {
+        status = payload_size(model, &expected_payload_size);
+    }
+    if (status == LLM_OK && saved_payload_size != expected_payload_size) {
+        status = LLM_INVALID_ARGUMENT;
+    }
+    if (status == LLM_OK && dataset != NULL) {
+        status = lm_trainer_create(model, dataset, &trainer_config, &trainer);
+    }
+    for (size_t index = 0U; status == LLM_OK && index < model->parameter_count; ++index) {
+        lm_model_parameter *parameter = &model->parameters[index];
+        status = read_tensor(file, backend, &parameter->value);
+        if (status == LLM_OK) {
+            status = read_tensor(file, backend, &parameter->first_moment);
+        }
+        if (status == LLM_OK) {
+            status = read_tensor(file, backend, &parameter->second_moment);
+        }
+    }
+    if (status == LLM_OK && fgetc(file) != EOF) {
+        status = LLM_INVALID_ARGUMENT;
+    }
+    if (fclose(file) != 0 && status == LLM_OK) {
+        status = LLM_BACKEND_ERROR;
+    }
+    if (status == LLM_OK && trainer != NULL &&
+        lm_batcher_set_random_state(trainer->batcher, batcher_state) != LM_DATASET_OK) {
+        status = LLM_INVALID_ARGUMENT;
+    }
+    if (status == LLM_OK) {
+        if (trainer != NULL) {
+            trainer->step = step;
+            *out_trainer = trainer;
+        }
+        *out_model = model;
+        return LLM_OK;
+    }
+    lm_trainer_destroy(trainer);
+    lm_model_destroy(model);
+    return status;
+}
