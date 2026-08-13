@@ -119,6 +119,10 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
         status = llm_tensor_write(backend, &trainer->target_ids, trainer->host_targets,
                                   token_count * sizeof(*trainer->host_targets));
     }
+    const int use_metal_batch = llm_backend_device(backend) == LLM_DEVICE_METAL;
+    if (status == LLM_OK && use_metal_batch != 0) {
+        status = llm_backend_metal_begin_batch(backend);
+    }
     if (status == LLM_OK) {
         status = lm_model_zero_grad(trainer->model);
     }
@@ -127,10 +131,6 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     }
     if (status == LLM_OK) {
         status = llm_cross_entropy_forward(backend, &trainer->logits, &trainer->target_ids, &trainer->loss);
-    }
-    float loss = 0.0F;
-    if (status == LLM_OK) {
-        status = llm_tensor_read(backend, &trainer->loss, &loss, sizeof(loss));
     }
     if (status == LLM_OK) {
         status = llm_cross_entropy_backward(backend, &trainer->logits, &trainer->target_ids,
@@ -148,6 +148,16 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
                                        .step = trainer->step + 1U};
     if (status == LLM_OK) {
         status = lm_model_apply_adamw(trainer->model, &options);
+    }
+    if (use_metal_batch != 0) {
+        const llm_status batch_status = llm_backend_metal_end_batch(backend);
+        if (status == LLM_OK) {
+            status = batch_status;
+        }
+    }
+    float loss = 0.0F;
+    if (status == LLM_OK) {
+        status = llm_tensor_read(backend, &trainer->loss, &loss, sizeof(loss));
     }
     if (status != LLM_OK) {
         return status;

@@ -1,9 +1,9 @@
 # Backend Metal
 
-**Stato (2026-08-12):** accelerazione di base validata su Apple M4; parita'
-col contratto training v1 ancora da implementare. Il lavoro Metal e' in pausa
-mentre viene costruito il primo modello CPU, cosi' le prossime ottimizzazioni
-saranno guidate dalle forme e dai colli di bottiglia del modello reale.
+**Stato (2026-08-13):** il codice Metal copre il contratto training v1,
+inclusi RMSNorm, RoPE, attention causale GQA e AdamW. Una sessione del Modello
+Minimal di 2.000.000 step su Apple Silicon ha prodotto un checkpoint riproducibile; la
+parita' contrattuale completa e il profiling per forma restano i gate aperti.
 **Piattaforma:** macOS su Apple Silicon. Nessun fallback CPU.
 
 ## Confine
@@ -47,20 +47,37 @@ I test Metal verificano queste primitive solo quando un device e' realmente
 disponibile; su altre macchine compilazione e comportamento “unavailable”
 restano verificabili.
 
-## Lavoro rimandato per la parita'
+## Gate di parita' e ottimizzazione
 
-Prima di dichiarare Metal un backend di training completo restano:
+Il codice copre le primitive che seguono; prima di dichiarare Metal un backend
+di training completo occorre ancora ottenere l'evidenza esecutiva su hardware:
 
-1. RMSNorm forward/backward;
-2. RoPE full-sequence forward/backward con tabelle `[S,D/2]`;
-3. attention GQA causale full-sequence forward/backward con Q/K/V della stessa S;
-4. AdamW F32;
-5. esecuzione completa della suite contrattuale condivisa su Metal;
-6. benchmark e ottimizzazione sulle forme del primo modello.
+1. esecuzione completa della suite contrattuale condivisa su Metal;
+2. confronto esplicito CPU/Metal per output e gradienti del blocco minimal;
+3. smoke training di almeno uno step senza fallback o trasferimenti intermedi;
+4. benchmark e ottimizzazione sulle forme del primo modello.
 
-`accumulate`, matmul transpose e SiLU sono completati. Durante la pausa non
-aggiungere CUDA: l'API backend resta portabile, ma senza hardware e CI CUDA non
-ci sarebbe una validazione affidabile della parita' numerica.
+Il trainer raggruppa un intero step Metal in un command buffer, evitando
+sincronizzazioni tra forward, backward e AdamW; resta soltanto la lettura della
+loss al termine dello step. Non aggiungere CUDA: l'API backend resta portabile,
+ma senza hardware e CI CUDA non ci sarebbe una validazione affidabile della
+parita' numerica.
+
+## Risultato del Modello Minimal — sessione di training Metal
+
+La sessione del 13 agosto 2026 ha addestrato su Metal il Modello Minimal con
+`vocabulary_size=32001`, `hidden_size=64`, un layer, una head, contesto 32,
+batch 2 e AdamW a learning rate fisso `0.001`. Il checkpoint a 2.000.000 step
+e' versionato come artefatto di riferimento in
+`artifacts/models/minimal-model/minimal-model-metal-step-2000000.llmckpt`
+(SHA-256 `ce0957ca5aeeeb6960efc95a721d8539840904917737ccbf8147a876f6b0d803`).
+
+La valutazione riproducibile sullo split validation, eseguita sul percorso CPU
+di `model evaluate` (1.000 batch, seed 2026), misura `loss=3.78799526` e
+`perplexity=44.16776639`. Sullo stesso campione, il checkpoint a 640.000 step
+misura `loss=3.90422887` e `perplexity=49.61180814`: il training continua a
+migliorare, pur con rendimenti decrescenti. Questo e' un risultato qualitativo
+del modello; non sostituisce il confronto numerico CPU/Metal per operazione.
 
 Ogni passo deve includere:
 
