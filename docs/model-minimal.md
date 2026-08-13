@@ -135,6 +135,20 @@ riga di comando. Il testo UTF-8 valido viene stampato normalmente.
 Con le dimensioni e gli step iniziali il testo non e' ancora un articolo o un
 dialogo affidabile.
 
+## Checkpoint di riferimento
+
+Il checkpoint Metal del Modello Minimal a 2.000.000 step e' versionato per
+consentire test di generazione e valutazioni riproducibili senza rieseguire il
+training:
+
+```text
+artifacts/models/minimal-model/minimal-model-metal-step-2000000.llmckpt
+```
+
+La sua configurazione e' `vocabulary_size=32001`, `hidden_size=64`, un layer,
+una head, contesto 32 e batch 2. Il checksum SHA-256 e'
+`ce0957ca5aeeeb6960efc95a721d8539840904917737ccbf8147a876f6b0d803`.
+
 ## Gate per l'ottimizzazione Metal
 
 Il Modello Minimal e' il test di integrazione per il runtime. Prima di lanciare

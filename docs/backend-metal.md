@@ -68,7 +68,9 @@ parita' numerica.
 La sessione del 13 agosto 2026 ha addestrato su Metal il Modello Minimal con
 `vocabulary_size=32001`, `hidden_size=64`, un layer, una head, contesto 32,
 batch 2 e AdamW a learning rate fisso `0.001`. Il checkpoint a 2.000.000 step
-e' conservato localmente come artefatto dell'esperimento e non e' versionato.
+e' versionato come artefatto di riferimento in
+`artifacts/models/minimal-model/minimal-model-metal-step-2000000.llmckpt`
+(SHA-256 `ce0957ca5aeeeb6960efc95a721d8539840904917737ccbf8147a876f6b0d803`).
 
 La valutazione riproducibile sullo split validation, eseguita sul percorso CPU
 di `model evaluate` (1.000 batch, seed 2026), misura `loss=3.78799526` e
