@@ -188,12 +188,19 @@ intervallo degli ID). Sul dataset Wikipedia la lettura di circa 5,8 GiB e' quind
 normale; `Verifica dataset` ne mostra avanzamento e ETA, poi `Training modello`
 mostra step, loss e velocita'.
 
-Per provare un checkpoint con decoding greedy:
+Per provare un checkpoint con sampling riproducibile:
 
 ```sh
 ./build/debug/llm-lab model generate artifacts/models/m1-step-10000.llmckpt \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok 32 "La capitale d'Italia"
+  artifacts/tokenizers/italiano-wikipedia-v1.llmtok 32 "La capitale d'Italia" \
+  --temperature 0.8 --top-k 40 --repetition-penalty 1.1 --seed 1
 ```
+
+I valori mostrati sono anche i default. `--temperature` controlla la variabilita',
+`--top-k` limita la scelta ai token piu' probabili, `--repetition-penalty` (almeno
+1.0) penalizza i token gia' presenti nella finestra corrente e `--seed` rende il
+risultato riproducibile. L'output UTF-8 valido viene scritto direttamente; solo
+byte isolati o caratteri di controllo vengono mostrati come escape.
 
 Il Modello Minimal ha un solo blocco causale: questa prova verifica il percorso checkpoint →
 token → logits → testo, ma un modello piccolo e addestrato per pochi step non

@@ -39,6 +39,39 @@ typedef struct metal_cross_entropy_parameters {
     uint32_t vocabulary_size;
 } metal_cross_entropy_parameters;
 
+typedef struct metal_rms_norm_parameters {
+    uint32_t outer_count;
+    uint32_t row_width;
+    float epsilon;
+} metal_rms_norm_parameters;
+
+typedef struct metal_rope_parameters {
+    uint32_t sequence_length;
+    uint32_t head_count;
+    uint32_t pairs_per_head;
+} metal_rope_parameters;
+
+typedef struct metal_attention_parameters {
+    uint32_t batch_count;
+    uint32_t sequence_length;
+    uint32_t query_head_count;
+    uint32_t key_value_head_count;
+    uint32_t head_dimension;
+    float scale;
+} metal_attention_parameters;
+
+typedef struct metal_adamw_parameters {
+    uint32_t count;
+    float learning_rate;
+    float beta1;
+    float beta2;
+    float epsilon;
+    float weight_decay;
+    float gradient_scale;
+    float inverse_first_bias;
+    float inverse_second_bias;
+} metal_adamw_parameters;
+
 #define LLM_METAL_AUTOTUNE_TRIALS 3U
 #define LLM_METAL_AUTOTUNE_CACHE_LIMIT 128U
 #define LLM_METAL_MPS_GEMM_CACHE_LIMIT 128U
@@ -114,6 +147,32 @@ static llm_status metal_dispatch_row_groups(llm_metal_context *context, llm_meta
         metal_end_compute(context, encoder);
         return LLM_OVERFLOW;
     }
+    [encoder dispatchThreadgroups:MTLSizeMake((NSUInteger)group_count, 1U, 1U)
+            threadsPerThreadgroup:MTLSizeMake(threads, 1U, 1U)];
+    metal_end_compute(context, encoder);
+    return llm_metal_submit(context, command_buffer);
+}
+
+static llm_status metal_dispatch_attention_groups(
+    llm_metal_context *context, llm_metal_pipeline pipeline, id<MTLCommandBuffer> command_buffer,
+    id<MTLComputeCommandEncoder> encoder, size_t group_count, size_t head_dimension,
+    size_t scratch_float_count) {
+    id<MTLComputePipelineState> state = context->pipelines[pipeline];
+    const NSUInteger width = [state threadExecutionWidth];
+    const NSUInteger maximum = [state maxTotalThreadsPerThreadgroup];
+    const NSUInteger limit =
+        maximum < LLM_METAL_MAX_THREADS_1D ? maximum : LLM_METAL_MAX_THREADS_1D;
+    NSUInteger threads = width;
+    while (threads < head_dimension && threads <= limit / 2U) {
+        threads *= 2U;
+    }
+    if (threads == 0U || group_count > NSUIntegerMax ||
+        scratch_float_count > SIZE_MAX / sizeof(float) ||
+        scratch_float_count * sizeof(float) > NSUIntegerMax) {
+        metal_end_compute(context, encoder);
+        return LLM_OVERFLOW;
+    }
+    [encoder setThreadgroupMemoryLength:(NSUInteger)(scratch_float_count * sizeof(float)) atIndex:0U];
     [encoder dispatchThreadgroups:MTLSizeMake((NSUInteger)group_count, 1U, 1U)
             threadsPerThreadgroup:MTLSizeMake(threads, 1U, 1U)];
     metal_end_compute(context, encoder);
@@ -308,6 +367,351 @@ llm_status llm_metal_silu_backward_f32(void *opaque_context, const float *input,
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3U];
         return metal_dispatch_1d(context, LLM_METAL_PIPELINE_SILU_BACKWARD, command_buffer,
                                  encoder, metal_elementwise_thread_count(value_count));
+    }
+}
+
+static llm_status metal_rms_norm_parameters_create(size_t outer_count, size_t row_width,
+                                                   float epsilon,
+                                                   metal_rms_norm_parameters *out_parameters) {
+    if (out_parameters == NULL || !isfinite(epsilon) || epsilon <= 0.0F ||
+        metal_size_to_u32(outer_count, &out_parameters->outer_count) == 0 ||
+        metal_size_to_u32(row_width, &out_parameters->row_width) == 0) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    out_parameters->epsilon = epsilon;
+    return LLM_OK;
+}
+
+llm_status llm_metal_rms_norm_f32(void *opaque_context, const float *input, const float *weight,
+                                  float epsilon, float *output, size_t outer_count,
+                                  size_t row_width) {
+    if (opaque_context == NULL || input == NULL || weight == NULL || output == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    metal_rms_norm_parameters parameters = {0};
+    llm_status status =
+        metal_rms_norm_parameters_create(outer_count, row_width, epsilon, &parameters);
+    if (status != LLM_OK) {
+        return status;
+    }
+    llm_metal_context *context = opaque_context;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        status = metal_begin_compute(context, LLM_METAL_PIPELINE_RMS_NORM, &command_buffer,
+                                    &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(input) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(weight) offset:0U atIndex:1U];
+        [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:2U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3U];
+        status = metal_dispatch_row_groups(context, LLM_METAL_PIPELINE_RMS_NORM, command_buffer,
+                                           encoder, outer_count, row_width);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(output, outer_count * row_width) != 0
+                   ? LLM_OK
+                   : LLM_NUMERICAL_ERROR;
+    }
+}
+
+llm_status llm_metal_rms_norm_backward_f32(void *opaque_context, const float *input,
+                                           const float *weight, const float *output_gradient,
+                                           float epsilon, float *input_gradient,
+                                           float *weight_gradient, size_t outer_count,
+                                           size_t row_width) {
+    if (opaque_context == NULL || input == NULL || weight == NULL || output_gradient == NULL ||
+        input_gradient == NULL || weight_gradient == NULL || outer_count > SIZE_MAX / row_width) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    metal_rms_norm_parameters parameters = {0};
+    llm_status status =
+        metal_rms_norm_parameters_create(outer_count, row_width, epsilon, &parameters);
+    if (status != LLM_OK) {
+        return status;
+    }
+    llm_metal_context *context = opaque_context;
+    status = llm_metal_zero(context, weight_gradient, row_width * sizeof(float));
+    if (status != LLM_OK) {
+        return status;
+    }
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        status = metal_begin_compute(context, LLM_METAL_PIPELINE_RMS_NORM_BACKWARD,
+                                    &command_buffer, &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(input) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(weight) offset:0U atIndex:1U];
+        [encoder setBuffer:metal_buffer_handle(output_gradient) offset:0U atIndex:2U];
+        [encoder setBuffer:metal_buffer_handle(input_gradient) offset:0U atIndex:3U];
+        [encoder setBuffer:metal_buffer_handle(weight_gradient) offset:0U atIndex:4U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:5U];
+        status = metal_dispatch_row_groups(context, LLM_METAL_PIPELINE_RMS_NORM_BACKWARD,
+                                           command_buffer, encoder, outer_count, row_width);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(input_gradient, outer_count * row_width) != 0 &&
+                       metal_buffer_values_are_finite(weight_gradient, row_width) != 0
+                   ? LLM_OK
+                   : LLM_NUMERICAL_ERROR;
+    }
+}
+
+static llm_status metal_rope(void *opaque_context, llm_metal_pipeline pipeline,
+                             const float *input, const float *cos_table, const float *sin_table,
+                             size_t batch_count, size_t sequence_length, size_t head_count,
+                             size_t head_dimension, float *output) {
+    if (opaque_context == NULL || input == NULL || cos_table == NULL || sin_table == NULL ||
+        output == NULL || head_dimension % 2U != 0U || batch_count == 0U ||
+        sequence_length == 0U || head_count == 0U || head_dimension == 0U) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    const size_t pairs_per_head = head_dimension / 2U;
+    if (batch_count > SIZE_MAX / sequence_length || batch_count * sequence_length > SIZE_MAX / head_count ||
+        batch_count * sequence_length * head_count > SIZE_MAX / pairs_per_head) {
+        return LLM_OVERFLOW;
+    }
+    const size_t pair_count = batch_count * sequence_length * head_count * pairs_per_head;
+    metal_rope_parameters parameters = {0};
+    if (metal_size_to_u32(sequence_length, &parameters.sequence_length) == 0 ||
+        metal_size_to_u32(head_count, &parameters.head_count) == 0 ||
+        metal_size_to_u32(pairs_per_head, &parameters.pairs_per_head) == 0 ||
+        metal_size_to_u32(pair_count, &(uint32_t){0}) == 0) {
+        return LLM_OVERFLOW;
+    }
+    llm_metal_context *context = opaque_context;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        llm_status status = metal_begin_compute(context, pipeline, &command_buffer, &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(input) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(cos_table) offset:0U atIndex:1U];
+        [encoder setBuffer:metal_buffer_handle(sin_table) offset:0U atIndex:2U];
+        [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:3U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4U];
+        status = metal_dispatch_1d(context, pipeline, command_buffer, encoder, pair_count);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(output, pair_count * 2U) != 0 ? LLM_OK
+                                                                            : LLM_NUMERICAL_ERROR;
+    }
+}
+
+llm_status llm_metal_rope_f32(void *context, const float *input, const float *cos_table,
+                              const float *sin_table, size_t batch_count,
+                              size_t sequence_length, size_t head_count, size_t head_dimension,
+                              float *output) {
+    return metal_rope(context, LLM_METAL_PIPELINE_ROPE, input, cos_table, sin_table, batch_count,
+                      sequence_length, head_count, head_dimension, output);
+}
+
+llm_status llm_metal_rope_backward_f32(void *context, const float *output_gradient,
+                                       const float *cos_table, const float *sin_table,
+                                       size_t batch_count, size_t sequence_length,
+                                       size_t head_count, size_t head_dimension,
+                                       float *input_gradient) {
+    return metal_rope(context, LLM_METAL_PIPELINE_ROPE_BACKWARD, output_gradient, cos_table,
+                      sin_table, batch_count, sequence_length, head_count, head_dimension,
+                      input_gradient);
+}
+
+static llm_status metal_attention_parameters_create(
+    size_t batch_count, size_t sequence_length, size_t query_head_count,
+    size_t key_value_head_count, size_t head_dimension, float scale,
+    metal_attention_parameters *out_parameters, size_t *out_query_rows,
+    size_t *out_query_values, size_t *out_key_value_values) {
+    if (out_parameters == NULL || out_query_rows == NULL || out_query_values == NULL ||
+        out_key_value_values == NULL || !isfinite(scale) || scale <= 0.0F || batch_count == 0U ||
+        sequence_length == 0U || query_head_count == 0U || key_value_head_count == 0U ||
+        head_dimension == 0U || query_head_count % key_value_head_count != 0U ||
+        metal_size_to_u32(batch_count, &out_parameters->batch_count) == 0 ||
+        metal_size_to_u32(sequence_length, &out_parameters->sequence_length) == 0 ||
+        metal_size_to_u32(query_head_count, &out_parameters->query_head_count) == 0 ||
+        metal_size_to_u32(key_value_head_count, &out_parameters->key_value_head_count) == 0 ||
+        metal_size_to_u32(head_dimension, &out_parameters->head_dimension) == 0 ||
+        batch_count > SIZE_MAX / sequence_length ||
+        batch_count * sequence_length > SIZE_MAX / query_head_count ||
+        batch_count * sequence_length * query_head_count > SIZE_MAX / head_dimension ||
+        batch_count * sequence_length > SIZE_MAX / key_value_head_count ||
+        batch_count * sequence_length * key_value_head_count > SIZE_MAX / head_dimension) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    *out_query_rows = batch_count * sequence_length * query_head_count;
+    *out_query_values = *out_query_rows * head_dimension;
+    *out_key_value_values = batch_count * sequence_length * key_value_head_count * head_dimension;
+    if (metal_size_to_u32(*out_query_rows, &(uint32_t){0}) == 0) {
+        return LLM_OVERFLOW;
+    }
+    out_parameters->scale = scale;
+    return LLM_OK;
+}
+
+llm_status llm_metal_attention_forward_f32(void *opaque_context, const float *query,
+                                           const float *key, const float *value, float scale,
+                                           size_t batch_count, size_t sequence_length,
+                                           size_t query_head_count,
+                                           size_t key_value_head_count, size_t head_dimension,
+                                           float *output) {
+    if (opaque_context == NULL || query == NULL || key == NULL || value == NULL || output == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    metal_attention_parameters parameters = {0};
+    size_t query_rows = 0U, query_values = 0U, key_value_values = 0U;
+    llm_status status = metal_attention_parameters_create(
+        batch_count, sequence_length, query_head_count, key_value_head_count, head_dimension,
+        scale, &parameters, &query_rows, &query_values, &key_value_values);
+    if (status != LLM_OK) {
+        return status;
+    }
+    llm_metal_context *context = opaque_context;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        status = metal_begin_compute(context, LLM_METAL_PIPELINE_ATTENTION_FORWARD,
+                                    &command_buffer, &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(query) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(key) offset:0U atIndex:1U];
+        [encoder setBuffer:metal_buffer_handle(value) offset:0U atIndex:2U];
+        [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:3U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4U];
+        status = metal_dispatch_attention_groups(context, LLM_METAL_PIPELINE_ATTENTION_FORWARD,
+                                                 command_buffer, encoder, query_rows,
+                                                 head_dimension, sequence_length);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(output, query_values) != 0 ? LLM_OK
+                                                                          : LLM_NUMERICAL_ERROR;
+    }
+}
+
+llm_status llm_metal_attention_backward_f32(
+    void *opaque_context, const float *query, const float *key, const float *value,
+    const float *output_gradient, float scale, size_t batch_count, size_t sequence_length,
+    size_t query_head_count, size_t key_value_head_count, size_t head_dimension,
+    float *query_gradient, float *key_gradient, float *value_gradient) {
+    if (opaque_context == NULL || query == NULL || key == NULL || value == NULL ||
+        output_gradient == NULL || query_gradient == NULL || key_gradient == NULL ||
+        value_gradient == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    metal_attention_parameters parameters = {0};
+    size_t query_rows = 0U, query_values = 0U, key_value_values = 0U;
+    llm_status status = metal_attention_parameters_create(
+        batch_count, sequence_length, query_head_count, key_value_head_count, head_dimension,
+        scale, &parameters, &query_rows, &query_values, &key_value_values);
+    if (status != LLM_OK) {
+        return status;
+    }
+    llm_metal_context *context = opaque_context;
+    status = llm_metal_zero(context, key_gradient, key_value_values * sizeof(float));
+    if (status == LLM_OK) {
+        status = llm_metal_zero(context, value_gradient, key_value_values * sizeof(float));
+    }
+    if (status != LLM_OK) {
+        return status;
+    }
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        status = metal_begin_compute(context, LLM_METAL_PIPELINE_ATTENTION_BACKWARD,
+                                    &command_buffer, &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(query) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(key) offset:0U atIndex:1U];
+        [encoder setBuffer:metal_buffer_handle(value) offset:0U atIndex:2U];
+        [encoder setBuffer:metal_buffer_handle(output_gradient) offset:0U atIndex:3U];
+        [encoder setBuffer:metal_buffer_handle(query_gradient) offset:0U atIndex:4U];
+        [encoder setBuffer:metal_buffer_handle(key_gradient) offset:0U atIndex:5U];
+        [encoder setBuffer:metal_buffer_handle(value_gradient) offset:0U atIndex:6U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:7U];
+        if (sequence_length > (SIZE_MAX - 1U) / 2U) {
+            metal_end_compute(context, encoder);
+            return LLM_OVERFLOW;
+        }
+        status = metal_dispatch_attention_groups(context, LLM_METAL_PIPELINE_ATTENTION_BACKWARD,
+                                                 command_buffer, encoder, query_rows,
+                                                 head_dimension, sequence_length * 2U + 1U);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(query_gradient, query_values) != 0 &&
+                       metal_buffer_values_are_finite(key_gradient, key_value_values) != 0 &&
+                       metal_buffer_values_are_finite(value_gradient, key_value_values) != 0
+                   ? LLM_OK
+                   : LLM_NUMERICAL_ERROR;
+    }
+}
+
+llm_status llm_metal_adamw_update_f32(
+    void *opaque_context, float *parameter, const float *gradient, float *first_moment,
+    float *second_moment, size_t value_count, float learning_rate, float beta1, float beta2,
+    float epsilon, float weight_decay, float gradient_scale, unsigned long long step) {
+    if (opaque_context == NULL || parameter == NULL || gradient == NULL || first_moment == NULL ||
+        second_moment == NULL || !isfinite(learning_rate) || learning_rate < 0.0F ||
+        !isfinite(beta1) || beta1 < 0.0F || beta1 >= 1.0F || !isfinite(beta2) || beta2 < 0.0F ||
+        beta2 >= 1.0F || !isfinite(epsilon) || epsilon <= 0.0F || !isfinite(weight_decay) ||
+        weight_decay < 0.0F || !isfinite(gradient_scale) || step == 0ULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    metal_adamw_parameters parameters = {0};
+    if (metal_size_to_u32(value_count, &parameters.count) == 0) {
+        return LLM_OVERFLOW;
+    }
+    const float first_bias = 1.0F - (float)pow((double)beta1, (double)step);
+    const float second_bias = 1.0F - (float)pow((double)beta2, (double)step);
+    if (!isfinite(first_bias) || !isfinite(second_bias) || first_bias <= 0.0F ||
+        second_bias <= 0.0F) {
+        return LLM_NUMERICAL_ERROR;
+    }
+    parameters.learning_rate = learning_rate;
+    parameters.beta1 = beta1;
+    parameters.beta2 = beta2;
+    parameters.epsilon = epsilon;
+    parameters.weight_decay = weight_decay;
+    parameters.gradient_scale = gradient_scale;
+    parameters.inverse_first_bias = 1.0F / first_bias;
+    parameters.inverse_second_bias = 1.0F / second_bias;
+    llm_metal_context *context = opaque_context;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        llm_status status = metal_begin_compute(context, LLM_METAL_PIPELINE_ADAMW,
+                                                &command_buffer, &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(parameter) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(gradient) offset:0U atIndex:1U];
+        [encoder setBuffer:metal_buffer_handle(first_moment) offset:0U atIndex:2U];
+        [encoder setBuffer:metal_buffer_handle(second_moment) offset:0U atIndex:3U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4U];
+        status = metal_dispatch_1d(context, LLM_METAL_PIPELINE_ADAMW, command_buffer, encoder,
+                                   value_count);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(parameter, value_count) != 0 &&
+                       metal_buffer_values_are_finite(first_moment, value_count) != 0 &&
+                       metal_buffer_values_are_finite(second_moment, value_count) != 0
+                   ? LLM_OK
+                   : LLM_NUMERICAL_ERROR;
     }
 }
 
@@ -537,6 +941,15 @@ static llm_status metal_matmul(void *opaque_context, const void *left, const voi
         metal_size_to_u32(inner_size, &parameters.inner_size) == 0 ||
         metal_size_to_u32(columns, &parameters.columns) == 0 || rows > SIZE_MAX / columns) {
         return LLM_OVERFLOW;
+    }
+    /*
+     * The output projection is very wide ([B*T,C] x [C,V]). MPS is both more
+     * reliable for its non-tile-aligned tail and a better fit for this GEMM;
+     * retain custom kernels for the compact Transformer projections.
+     */
+    if (columns >= 1024U) {
+        return llm_metal_matmul_ex_f32(opaque_context, left, right, output, rows, inner_size,
+                                       inner_size, columns, 0, 0);
     }
     llm_metal_pipeline candidates[3] = {0};
     size_t candidate_count = 0U;

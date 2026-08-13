@@ -44,6 +44,18 @@ typedef struct cli_model_training_progress {
     int has_output;
 } cli_model_training_progress;
 
+typedef struct cli_generation_candidate {
+    token_id token;
+    float logit;
+} cli_generation_candidate;
+
+typedef struct cli_generation_options {
+    float temperature;
+    float repetition_penalty;
+    size_t top_k;
+    uint64_t random_state;
+} cli_generation_options;
+
 static double current_time_seconds(void) {
 #if defined(CLOCK_MONOTONIC)
     struct timespec monotonic = {0};
@@ -350,8 +362,10 @@ static void print_usage(const char *program) {
             "  %s dataset prepare MODEL.llmtok DOCUMENTS.jsonl OUTPUT_PREFIX\n"
             "  %s model train TRAIN.llmdat STEPS [--batch-size B] [--context T]"
             " [--hidden C] [--layers 0|1] [--learning-rate LR] [--seed N]"
+            " [--backend cpu|metal]"
             " [--checkpoint FILE] [--resume FILE]\n"
-            "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT\n"
+            "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT"
+            " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]\n"
             "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt STEPS"
             " [--batch-size B] [--seed N]\n",
             program, program, program, program, program, program);
@@ -448,6 +462,73 @@ static int parse_positive_float(const char *text, float *out_value) {
     }
     *out_value = value;
     return 1;
+}
+
+static int generation_candidate_compare(const void *left, const void *right) {
+    const cli_generation_candidate *left_candidate = left;
+    const cli_generation_candidate *right_candidate = right;
+    if (left_candidate->logit > right_candidate->logit) {
+        return -1;
+    }
+    if (left_candidate->logit < right_candidate->logit) {
+        return 1;
+    }
+    return left_candidate->token < right_candidate->token
+               ? -1
+               : left_candidate->token > right_candidate->token ? 1 : 0;
+}
+
+static uint64_t generation_next_random(uint64_t *state) {
+    uint64_t value = *state;
+    value ^= value >> 12U;
+    value ^= value << 25U;
+    value ^= value >> 27U;
+    *state = value;
+    return value * UINT64_C(2685821657736338717);
+}
+
+static double generation_uniform(uint64_t *state) {
+    return (double)(generation_next_random(state) >> 11U) * (1.0 / 9007199254740992.0);
+}
+
+static token_id sample_generation_token(const float *logits, uint32_t vocabulary_size,
+                                        const token_id *tokens, size_t token_count,
+                                        size_t context_length, cli_generation_candidate *candidates,
+                                        unsigned char *recent_tokens,
+                                        cli_generation_options *options) {
+    const size_t candidate_count = (size_t)vocabulary_size - 2U;
+    (void)memset(recent_tokens, 0, vocabulary_size * sizeof(*recent_tokens));
+    const size_t recent_start = token_count > context_length ? token_count - context_length : 0U;
+    for (size_t index = recent_start; index < token_count; ++index) {
+        if (tokens[index] < vocabulary_size) {
+            recent_tokens[tokens[index]] = 1U;
+        }
+    }
+    for (uint32_t token = 1U; token + 1U < vocabulary_size; ++token) {
+        float adjusted = logits[token];
+        if (recent_tokens[token] != 0U) {
+            adjusted = adjusted >= 0.0F ? adjusted / options->repetition_penalty
+                                        : adjusted * options->repetition_penalty;
+        }
+        candidates[token - 1U] = (cli_generation_candidate){.token = token, .logit = adjusted};
+    }
+    qsort(candidates, candidate_count, sizeof(*candidates), generation_candidate_compare);
+    const size_t selected_count = options->top_k < candidate_count ? options->top_k : candidate_count;
+    const float maximum = candidates[0].logit;
+    double weight_sum = 0.0;
+    for (size_t index = 0U; index < selected_count; ++index) {
+        weight_sum += exp(((double)candidates[index].logit - (double)maximum) /
+                          (double)options->temperature);
+    }
+    double sample = generation_uniform(&options->random_state) * weight_sum;
+    for (size_t index = 0U; index < selected_count; ++index) {
+        sample -= exp(((double)candidates[index].logit - (double)maximum) /
+                      (double)options->temperature);
+        if (sample <= 0.0) {
+            return candidates[index].token;
+        }
+    }
+    return candidates[selected_count - 1U].token;
 }
 
 static int evaluate_file(const tokenizer *tokenizer, const char *path, size_t maximum_bytes,
@@ -595,6 +676,7 @@ static int run_model_train(int argc, char **argv) {
     size_t layer_count = 1U;
     const char *checkpoint_path = NULL;
     const char *resume_path = NULL;
+    int use_metal = 0;
     int has_model_options = 0;
     if (parse_positive_size(argv[4], &steps) == 0) {
         fprintf(stderr, "STEPS must be a positive integer supported by this system.\n");
@@ -626,6 +708,13 @@ static int run_model_train(int argc, char **argv) {
         } else if (strcmp(option, "--seed") == 0) {
             parsed = parse_seed(value, &trainer_config.seed);
             has_model_options = 1;
+        } else if (strcmp(option, "--backend") == 0) {
+            if (strcmp(value, "cpu") == 0) {
+                parsed = 1;
+            } else if (strcmp(value, "metal") == 0) {
+                use_metal = 1;
+                parsed = 1;
+            }
         } else if (strcmp(option, "--checkpoint") == 0 && checkpoint_path == NULL) {
             checkpoint_path = value;
             parsed = value[0] != '\0';
@@ -664,7 +753,8 @@ static int run_model_train(int argc, char **argv) {
     llm_backend *backend = NULL;
     lm_model *model = NULL;
     lm_trainer *trainer = NULL;
-    llm_status status = llm_backend_cpu_create(&backend);
+    llm_status status = use_metal != 0 ? llm_backend_metal_create(&backend)
+                                       : llm_backend_cpu_create(&backend);
     lm_model_config model_config = {.vocabulary_size = lm_dataset_model_vocabulary_size(dataset),
                                     .context_length = trainer_config.context_length,
                                     .hidden_size = hidden_size,
@@ -727,15 +817,47 @@ static int run_model_train(int argc, char **argv) {
     printf("{\"schema\":\"llm-lab-model-training-v1\",\"steps\":%llu,"
            "\"loss\":%.8f,\"vocabulary_size\":%" PRIu32 ","
            "\"context_length\":%zu,\"hidden_size\":%zu,\"layer_count\":%zu,"
+           "\"backend\":\"%s\","
            "\"checkpoint_saved\":%s}\n",
            lm_trainer_step_count(trainer), loss, model_config.vocabulary_size,
            model_config.context_length, model_config.hidden_size, model_config.layer_count,
+           use_metal != 0 ? "metal" : "cpu",
            checkpoint_path == NULL ? "false" : "true");
     lm_trainer_destroy(trainer);
     lm_model_destroy(model);
     llm_backend_destroy(backend);
     lm_dataset_close(dataset);
     return 0;
+}
+
+static size_t valid_utf8_sequence_length(const unsigned char *bytes, size_t length) {
+    if (length == 0U || bytes[0] < 0x80U) {
+        return length == 0U ? 0U : 1U;
+    }
+    if (bytes[0] >= 0xc2U && bytes[0] <= 0xdfU && length >= 2U &&
+        bytes[1] >= 0x80U && bytes[1] <= 0xbfU) {
+        return 2U;
+    }
+    if (length >= 3U &&
+        ((bytes[0] == 0xe0U && bytes[1] >= 0xa0U && bytes[1] <= 0xbfU) ||
+         ((bytes[0] >= 0xe1U && bytes[0] <= 0xecU) && bytes[1] >= 0x80U &&
+          bytes[1] <= 0xbfU) ||
+         (bytes[0] == 0xedU && bytes[1] >= 0x80U && bytes[1] <= 0x9fU) ||
+         ((bytes[0] >= 0xeeU && bytes[0] <= 0xefU) && bytes[1] >= 0x80U &&
+          bytes[1] <= 0xbfU)) &&
+        bytes[2] >= 0x80U && bytes[2] <= 0xbfU) {
+        return 3U;
+    }
+    if (length >= 4U &&
+        ((bytes[0] == 0xf0U && bytes[1] >= 0x90U && bytes[1] <= 0xbfU) ||
+         ((bytes[0] >= 0xf1U && bytes[0] <= 0xf3U) && bytes[1] >= 0x80U &&
+          bytes[1] <= 0xbfU) ||
+         (bytes[0] == 0xf4U && bytes[1] >= 0x80U && bytes[1] <= 0x8fU)) &&
+        bytes[2] >= 0x80U && bytes[2] <= 0xbfU && bytes[3] >= 0x80U &&
+        bytes[3] <= 0xbfU) {
+        return 4U;
+    }
+    return 0U;
 }
 
 static void write_generation_bytes(const unsigned char *bytes, size_t length) {
@@ -749,17 +871,55 @@ static void write_generation_bytes(const unsigned char *bytes, size_t length) {
             fputs("\\r", stdout);
         } else if (value == '\t') {
             fputs("\\t", stdout);
+        } else if (value >= 0x80U) {
+            const size_t sequence_length = valid_utf8_sequence_length(bytes + index, length - index);
+            if (sequence_length != 0U) {
+                (void)fwrite(bytes + index, 1U, sequence_length, stdout);
+                index += sequence_length - 1U;
+            } else {
+                fprintf(stdout, "\\x%02x", value);
+            }
         } else {
             fprintf(stdout, "\\x%02x", value);
         }
     }
 }
 
-static int run_model_generate(char **argv) {
+static int run_model_generate(int argc, char **argv) {
     size_t generated_count = 0U;
     if (parse_positive_size(argv[5], &generated_count) == 0) {
         fprintf(stderr, "TOKENS must be a positive integer supported by this system.\n");
         return 1;
+    }
+    cli_generation_options options = {.temperature = 0.8F,
+                                      .repetition_penalty = 1.1F,
+                                      .top_k = 40U,
+                                      .random_state = UINT64_C(1)};
+    for (int index = 7; index < argc; index += 2) {
+        if (index + 1 >= argc) {
+            fprintf(stderr, "Model generation options require a value.\n");
+            return 1;
+        }
+        const char *option = argv[index];
+        const char *value = argv[index + 1];
+        int parsed = 0;
+        if (strcmp(option, "--temperature") == 0) {
+            parsed = parse_positive_float(value, &options.temperature);
+        } else if (strcmp(option, "--top-k") == 0) {
+            parsed = parse_positive_size(value, &options.top_k);
+        } else if (strcmp(option, "--repetition-penalty") == 0) {
+            parsed = parse_positive_float(value, &options.repetition_penalty) &&
+                     options.repetition_penalty >= 1.0F;
+        } else if (strcmp(option, "--seed") == 0) {
+            parsed = parse_seed(value, &options.random_state);
+        }
+        if (parsed == 0) {
+            fprintf(stderr, "Invalid model generation option: %s %s\n", option, value);
+            return 1;
+        }
+    }
+    if (options.random_state == 0U) {
+        options.random_state = UINT64_C(0x9e3779b97f4a7c15);
     }
     tokenizer *tokenizer = NULL;
     tokenizer_status tokenizer_result = tokenizer_load(argv[4], &tokenizer);
@@ -820,13 +980,25 @@ static int run_model_generate(char **argv) {
     } else if (status == LLM_OK) {
         status = LLM_OVERFLOW;
     }
+    cli_generation_candidate *candidates = NULL;
+    unsigned char *recent_tokens = NULL;
+    if (status == LLM_OK && config.vocabulary_size > 2U) {
+        candidates = malloc(((size_t)config.vocabulary_size - 2U) * sizeof(*candidates));
+        recent_tokens = calloc(config.vocabulary_size, sizeof(*recent_tokens));
+        status = candidates == NULL || recent_tokens == NULL ? LLM_ALLOCATION_FAILED : LLM_OK;
+    } else if (status == LLM_OK) {
+        status = LLM_INVALID_SHAPE;
+    }
     for (size_t generated = 0U; status == LLM_OK && generated < generated_count; ++generated) {
         token_id context[LLM_TENSOR_MAX_RANK == 4U ? config.context_length : 1U];
         const size_t available = sequence.length + generated;
-        for (size_t position = 0U; position < config.context_length; ++position) {
-            const size_t from_end = config.context_length - 1U - position;
-            context[config.context_length - 1U - position] =
-                from_end < available ? sequence.ids[available - 1U - from_end] : sequence.ids[0];
+        const size_t used = available < config.context_length ? available : config.context_length;
+        const size_t first = available - used;
+        for (size_t position = 0U; position < used; ++position) {
+            context[position] = sequence.ids[first + position];
+        }
+        for (size_t position = used; position < config.context_length; ++position) {
+            context[position] = config.vocabulary_size - 1U;
         }
         status = llm_tensor_write(backend, &input_ids, context, sizeof(context));
         if (status == LLM_OK) {
@@ -837,14 +1009,10 @@ static int run_model_generate(char **argv) {
                                      logits.element_count * sizeof(*host_logits));
         }
         if (status == LLM_OK) {
-            const float *row = host_logits + (config.context_length - 1U) * config.vocabulary_size;
-            token_id next = 0U;
-            for (uint32_t candidate = 1U; candidate + 1U < config.vocabulary_size; ++candidate) {
-                if (row[candidate] > row[next]) {
-                    next = candidate;
-                }
-            }
-            sequence.ids[available] = next;
+            const float *row = host_logits + (used - 1U) * config.vocabulary_size;
+            sequence.ids[available] = sample_generation_token(
+                row, config.vocabulary_size, sequence.ids, available, config.context_length,
+                candidates, recent_tokens, &options);
         }
     }
     if (status == LLM_OK) {
@@ -863,6 +1031,8 @@ static int run_model_generate(char **argv) {
     if (status != LLM_OK) {
         fprintf(stderr, "Generating text failed: %s\n", llm_status_string(status));
     }
+    free(recent_tokens);
+    free(candidates);
     free(host_logits);
     llm_tensor_destroy(&logits);
     llm_tensor_destroy(&input_ids);
@@ -1019,8 +1189,8 @@ int main(int argc, char **argv) {
     if (argc >= 5 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "train") == 0) {
         return run_model_train(argc, argv);
     }
-    if (argc == 7 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "generate") == 0) {
-        return run_model_generate(argv);
+    if (argc >= 7 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "generate") == 0) {
+        return run_model_generate(argc, argv);
     }
     if (argc >= 6 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "evaluate") == 0) {
         return run_model_evaluate(argc, argv);

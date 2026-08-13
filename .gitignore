@@ -33,4 +33,8 @@ __pycache__/
 /artifacts/benchmarks/local/
 
 # Checkpoint locali del training: grandi e dipendenti dall'esperimento.
-/artifacts/models/
+# Il checkpoint di riferimento del Modello Minimal e' invece un artefatto
+# riproducibile e versionato.
+/artifacts/models/*
+!/artifacts/models/minimal-model/
+!/artifacts/models/minimal-model/minimal-model-metal-step-2000000.llmckpt
