@@ -1,7 +1,8 @@
 # Piano di sviluppo — backend Metal ad alte prestazioni con MPS
 
-**Stato (2026-08-12):** M0--M2 completate e validate su Apple M4; M3--M10
-rimandate dopo il primo modello CPU.
+**Stato (2026-08-13):** M0--M7 sono implementate nel codice e una sessione M3
+da 2 milioni di step e' stata eseguita su Metal. M8--M10 richiedono ancora la
+parita' contrattuale completa e benchmark riproducibili per forma.
 **Destinatario:** sviluppatore del runtime Metal.
 **Obiettivo:** completare il backend Metal v1 per il training, senza cambiare l'API pubblica C e senza delegare il modello a un framework esterno.
 
@@ -27,19 +28,17 @@ Il modello e il trainer non devono importare `Metal`, `MetalPerformanceShaders`,
 
 Il backend Metal e' quindi un **adattatore interno**: per ogni operazione decide se usare un kernel Metal locale o una primitiva Apple, ma produce esattamente la semantica del contratto [Runtime v1](runtime-v1-architecture.md).
 
-### Stato della pausa
+### Stato di implementazione
 
-Le milestone M0 (integrazione MPS), M1 (`matmul_ex` F32 con trasposizioni) e
-M2 (`accumulate`, SiLU forward/backward) sono state implementate. La build
-Release e i test Metal dedicati sono verdi su un Mac mini Apple M4 con 24 GiB
-di memoria unificata; il GEMM F32 `512x512x512` ha misurato circa 360 GFLOP/s
-Metal end-to-end contro circa 95 GFLOP/s CPU a 10 thread.
+Le milestone M0--M7 sono implementate, inclusi RMSNorm, RoPE, attention GQA e
+AdamW. La build Release e i test Metal dedicati sono stati eseguiti su un Mac
+mini Apple M4 con 24 GiB di memoria unificata; il GEMM F32 `512x512x512` ha
+misurato circa 360 GFLOP/s Metal end-to-end contro circa 95 GFLOP/s CPU a 10
+thread. Una successiva sessione M3 su Metal ha raggiunto 2 milioni di step.
 
-Il backend non e' tuttavia completo per il training: RMSNorm, RoPE, attention
-GQA e AdamW non sono ancora implementati su Metal. Il progetto procede ora con
-il modello CPU; riprendere da M3 quando le forme dei layer reali permetteranno
-di definire benchmark e priorita' migliori. CUDA resta deliberatamente fuori
-dallo scope finche' non sono disponibili hardware e CI per validarlo.
+Restano M8 (parita' contrattuale completa), M9 (profiling e tuning per forma) e
+la dimostrazione formale M10. CUDA resta deliberatamente fuori dallo scope
+finche' non sono disponibili hardware e CI per validarlo.
 
 ### Decisioni vincolanti
 

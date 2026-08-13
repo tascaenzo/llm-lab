@@ -49,20 +49,7 @@ ALL_OPERATIONS = {
     "adamw",
 }
 
-METAL_OPERATIONS = ALL_OPERATIONS - {
-    "matmul_transpose_left",
-    "matmul_transpose_right",
-    "accumulate",
-    "silu",
-    "silu_backward",
-    "rms_norm",
-    "rms_norm_backward",
-    "rope",
-    "rope_backward",
-    "attention",
-    "attention_backward",
-    "adamw",
-}
+METAL_OPERATIONS = ALL_OPERATIONS
 
 
 SCENARIOS: Sequence[Tuple[str, Sequence[str]]] = (

@@ -123,11 +123,15 @@ batcher. Per continuare in modo riproducibile:
 
 ./build/debug/llm-lab model generate \
   artifacts/models/minimal-step-2000.llmckpt TOKENIZER.llmtok 32 \
-  "La capitale d'Italia"
+  "La capitale d'Italia" \
+  --temperature 0.8 --top-k 40 --repetition-penalty 1.1 --seed 1
 ```
 
 La loss e la perplexity su validation sono il criterio numerico per decidere
 se un training migliora; la generazione serve come controllo qualitativo.
+La generazione usa sampling top-k riproducibile e penalizza le ripetizioni nella
+finestra di contesto; questi valori sono i default e possono essere regolati da
+riga di comando. Il testo UTF-8 valido viene stampato normalmente.
 Con le dimensioni e gli step iniziali il testo non e' ancora un articolo o un
 dialogo affidabile.
 

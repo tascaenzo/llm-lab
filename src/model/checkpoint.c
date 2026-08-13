@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +86,14 @@ static llm_status write_tensor(FILE *file, llm_backend *backend, const llm_tenso
         return LLM_ALLOCATION_FAILED;
     }
     llm_status status = llm_tensor_read(backend, tensor, values, byte_count);
+    if (status == LLM_OK) {
+        for (size_t index = 0U; index < tensor->element_count; ++index) {
+            if (isfinite(values[index]) == 0) {
+                status = LLM_NUMERICAL_ERROR;
+                break;
+            }
+        }
+    }
     if (status == LLM_OK && write_exact(file, values, byte_count) == 0) {
         status = LLM_BACKEND_ERROR;
     }
@@ -102,6 +111,14 @@ static llm_status read_tensor(FILE *file, llm_backend *backend, llm_tensor *tens
         return LLM_ALLOCATION_FAILED;
     }
     llm_status status = read_exact(file, values, byte_count) != 0 ? LLM_OK : LLM_INVALID_ARGUMENT;
+    if (status == LLM_OK) {
+        for (size_t index = 0U; index < tensor->element_count; ++index) {
+            if (isfinite(values[index]) == 0) {
+                status = LLM_NUMERICAL_ERROR;
+                break;
+            }
+        }
+    }
     if (status == LLM_OK) {
         status = llm_tensor_write(backend, tensor, values, byte_count);
     }

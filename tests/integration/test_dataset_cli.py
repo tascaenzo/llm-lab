@@ -114,6 +114,34 @@ def main():
         )
         if not generated.stdout.strip():
             raise AssertionError("generazione vuota")
+        sampled_command = [
+            str(cli),
+            "model",
+            "generate",
+            str(generation_checkpoint),
+            str(model),
+            "4",
+            "L'Italia è",
+            "--temperature",
+            "0.8",
+            "--top-k",
+            "8",
+            "--repetition-penalty",
+            "1.1",
+            "--seed",
+            "73",
+        ]
+        sampled_first = run(sampled_command)
+        sampled_second = run(sampled_command)
+        if sampled_first.stdout != sampled_second.stdout:
+            raise AssertionError("lo stesso seed deve produrre la stessa generazione")
+        if "L'Italia è" not in sampled_first.stdout or "\\xc3\\xa8" in sampled_first.stdout:
+            raise AssertionError(f"output UTF-8 inatteso: {sampled_first.stdout!r}")
+        invalid_sampling = run(
+            sampled_command[:-2] + ["--repetition-penalty", "0.9"], expected_returncode=1
+        )
+        if "Invalid model generation option" not in invalid_sampling.stderr:
+            raise AssertionError("una repetition penalty inferiore a 1 deve essere rifiutata")
         evaluated = json.loads(
             run(
                 [

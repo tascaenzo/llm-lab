@@ -42,10 +42,13 @@ target_include_directories(runtime_cpu_transformer_test PRIVATE
 llm_lab_set_warnings(runtime_cpu_transformer_test)
 add_test(NAME runtime.backend_contract.cpu COMMAND runtime_cpu_transformer_test)
 
-add_executable(runtime_metal_backend_test runtime/test_metal_backend.c)
+add_executable(runtime_metal_backend_test
+    runtime/backend_contract_suite.c
+    runtime/test_metal_backend.c)
 target_compile_features(runtime_metal_backend_test PRIVATE c_std_23)
-target_link_libraries(runtime_metal_backend_test PRIVATE runtime)
+target_link_libraries(runtime_metal_backend_test PRIVATE model runtime)
 target_include_directories(runtime_metal_backend_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
 llm_lab_set_warnings(runtime_metal_backend_test)
 add_test(NAME runtime.metal_backend COMMAND runtime_metal_backend_test)
