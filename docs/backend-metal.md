@@ -1,8 +1,8 @@
 # Backend Metal
 
 **Stato (2026-08-13):** il codice Metal copre il contratto training v1,
-inclusi RMSNorm, RoPE, attention causale GQA e AdamW. Una sessione M3 di
-2.000.000 step su Apple Silicon ha prodotto un checkpoint riproducibile; la
+inclusi RMSNorm, RoPE, attention causale GQA e AdamW. Una sessione del Modello
+Minimal di 2.000.000 step su Apple Silicon ha prodotto un checkpoint riproducibile; la
 parita' contrattuale completa e il profiling per forma restano i gate aperti.
 **Piattaforma:** macOS su Apple Silicon. Nessun fallback CPU.
 
@@ -63,7 +63,7 @@ loss al termine dello step. Non aggiungere CUDA: l'API backend resta portabile,
 ma senza hardware e CI CUDA non ci sarebbe una validazione affidabile della
 parita' numerica.
 
-## Risultato M3 — sessione di training Metal
+## Risultato del Modello Minimal — sessione di training Metal
 
 La sessione del 13 agosto 2026 ha addestrato su Metal il Modello Minimal con
 `vocabulary_size=32001`, `hidden_size=64`, un layer, una head, contesto 32,

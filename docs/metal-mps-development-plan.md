@@ -1,7 +1,7 @@
 # Piano di sviluppo — backend Metal ad alte prestazioni con MPS
 
-**Stato (2026-08-13):** M0--M7 sono implementate nel codice e una sessione M3
-da 2 milioni di step e' stata eseguita su Metal. M8--M10 richiedono ancora la
+**Stato (2026-08-13):** M0--M7 sono implementate nel codice e una sessione del
+Modello Minimal da 2 milioni di step e' stata eseguita su Metal. M8--M10 richiedono ancora la
 parita' contrattuale completa e benchmark riproducibili per forma.
 **Destinatario:** sviluppatore del runtime Metal.
 **Obiettivo:** completare il backend Metal v1 per il training, senza cambiare l'API pubblica C e senza delegare il modello a un framework esterno.
@@ -34,7 +34,8 @@ Le milestone M0--M7 sono implementate, inclusi RMSNorm, RoPE, attention GQA e
 AdamW. La build Release e i test Metal dedicati sono stati eseguiti su un Mac
 mini Apple M4 con 24 GiB di memoria unificata; il GEMM F32 `512x512x512` ha
 misurato circa 360 GFLOP/s Metal end-to-end contro circa 95 GFLOP/s CPU a 10
-thread. Una successiva sessione M3 su Metal ha raggiunto 2 milioni di step.
+thread. Una successiva sessione del Modello Minimal su Metal ha raggiunto 2
+milioni di step.
 
 Restano M8 (parita' contrattuale completa), M9 (profiling e tuning per forma) e
 la dimostrazione formale M10. CUDA resta deliberatamente fuori dallo scope
