@@ -38,7 +38,37 @@ static float learning_rate_for_step(const lm_trainer_config *config, unsigned lo
                    (maximum - (double)config->minimum_learning_rate) * cosine);
 }
 
+/**
+ * Splits a parameter gradient into rows of its own last dimension. Reducing
+ * per row and then summing the rows keeps the work parallel on both backends
+ * and avoids one serial FP32 accumulation over millions of elements.
+ */
+static void gradient_row_split(const llm_tensor *gradient, size_t *out_rows, size_t *out_width) {
+    const size_t width = gradient->rank == 0U ? 1U : gradient->shape[gradient->rank - 1U];
+    *out_width = width;
+    *out_rows = gradient->element_count / width;
+}
+
+static llm_status begin_metal_batch(llm_backend *backend, int use_metal_batch) {
+    return use_metal_batch != 0 ? llm_backend_metal_begin_batch(backend) : LLM_OK;
+}
+
+/** Ends a Metal batch, keeping the first failure between the batch and the work. */
+static llm_status end_metal_batch(llm_backend *backend, int use_metal_batch, llm_status status) {
+    if (use_metal_batch == 0) {
+        return status;
+    }
+    const llm_status batch_status = llm_backend_metal_end_batch(backend);
+    return status == LLM_OK ? batch_status : status;
+}
+
 static void destroy_tensors(lm_trainer *trainer) {
+    for (size_t index = 0U; index < trainer->gradient_partial_count; ++index) {
+        llm_tensor_destroy(&trainer->gradient_partials[index]);
+    }
+    free(trainer->gradient_partials);
+    trainer->gradient_partials = NULL;
+    trainer->gradient_partial_count = 0U;
     llm_tensor_destroy(&trainer->logits_gradient);
     llm_tensor_destroy(&trainer->loss);
     llm_tensor_destroy(&trainer->logits);
@@ -126,6 +156,28 @@ llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset, const lm_trai
         status = llm_tensor_create(lm_model_backend(model), LLM_DTYPE_F32, 0U, NULL,
                                    &trainer->gradient_norm_square);
     }
+    if (status == LLM_OK) {
+        const size_t parameter_count = lm_model_parameter_count(model);
+        trainer->gradient_partials = calloc(parameter_count, sizeof(*trainer->gradient_partials));
+        if (trainer->gradient_partials == NULL) {
+            status = LLM_ALLOCATION_FAILED;
+        } else {
+            trainer->gradient_partial_count = parameter_count;
+        }
+        for (size_t index = 0U; status == LLM_OK && index < parameter_count; ++index) {
+            const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
+            if (gradient == NULL) {
+                status = LLM_INVALID_ARGUMENT;
+                break;
+            }
+            size_t rows = 0U;
+            size_t width = 0U;
+            gradient_row_split(gradient, &rows, &width);
+            const size_t partial_shape[] = {rows};
+            status = llm_tensor_create(lm_model_backend(model), LLM_DTYPE_F32, 1U, partial_shape,
+                                       &trainer->gradient_partials[index]);
+        }
+    }
     if (status != LLM_OK) {
         lm_trainer_destroy(trainer);
         return status;
@@ -153,33 +205,47 @@ llm_status lm_trainer_get_config(const lm_trainer *trainer, lm_trainer_config *o
     return LLM_OK;
 }
 
-static llm_status trainer_gradient_norm(lm_trainer *trainer, float *out_norm) {
+static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_metal_batch, float *out_norm) {
     llm_backend *backend = lm_model_backend(trainer->model);
-    llm_status status = llm_tensor_fill_f32(backend, &trainer->gradient_norm_square, 0.0F);
     const size_t parameter_count = lm_model_parameter_count(trainer->model);
+    if (parameter_count != trainer->gradient_partial_count) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    llm_status status = begin_metal_batch(backend, use_metal_batch);
+    if (status == LLM_OK) {
+        status = llm_tensor_fill_f32(backend, &trainer->gradient_norm_square, 0.0F);
+    }
     for (size_t index = 0U; status == LLM_OK && index < parameter_count; ++index) {
         const llm_tensor *gradient = lm_model_parameter_gradient(trainer->model, index);
-        if (gradient == NULL || gradient->element_count > SIZE_MAX) {
-            status = LLM_OVERFLOW;
+        if (gradient == NULL) {
+            status = LLM_INVALID_ARGUMENT;
             break;
         }
-        const size_t shape[] = {gradient->element_count};
-        llm_tensor flat_gradient = {0};
-        status = llm_tensor_reshape(gradient, 1U, shape, &flat_gradient);
+        size_t rows = 0U;
+        size_t width = 0U;
+        gradient_row_split(gradient, &rows, &width);
+        const size_t row_shape[] = {rows, width};
+        llm_tensor gradient_rows = {0};
+        status = llm_tensor_reshape(gradient, 2U, row_shape, &gradient_rows);
         if (status == LLM_OK) {
-            status = llm_reduce_mean_square_last(backend, &flat_gradient,
-                                                 &trainer->gradient_mean_square);
+            status = llm_reduce_mean_square_last(backend, &gradient_rows,
+                                                 &trainer->gradient_partials[index]);
         }
-        llm_tensor_destroy(&flat_gradient);
+        llm_tensor_destroy(&gradient_rows);
         if (status == LLM_OK) {
-            status = llm_scale(backend, &trainer->gradient_mean_square,
-                               (float)gradient->element_count, &trainer->gradient_sum_square);
+            status = llm_reduce_sum_last(backend, &trainer->gradient_partials[index],
+                                         &trainer->gradient_mean_square);
+        }
+        if (status == LLM_OK) {
+            status = llm_scale(backend, &trainer->gradient_mean_square, (float)width,
+                               &trainer->gradient_sum_square);
         }
         if (status == LLM_OK) {
             status = llm_accumulate(backend, &trainer->gradient_sum_square,
                                     &trainer->gradient_norm_square);
         }
     }
+    status = end_metal_batch(backend, use_metal_batch, status);
     float sum_square = 0.0F;
     if (status == LLM_OK) {
         status = llm_tensor_read(backend, &trainer->gradient_norm_square, &sum_square,
@@ -198,8 +264,12 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     }
     const size_t token_count = trainer->config.batch_size * trainer->config.context_length;
     llm_backend *backend = lm_model_backend(trainer->model);
-    llm_status status = lm_model_zero_grad(trainer->model);
     const int use_metal_batch = llm_backend_device(backend) == LLM_DEVICE_METAL;
+    llm_status status = begin_metal_batch(backend, use_metal_batch);
+    if (status == LLM_OK) {
+        status = lm_model_zero_grad(trainer->model);
+    }
+    status = end_metal_batch(backend, use_metal_batch, status);
     float accumulated_loss = 0.0F;
     for (size_t micro_step = 0U;
          status == LLM_OK && micro_step < trainer->config.gradient_accumulation_steps;
@@ -209,9 +279,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
             status = LLM_BACKEND_ERROR;
             break;
         }
-        if (use_metal_batch != 0) {
-            status = llm_backend_metal_begin_batch(backend);
-        }
+        status = begin_metal_batch(backend, use_metal_batch);
         if (status == LLM_OK) {
             status = llm_tensor_write(backend, &trainer->input_ids, trainer->host_inputs,
                                       token_count * sizeof(*trainer->host_inputs));
@@ -235,12 +303,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
             status =
                 lm_model_backward(trainer->model, &trainer->input_ids, &trainer->logits_gradient);
         }
-        if (use_metal_batch != 0) {
-            const llm_status batch_status = llm_backend_metal_end_batch(backend);
-            if (status == LLM_OK) {
-                status = batch_status;
-            }
-        }
+        status = end_metal_batch(backend, use_metal_batch, status);
         float micro_loss = 0.0F;
         if (status == LLM_OK) {
             status = llm_tensor_read(backend, &trainer->loss, &micro_loss, sizeof(micro_loss));
@@ -257,7 +320,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     float gradient_norm = 0.0F;
     float clipping_scale = 1.0F;
     if (status == LLM_OK && trainer->config.gradient_clip_norm > 0.0F) {
-        status = trainer_gradient_norm(trainer, &gradient_norm);
+        status = trainer_gradient_norm(trainer, use_metal_batch, &gradient_norm);
         if (status == LLM_OK && gradient_norm > trainer->config.gradient_clip_norm) {
             clipping_scale = trainer->config.gradient_clip_norm / gradient_norm;
         }
@@ -271,18 +334,11 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
         .gradient_scale = clipping_scale / (float)trainer->config.gradient_accumulation_steps,
         .step = trainer->step + 1U};
     if (status == LLM_OK) {
-        if (use_metal_batch != 0) {
-            status = llm_backend_metal_begin_batch(backend);
-        }
-    }
-    if (status == LLM_OK) {
-        status = lm_model_apply_adamw(trainer->model, &options);
-    }
-    if (use_metal_batch != 0) {
-        const llm_status batch_status = llm_backend_metal_end_batch(backend);
+        status = begin_metal_batch(backend, use_metal_batch);
         if (status == LLM_OK) {
-            status = batch_status;
+            status = lm_model_apply_adamw(trainer->model, &options);
         }
+        status = end_metal_batch(backend, use_metal_batch, status);
     }
     if (status != LLM_OK) {
         return status;
@@ -357,8 +413,7 @@ llm_status lm_model_evaluate_validation(lm_model *model, lm_dataset *dataset, si
             status = LLM_BACKEND_ERROR;
             break;
         }
-        if (use_metal_batch != 0)
-            status = llm_backend_metal_begin_batch(backend);
+        status = begin_metal_batch(backend, use_metal_batch);
         if (status == LLM_OK)
             status =
                 llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
@@ -369,11 +424,7 @@ llm_status lm_model_evaluate_validation(lm_model *model, lm_dataset *dataset, si
             status = lm_model_forward(model, &inputs, &logits);
         if (status == LLM_OK)
             status = llm_cross_entropy_forward(backend, &logits, &targets, &loss);
-        if (use_metal_batch != 0) {
-            const llm_status batch_status = llm_backend_metal_end_batch(backend);
-            if (status == LLM_OK)
-                status = batch_status;
-        }
+        status = end_metal_batch(backend, use_metal_batch, status);
         float batch_loss = 0.0F;
         if (status == LLM_OK)
             status = llm_tensor_read(backend, &loss, &batch_loss, sizeof(batch_loss));

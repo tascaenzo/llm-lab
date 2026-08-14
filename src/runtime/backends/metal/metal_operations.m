@@ -153,10 +153,12 @@ static llm_status metal_dispatch_row_groups(llm_metal_context *context, llm_meta
     return llm_metal_submit(context, command_buffer);
 }
 
-static llm_status metal_dispatch_attention_groups(
-    llm_metal_context *context, llm_metal_pipeline pipeline, id<MTLCommandBuffer> command_buffer,
-    id<MTLComputeCommandEncoder> encoder, size_t group_count, size_t head_dimension,
-    size_t scratch_float_count) {
+static llm_status metal_dispatch_attention_groups(llm_metal_context *context,
+                                                  llm_metal_pipeline pipeline,
+                                                  id<MTLCommandBuffer> command_buffer,
+                                                  id<MTLComputeCommandEncoder> encoder,
+                                                  size_t group_count, size_t head_dimension,
+                                                  size_t scratch_float_count) {
     id<MTLComputePipelineState> state = context->pipelines[pipeline];
     const NSUInteger width = [state threadExecutionWidth];
     const NSUInteger maximum = [state maxTotalThreadsPerThreadgroup];
@@ -172,7 +174,8 @@ static llm_status metal_dispatch_attention_groups(
         metal_end_compute(context, encoder);
         return LLM_OVERFLOW;
     }
-    [encoder setThreadgroupMemoryLength:(NSUInteger)(scratch_float_count * sizeof(float)) atIndex:0U];
+    [encoder setThreadgroupMemoryLength:(NSUInteger)(scratch_float_count * sizeof(float))
+                                atIndex:0U];
     [encoder dispatchThreadgroups:MTLSizeMake((NSUInteger)group_count, 1U, 1U)
             threadsPerThreadgroup:MTLSizeMake(threads, 1U, 1U)];
     metal_end_compute(context, encoder);
@@ -302,8 +305,8 @@ llm_status llm_metal_accumulate_f32(void *opaque_context, const float *source, f
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
         id<MTLComputeCommandEncoder> encoder = nil;
-        llm_status status = metal_begin_compute(context, LLM_METAL_PIPELINE_ACCUMULATE,
-                                                &command_buffer, &encoder);
+        llm_status status =
+            metal_begin_compute(context, LLM_METAL_PIPELINE_ACCUMULATE, &command_buffer, &encoder);
         if (status != LLM_OK) {
             return status;
         }
@@ -365,8 +368,8 @@ llm_status llm_metal_silu_backward_f32(void *opaque_context, const float *input,
         [encoder setBuffer:metal_buffer_handle(output_gradient) offset:0U atIndex:1U];
         [encoder setBuffer:metal_buffer_handle(input_gradient) offset:0U atIndex:2U];
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3U];
-        return metal_dispatch_1d(context, LLM_METAL_PIPELINE_SILU_BACKWARD, command_buffer,
-                                 encoder, metal_elementwise_thread_count(value_count));
+        return metal_dispatch_1d(context, LLM_METAL_PIPELINE_SILU_BACKWARD, command_buffer, encoder,
+                                 metal_elementwise_thread_count(value_count));
     }
 }
 
@@ -398,8 +401,8 @@ llm_status llm_metal_rms_norm_f32(void *opaque_context, const float *input, cons
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
         id<MTLComputeCommandEncoder> encoder = nil;
-        status = metal_begin_compute(context, LLM_METAL_PIPELINE_RMS_NORM, &command_buffer,
-                                    &encoder);
+        status =
+            metal_begin_compute(context, LLM_METAL_PIPELINE_RMS_NORM, &command_buffer, &encoder);
         if (status != LLM_OK) {
             return status;
         }
@@ -441,8 +444,8 @@ llm_status llm_metal_rms_norm_backward_f32(void *opaque_context, const float *in
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
         id<MTLComputeCommandEncoder> encoder = nil;
-        status = metal_begin_compute(context, LLM_METAL_PIPELINE_RMS_NORM_BACKWARD,
-                                    &command_buffer, &encoder);
+        status = metal_begin_compute(context, LLM_METAL_PIPELINE_RMS_NORM_BACKWARD, &command_buffer,
+                                     &encoder);
         if (status != LLM_OK) {
             return status;
         }
@@ -464,17 +467,18 @@ llm_status llm_metal_rms_norm_backward_f32(void *opaque_context, const float *in
     }
 }
 
-static llm_status metal_rope(void *opaque_context, llm_metal_pipeline pipeline,
-                             const float *input, const float *cos_table, const float *sin_table,
-                             size_t batch_count, size_t sequence_length, size_t head_count,
-                             size_t head_dimension, float *output) {
+static llm_status metal_rope(void *opaque_context, llm_metal_pipeline pipeline, const float *input,
+                             const float *cos_table, const float *sin_table, size_t batch_count,
+                             size_t sequence_length, size_t head_count, size_t head_dimension,
+                             float *output) {
     if (opaque_context == NULL || input == NULL || cos_table == NULL || sin_table == NULL ||
-        output == NULL || head_dimension % 2U != 0U || batch_count == 0U ||
-        sequence_length == 0U || head_count == 0U || head_dimension == 0U) {
+        output == NULL || head_dimension % 2U != 0U || batch_count == 0U || sequence_length == 0U ||
+        head_count == 0U || head_dimension == 0U) {
         return LLM_INVALID_ARGUMENT;
     }
     const size_t pairs_per_head = head_dimension / 2U;
-    if (batch_count > SIZE_MAX / sequence_length || batch_count * sequence_length > SIZE_MAX / head_count ||
+    if (batch_count > SIZE_MAX / sequence_length ||
+        batch_count * sequence_length > SIZE_MAX / head_count ||
         batch_count * sequence_length * head_count > SIZE_MAX / pairs_per_head) {
         return LLM_OVERFLOW;
     }
@@ -509,9 +513,8 @@ static llm_status metal_rope(void *opaque_context, llm_metal_pipeline pipeline,
 }
 
 llm_status llm_metal_rope_f32(void *context, const float *input, const float *cos_table,
-                              const float *sin_table, size_t batch_count,
-                              size_t sequence_length, size_t head_count, size_t head_dimension,
-                              float *output) {
+                              const float *sin_table, size_t batch_count, size_t sequence_length,
+                              size_t head_count, size_t head_dimension, float *output) {
     return metal_rope(context, LLM_METAL_PIPELINE_ROPE, input, cos_table, sin_table, batch_count,
                       sequence_length, head_count, head_dimension, output);
 }
@@ -529,8 +532,8 @@ llm_status llm_metal_rope_backward_f32(void *context, const float *output_gradie
 static llm_status metal_attention_parameters_create(
     size_t batch_count, size_t sequence_length, size_t query_head_count,
     size_t key_value_head_count, size_t head_dimension, float scale,
-    metal_attention_parameters *out_parameters, size_t *out_query_rows,
-    size_t *out_query_values, size_t *out_key_value_values) {
+    metal_attention_parameters *out_parameters, size_t *out_query_rows, size_t *out_query_values,
+    size_t *out_key_value_values) {
     if (out_parameters == NULL || out_query_rows == NULL || out_query_values == NULL ||
         out_key_value_values == NULL || !isfinite(scale) || scale <= 0.0F || batch_count == 0U ||
         sequence_length == 0U || query_head_count == 0U || key_value_head_count == 0U ||
@@ -560,17 +563,16 @@ static llm_status metal_attention_parameters_create(
 llm_status llm_metal_attention_forward_f32(void *opaque_context, const float *query,
                                            const float *key, const float *value, float scale,
                                            size_t batch_count, size_t sequence_length,
-                                           size_t query_head_count,
-                                           size_t key_value_head_count, size_t head_dimension,
-                                           float *output) {
+                                           size_t query_head_count, size_t key_value_head_count,
+                                           size_t head_dimension, float *output) {
     if (opaque_context == NULL || query == NULL || key == NULL || value == NULL || output == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
     metal_attention_parameters parameters = {0};
     size_t query_rows = 0U, query_values = 0U, key_value_values = 0U;
     llm_status status = metal_attention_parameters_create(
-        batch_count, sequence_length, query_head_count, key_value_head_count, head_dimension,
-        scale, &parameters, &query_rows, &query_values, &key_value_values);
+        batch_count, sequence_length, query_head_count, key_value_head_count, head_dimension, scale,
+        &parameters, &query_rows, &query_values, &key_value_values);
     if (status != LLM_OK) {
         return status;
     }
@@ -578,8 +580,8 @@ llm_status llm_metal_attention_forward_f32(void *opaque_context, const float *qu
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
         id<MTLComputeCommandEncoder> encoder = nil;
-        status = metal_begin_compute(context, LLM_METAL_PIPELINE_ATTENTION_FORWARD,
-                                    &command_buffer, &encoder);
+        status = metal_begin_compute(context, LLM_METAL_PIPELINE_ATTENTION_FORWARD, &command_buffer,
+                                     &encoder);
         if (status != LLM_OK) {
             return status;
         }
@@ -595,15 +597,17 @@ llm_status llm_metal_attention_forward_f32(void *opaque_context, const float *qu
             return status;
         }
         return metal_buffer_values_are_finite(output, query_values) != 0 ? LLM_OK
-                                                                          : LLM_NUMERICAL_ERROR;
+                                                                         : LLM_NUMERICAL_ERROR;
     }
 }
 
-llm_status llm_metal_attention_backward_f32(
-    void *opaque_context, const float *query, const float *key, const float *value,
-    const float *output_gradient, float scale, size_t batch_count, size_t sequence_length,
-    size_t query_head_count, size_t key_value_head_count, size_t head_dimension,
-    float *query_gradient, float *key_gradient, float *value_gradient) {
+llm_status llm_metal_attention_backward_f32(void *opaque_context, const float *query,
+                                            const float *key, const float *value,
+                                            const float *output_gradient, float scale,
+                                            size_t batch_count, size_t sequence_length,
+                                            size_t query_head_count, size_t key_value_head_count,
+                                            size_t head_dimension, float *query_gradient,
+                                            float *key_gradient, float *value_gradient) {
     if (opaque_context == NULL || query == NULL || key == NULL || value == NULL ||
         output_gradient == NULL || query_gradient == NULL || key_gradient == NULL ||
         value_gradient == NULL) {
@@ -612,8 +616,8 @@ llm_status llm_metal_attention_backward_f32(
     metal_attention_parameters parameters = {0};
     size_t query_rows = 0U, query_values = 0U, key_value_values = 0U;
     llm_status status = metal_attention_parameters_create(
-        batch_count, sequence_length, query_head_count, key_value_head_count, head_dimension,
-        scale, &parameters, &query_rows, &query_values, &key_value_values);
+        batch_count, sequence_length, query_head_count, key_value_head_count, head_dimension, scale,
+        &parameters, &query_rows, &query_values, &key_value_values);
     if (status != LLM_OK) {
         return status;
     }
@@ -629,7 +633,7 @@ llm_status llm_metal_attention_backward_f32(
         id<MTLCommandBuffer> command_buffer = nil;
         id<MTLComputeCommandEncoder> encoder = nil;
         status = metal_begin_compute(context, LLM_METAL_PIPELINE_ATTENTION_BACKWARD,
-                                    &command_buffer, &encoder);
+                                     &command_buffer, &encoder);
         if (status != LLM_OK) {
             return status;
         }
@@ -659,10 +663,11 @@ llm_status llm_metal_attention_backward_f32(
     }
 }
 
-llm_status llm_metal_adamw_update_f32(
-    void *opaque_context, float *parameter, const float *gradient, float *first_moment,
-    float *second_moment, size_t value_count, float learning_rate, float beta1, float beta2,
-    float epsilon, float weight_decay, float gradient_scale, unsigned long long step) {
+llm_status llm_metal_adamw_update_f32(void *opaque_context, float *parameter, const float *gradient,
+                                      float *first_moment, float *second_moment, size_t value_count,
+                                      float learning_rate, float beta1, float beta2, float epsilon,
+                                      float weight_decay, float gradient_scale,
+                                      unsigned long long step) {
     if (opaque_context == NULL || parameter == NULL || gradient == NULL || first_moment == NULL ||
         second_moment == NULL || !isfinite(learning_rate) || learning_rate < 0.0F ||
         !isfinite(beta1) || beta1 < 0.0F || beta1 >= 1.0F || !isfinite(beta2) || beta2 < 0.0F ||
@@ -692,8 +697,8 @@ llm_status llm_metal_adamw_update_f32(
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
         id<MTLComputeCommandEncoder> encoder = nil;
-        llm_status status = metal_begin_compute(context, LLM_METAL_PIPELINE_ADAMW,
-                                                &command_buffer, &encoder);
+        llm_status status =
+            metal_begin_compute(context, LLM_METAL_PIPELINE_ADAMW, &command_buffer, &encoder);
         if (status != LLM_OK) {
             return status;
         }
@@ -1004,15 +1009,16 @@ static MPSMatrix *metal_mps_wrap_matrix(const void *memory, size_t rows, size_t 
     }
     MPSMatrixDescriptor *descriptor =
         [MPSMatrixDescriptor matrixDescriptorWithRows:mps_rows
-                                               columns:mps_columns
-                                              rowBytes:mps_columns * sizeof(float)
-                                              dataType:MPSDataTypeFloat32];
+                                              columns:mps_columns
+                                             rowBytes:mps_columns * sizeof(float)
+                                             dataType:MPSDataTypeFloat32];
     return [[[MPSMatrix alloc] initWithBuffer:buffer->handle descriptor:descriptor] autorelease];
 }
 
-static MPSMatrixMultiplication *metal_mps_gemm_get_or_create(
-    llm_metal_context *context, uint32_t left_rows, uint32_t left_columns,
-    uint32_t right_rows, uint32_t right_columns, int transpose_left, int transpose_right) {
+static MPSMatrixMultiplication *
+metal_mps_gemm_get_or_create(llm_metal_context *context, uint32_t left_rows, uint32_t left_columns,
+                             uint32_t right_rows, uint32_t right_columns, int transpose_left,
+                             int transpose_right) {
     if (context == NULL) {
         return nil;
     }
@@ -1022,7 +1028,8 @@ static MPSMatrixMultiplication *metal_mps_gemm_get_or_create(
     for (llm_metal_mps_gemm *entry = context->mps_gemms; entry != NULL; entry = entry->next) {
         if (entry->left_rows == left_rows && entry->left_columns == left_columns &&
             entry->right_rows == right_rows && entry->right_columns == right_columns &&
-            entry->transpose_left == left_transposed && entry->transpose_right == right_transposed) {
+            entry->transpose_left == left_transposed &&
+            entry->transpose_right == right_transposed) {
             MPSMatrixMultiplication *kernel = [entry->kernel retain];
             (void)pthread_mutex_unlock(&context->buffer_mutex);
             return [kernel autorelease];
@@ -1035,13 +1042,13 @@ static MPSMatrixMultiplication *metal_mps_gemm_get_or_create(
     const uint32_t result_columns = transpose_right != 0 ? right_rows : right_columns;
     MPSMatrixMultiplication *kernel =
         [[MPSMatrixMultiplication alloc] initWithDevice:context->device
-                                           transposeLeft:transpose_left != 0
-                                          transposeRight:transpose_right != 0
-                                              resultRows:result_rows
-                                           resultColumns:result_columns
-                                         interiorColumns:interior_columns
-                                                   alpha:1.0
-                                                    beta:0.0];
+                                          transposeLeft:transpose_left != 0
+                                         transposeRight:transpose_right != 0
+                                             resultRows:result_rows
+                                          resultColumns:result_columns
+                                        interiorColumns:interior_columns
+                                                  alpha:1.0
+                                                   beta:0.0];
     if (kernel == nil) {
         return nil;
     }
@@ -1102,10 +1109,9 @@ llm_status llm_metal_matmul_ex_f32(void *opaque_context, const float *left, cons
         MPSMatrix *left_matrix = metal_mps_wrap_matrix(left, left_rows, left_columns);
         MPSMatrix *right_matrix = metal_mps_wrap_matrix(right, right_rows, right_columns);
         MPSMatrix *output_matrix = metal_mps_wrap_matrix(output, result_rows, result_columns);
-        MPSMatrixMultiplication *kernel =
-            metal_mps_gemm_get_or_create(context, checked_left_rows, checked_left_columns,
-                                         checked_right_rows, checked_right_columns, transpose_left,
-                                         transpose_right);
+        MPSMatrixMultiplication *kernel = metal_mps_gemm_get_or_create(
+            context, checked_left_rows, checked_left_columns, checked_right_rows,
+            checked_right_columns, transpose_left, transpose_right);
         if (left_matrix == nil || right_matrix == nil || output_matrix == nil || kernel == nil) {
             return LLM_BACKEND_ERROR;
         }
@@ -1115,9 +1121,9 @@ llm_status llm_metal_matmul_ex_f32(void *opaque_context, const float *left, cons
             return LLM_BACKEND_ERROR;
         }
         [kernel encodeToCommandBuffer:command_buffer
-                            leftMatrix:left_matrix
-                           rightMatrix:right_matrix
-                          resultMatrix:output_matrix];
+                           leftMatrix:left_matrix
+                          rightMatrix:right_matrix
+                         resultMatrix:output_matrix];
         ++context->metrics.kernel_dispatches;
         const llm_status status = llm_metal_submit(context, command_buffer);
         if (status != LLM_OK || context->batch_active != 0) {
@@ -1271,8 +1277,13 @@ static llm_status metal_cross_entropy_dispatch(void *opaque_context, llm_metal_p
         return status;
     }
     if (pipeline == LLM_METAL_PIPELINE_CROSS_ENTROPY_FORWARD) {
-        float *loss_value = [metal_buffer_handle(output) contents];
-        loss_value[0] = 0.0F;
+        /* The kernel accumulates into this scalar, so it must start at zero.
+           Clearing it with a queued blit keeps the order against any work
+           already encoded in an open batch; a plain host store would not. */
+        status = llm_metal_zero(context, output, sizeof(float));
+        if (status != LLM_OK) {
+            return status;
+        }
     }
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;

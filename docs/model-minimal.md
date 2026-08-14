@@ -53,6 +53,12 @@ runtime API llm_*
 - `lm_model` possiede parametri e workspace delle attivazioni, non il backend.
 - `lm_trainer` non possiede dataset o modello.
 - Il chiamante possiede input IDs, logits e gradiente dei logits.
+- `lm_model_backward` **accumula** nel gradiente di ogni parametro e non lo
+  azzera: solo `lm_model_zero_grad` lo fa. Le operazioni runtime di backward
+  invece sovrascrivono i propri output, quindi ogni layer passa per un workspace
+  e chiude con `llm_accumulate`. L'invariante e' verificata da un test: due
+  backward consecutivi senza zero_grad devono dare esattamente il doppio del
+  gradiente di uno, per tutti i parametri.
 
 ## Struttura del codice
 

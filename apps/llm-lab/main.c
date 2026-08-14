@@ -2,6 +2,7 @@
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -746,6 +747,23 @@ static int save_best_validation_metadata(const char *checkpoint_path, unsigned l
     return success;
 }
 
+/**
+ * Set when the user asks a long training run to stop. The loop finishes the
+ * step in flight, writes the checkpoint and reports normally, so days of work
+ * are not lost to a keyboard interrupt.
+ */
+static volatile sig_atomic_t model_training_interrupted = 0;
+
+static void request_model_training_stop(int signal_number) {
+    (void)signal_number;
+    model_training_interrupted = 1;
+}
+
+static void install_model_training_signals(void) {
+    (void)signal(SIGINT, request_model_training_stop);
+    (void)signal(SIGTERM, request_model_training_stop);
+}
+
 static int run_model_train(int argc, char **argv) {
     size_t steps = 0U;
     lm_trainer_config trainer_config = {.batch_size = 2U,
@@ -1057,7 +1075,9 @@ static int run_model_train(int argc, char **argv) {
         (void)load_best_validation_loss(best_checkpoint_path, &best_validation_loss);
     double latest_validation_loss = INFINITY;
     int has_validation_result = 0;
+    int saved_best_checkpoint = 0;
     unsigned long long last_checkpoint_step = ULLONG_MAX;
+    install_model_training_signals();
 
     cli_model_training_progress training_progress = {
         .started_at = current_time_seconds(),
@@ -1106,7 +1126,7 @@ static int run_model_train(int argc, char **argv) {
                     metal_metrics.active_buffer_bytes, metal_metrics.peak_active_buffer_bytes,
                     metal_metrics.total_gpu_seconds);
         }
-        const int final_requested_step = index + 1U == steps;
+        const int final_requested_step = index + 1U == steps || model_training_interrupted != 0;
         const int should_validate =
             validation_dataset != NULL &&
             (global_step % (unsigned long long)validation_every == 0U || final_requested_step != 0);
@@ -1152,6 +1172,8 @@ static int run_model_train(int argc, char **argv) {
                     return 1;
                 }
             }
+            if (improved != 0 && best_checkpoint_path != NULL)
+                saved_best_checkpoint = 1;
             if (improved != 0)
                 best_validation_loss = latest_validation_loss;
             fprintf(stderr, "Validation: loss %.6f, perplexity %.3f%s\n", latest_validation_loss,
@@ -1186,6 +1208,17 @@ static int run_model_train(int argc, char **argv) {
             last_checkpoint_step = global_step;
         }
         show_model_training_progress(index + 1U, steps, loss, &training_progress);
+        if (model_training_interrupted != 0) {
+            finish_model_training_progress(&training_progress);
+            fprintf(stderr, "Interruzione richiesta: chiusura dopo lo step %llu.\n", global_step);
+            if (log_file != NULL) {
+                fprintf(log_file,
+                        "{\"schema\":\"llm-lab-training-event-v1\","
+                        "\"event\":\"interrupted\",\"step\":%llu}\n",
+                        global_step);
+            }
+            break;
+        }
     }
     finish_model_training_progress(&training_progress);
     if (checkpoint_path != NULL && last_checkpoint_step != lm_trainer_step_count(trainer)) {
@@ -1220,9 +1253,10 @@ static int run_model_train(int argc, char **argv) {
                exp(latest_validation_loss));
     else
         printf("null,\"validation_perplexity\":null,");
-    printf("\"checkpoint_saved\":%s,\"best_checkpoint_saved\":%s}\n",
+    printf("\"checkpoint_saved\":%s,\"best_checkpoint_saved\":%s,\"interrupted\":%s}\n",
            checkpoint_path == NULL ? "false" : "true",
-           best_checkpoint_path == NULL || isfinite(best_validation_loss) == 0 ? "false" : "true");
+           saved_best_checkpoint != 0 ? "true" : "false",
+           model_training_interrupted != 0 ? "true" : "false");
     if (log_file != NULL && fclose(log_file) != 0)
         fprintf(stderr, "Closing training log failed.\n");
     lm_trainer_destroy(trainer);

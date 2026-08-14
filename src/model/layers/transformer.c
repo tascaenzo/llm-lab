@@ -97,7 +97,7 @@ llm_status lm_transformer_forward(lm_model *model) {
         llm_status status =
             llm_rms_norm(model->backend, input,
                          &parameter(model, layer, LM_BLOCK_PARAMETER_ATTENTION_NORM)->value,
-                         1.0e-5F, &block->attention_norm);
+                         LM_RMS_NORM_EPSILON, &block->attention_norm);
         if (status == LLM_OK)
             status = linear_forward(model, &block->attention_norm, hidden,
                                     parameter(model, layer, LM_BLOCK_PARAMETER_QUERY),
@@ -131,7 +131,7 @@ llm_status lm_transformer_forward(lm_model *model) {
             if (status == LLM_OK)
                 status = llm_rms_norm(model->backend, &block->attention_residual,
                                       &parameter(model, layer, LM_BLOCK_PARAMETER_MLP_NORM)->value,
-                                      1.0e-5F, &block->mlp_norm);
+                                      LM_RMS_NORM_EPSILON, &block->mlp_norm);
             if (status == LLM_OK)
                 status = linear_forward(model, &block->mlp_norm, hidden,
                                         parameter(model, layer, LM_BLOCK_PARAMETER_GATE),
@@ -205,11 +205,10 @@ llm_status lm_transformer_backward(lm_model *model) {
                 status = llm_accumulate(model->backend, &block->linear_input_gradient,
                                         &block->mlp_norm_gradient);
             if (status == LLM_OK)
-                status = llm_rms_norm_backward(
-                    model->backend, &block->attention_residual,
-                    &parameter(model, layer, LM_BLOCK_PARAMETER_MLP_NORM)->value,
-                    &block->mlp_norm_gradient, 1.0e-5F, &block->linear_input_gradient,
-                    &parameter(model, layer, LM_BLOCK_PARAMETER_MLP_NORM)->gradient);
+                status = lm_rms_norm_backward_accumulate(
+                    model, &block->attention_residual,
+                    parameter(model, layer, LM_BLOCK_PARAMETER_MLP_NORM), &block->mlp_norm_gradient,
+                    &block->linear_input_gradient);
             if (status == LLM_OK)
                 status = llm_accumulate(model->backend, &block->linear_input_gradient,
                                         &block->attention_residual_gradient);
@@ -257,11 +256,9 @@ llm_status lm_transformer_backward(lm_model *model) {
             status = llm_accumulate(model->backend, &block->linear_input_gradient,
                                     &block->attention_norm_gradient);
         if (status == LLM_OK)
-            status = llm_rms_norm_backward(
-                model->backend, input,
-                &parameter(model, layer, LM_BLOCK_PARAMETER_ATTENTION_NORM)->value,
-                &block->attention_norm_gradient, 1.0e-5F, &block->linear_input_gradient,
-                &parameter(model, layer, LM_BLOCK_PARAMETER_ATTENTION_NORM)->gradient);
+            status = lm_rms_norm_backward_accumulate(
+                model, input, parameter(model, layer, LM_BLOCK_PARAMETER_ATTENTION_NORM),
+                &block->attention_norm_gradient, &block->linear_input_gradient);
         if (status == LLM_OK)
             status = llm_accumulate(model->backend, &block->linear_input_gradient, input_gradient);
         if (status != LLM_OK)

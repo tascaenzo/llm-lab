@@ -395,6 +395,9 @@ llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
     if (status == LLM_OK && has_mlp(config) != 0)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, mlp_down_shape,
                                    &model->mlp_down_weight_gradient_workspace);
+    if (status == LLM_OK && config->layer_count != 0U)
+        status = llm_tensor_create(backend, LLM_DTYPE_F32, 1U, norm_shape,
+                                   &model->norm_weight_gradient_workspace);
     if (status == LLM_OK && config->layer_count != 0U) {
         const size_t rope_shape[] = {config->context_length,
                                      config->hidden_size / config->head_count / 2U};
@@ -419,6 +422,7 @@ void lm_model_destroy(lm_model *model) {
     destroy_workspaces(model);
     llm_tensor_destroy(&model->rope_sin_table);
     llm_tensor_destroy(&model->rope_cos_table);
+    llm_tensor_destroy(&model->norm_weight_gradient_workspace);
     llm_tensor_destroy(&model->mlp_down_weight_gradient_workspace);
     llm_tensor_destroy(&model->mlp_up_weight_gradient_workspace);
     llm_tensor_destroy(&model->attention_weight_gradient_workspace);
@@ -458,6 +462,23 @@ llm_tensor *lm_model_output_hidden_gradient(lm_model *model) {
                : &model->blocks[model->config.layer_count - 1U].output_gradient;
 }
 
+llm_status lm_rms_norm_backward_accumulate(lm_model *model, const llm_tensor *input,
+                                           lm_model_parameter *norm,
+                                           const llm_tensor *output_gradient,
+                                           llm_tensor *input_gradient) {
+    if (model == NULL || norm == NULL || model->norm_weight_gradient_workspace.storage == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    llm_status status = llm_rms_norm_backward(model->backend, input, &norm->value, output_gradient,
+                                              LM_RMS_NORM_EPSILON, input_gradient,
+                                              &model->norm_weight_gradient_workspace);
+    if (status == LLM_OK) {
+        status =
+            llm_accumulate(model->backend, &model->norm_weight_gradient_workspace, &norm->gradient);
+    }
+    return status;
+}
+
 llm_status lm_model_forward(lm_model *model, const llm_tensor *input_ids, llm_tensor *logits) {
     llm_status status = validate_forward_inputs(model, input_ids, logits);
     if (status == LLM_OK)
@@ -468,8 +489,8 @@ llm_status lm_model_forward(lm_model *model, const llm_tensor *input_ids, llm_te
         status = lm_transformer_forward(model);
     if (status == LLM_OK && has_mlp(&model->config) != 0) {
         status = llm_rms_norm(model->backend, &model->blocks[model->config.layer_count - 1U].output,
-                              &model->parameters[final_norm_parameter_index(model)].value, 1.0e-5F,
-                              &model->final_norm);
+                              &model->parameters[final_norm_parameter_index(model)].value,
+                              LM_RMS_NORM_EPSILON, &model->final_norm);
     }
     if (status == LLM_OK)
         status = lm_output_head_forward(model, logits);
@@ -486,12 +507,10 @@ llm_status lm_model_backward(lm_model *model, const llm_tensor *input_ids,
         return LLM_INVALID_ARGUMENT;
     status = lm_output_head_backward(model, logits_gradient);
     if (status == LLM_OK && has_mlp(&model->config) != 0) {
-        status = llm_rms_norm_backward(
-            model->backend, &model->blocks[model->config.layer_count - 1U].output,
-            &model->parameters[final_norm_parameter_index(model)].value,
-            &model->final_norm_gradient, 1.0e-5F,
-            &model->blocks[model->config.layer_count - 1U].output_gradient,
-            &model->parameters[final_norm_parameter_index(model)].gradient);
+        status = lm_rms_norm_backward_accumulate(
+            model, &model->blocks[model->config.layer_count - 1U].output,
+            &model->parameters[final_norm_parameter_index(model)], &model->final_norm_gradient,
+            &model->blocks[model->config.layer_count - 1U].output_gradient);
     }
     if (status == LLM_OK && model->config.layer_count != 0U)
         status = lm_transformer_backward(model);
