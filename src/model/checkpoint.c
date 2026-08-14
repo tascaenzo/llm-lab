@@ -7,7 +7,9 @@
 
 #define LM_CHECKPOINT_V1_HEADER_SIZE 160U
 #define LM_CHECKPOINT_V2_HEADER_SIZE 192U
-#define LM_CHECKPOINT_V3_HEADER_SIZE 232U
+/* Versions 3 and 4 share the same header layout: v4 only adds parameters
+   (MLP and final norm) to the payload, not fields to the header. */
+#define LM_CHECKPOINT_V3_V4_HEADER_SIZE 232U
 #define LM_CHECKPOINT_VERSION UINT32_C(4)
 
 static const unsigned char checkpoint_magic[8] = {'L', 'L', 'M', 'C', 'K', 'P', 'T', '\n'};
@@ -161,10 +163,10 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
         free(part_path);
         return LLM_BACKEND_ERROR;
     }
-    unsigned char header[LM_CHECKPOINT_V3_HEADER_SIZE] = {0};
+    unsigned char header[LM_CHECKPOINT_V3_V4_HEADER_SIZE] = {0};
     memcpy(header, checkpoint_magic, sizeof(checkpoint_magic));
     store_u32(header + 8U, LM_CHECKPOINT_VERSION);
-    store_u32(header + 12U, LM_CHECKPOINT_V3_HEADER_SIZE);
+    store_u32(header + 12U, LM_CHECKPOINT_V3_V4_HEADER_SIZE);
     store_u32(header + 16U, model->config.vocabulary_size);
     store_u32(header + 20U, (uint32_t)lm_dataset_get_split(dataset));
     store_u64(header + 24U, model->config.context_length);
@@ -245,7 +247,7 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
     if (file == NULL) {
         return LLM_BACKEND_ERROR;
     }
-    unsigned char header[LM_CHECKPOINT_V3_HEADER_SIZE] = {0};
+    unsigned char header[LM_CHECKPOINT_V3_V4_HEADER_SIZE] = {0};
     llm_status status = read_exact(file, header, 16U) != 0 ? LLM_OK : LLM_INVALID_ARGUMENT;
     const uint32_t version = load_u32(header + 8U);
     const uint32_t header_size = load_u32(header + 12U);
@@ -253,7 +255,7 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
                              (version < 1U || version > LM_CHECKPOINT_VERSION) ||
                              (header_size != LM_CHECKPOINT_V1_HEADER_SIZE &&
                               header_size != LM_CHECKPOINT_V2_HEADER_SIZE &&
-                              header_size != LM_CHECKPOINT_V3_HEADER_SIZE))) {
+                              header_size != LM_CHECKPOINT_V3_V4_HEADER_SIZE))) {
         status = LLM_INVALID_ARGUMENT;
     }
     if (status == LLM_OK && read_exact(file, header + 16U, header_size - 16U) == 0) {
@@ -293,7 +295,7 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
          (version < 1U || version > LM_CHECKPOINT_VERSION) ||
          (header_size != LM_CHECKPOINT_V1_HEADER_SIZE &&
           header_size != LM_CHECKPOINT_V2_HEADER_SIZE &&
-          header_size != LM_CHECKPOINT_V3_HEADER_SIZE) ||
+          header_size != LM_CHECKPOINT_V3_V4_HEADER_SIZE) ||
          split != LM_DATASET_TRAIN || batcher_state == 0U ||
          (dataset != NULL &&
           (model_config.vocabulary_size != lm_dataset_model_vocabulary_size(dataset) ||

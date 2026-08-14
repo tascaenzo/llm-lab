@@ -324,11 +324,92 @@ static int test_scalable_transformer_smoke(void) {
     return EXIT_SUCCESS;
 }
 
+/**
+ * Two backward passes without an intervening zero_grad must leave exactly
+ * twice the gradient of a single pass, for every parameter. This is what a
+ * gradient accumulation step relies on, and it fails as soon as one layer
+ * overwrites its parameter gradient instead of accumulating into it.
+ */
+static int test_backward_accumulates_every_parameter(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+    const lm_model_config config = {.vocabulary_size = 7U,
+                                    .context_length = 3U,
+                                    .hidden_size = 4U,
+                                    .layer_count = 2U,
+                                    .head_count = 2U,
+                                    .feed_forward_size = 8U,
+                                    .seed = UINT64_C(321)};
+    lm_model *model = NULL;
+    TEST_ASSERT(lm_model_create(backend, &config, &model) == LLM_OK);
+    const size_t input_shape[] = {1U, 3U};
+    const size_t logits_shape[] = {3U, 7U};
+    const size_t targets_shape[] = {3U};
+    llm_tensor inputs = {0};
+    llm_tensor logits = {0};
+    llm_tensor targets = {0};
+    llm_tensor logits_gradient = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &inputs) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 1U, targets_shape, &targets) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits_gradient) ==
+                LLM_OK);
+    const uint32_t input_values[] = {1U, 2U, 3U};
+    const uint32_t target_values[] = {2U, 3U, 4U};
+    TEST_ASSERT(llm_tensor_write(backend, &inputs, input_values, sizeof(input_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &targets, target_values, sizeof(target_values)) ==
+                LLM_OK);
+    TEST_ASSERT(lm_model_forward(model, &inputs, &logits) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_backward(backend, &logits, &targets, &logits_gradient) == LLM_OK);
+
+    const size_t parameter_count = lm_model_parameter_count(model);
+    TEST_ASSERT(lm_model_zero_grad(model) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    float **single = calloc(parameter_count, sizeof(*single));
+    TEST_ASSERT(single != NULL);
+    for (size_t index = 0U; index < parameter_count; ++index) {
+        const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
+        TEST_ASSERT(gradient != NULL && gradient->element_count <= SIZE_MAX / sizeof(float));
+        single[index] = malloc(gradient->element_count * sizeof(**single));
+        TEST_ASSERT(single[index] != NULL);
+        TEST_ASSERT(llm_tensor_read(backend, gradient, single[index],
+                                    gradient->element_count * sizeof(**single)) == LLM_OK);
+    }
+
+    TEST_ASSERT(lm_model_zero_grad(model) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    for (size_t index = 0U; index < parameter_count; ++index) {
+        const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
+        float *accumulated = malloc(gradient->element_count * sizeof(*accumulated));
+        TEST_ASSERT(accumulated != NULL);
+        TEST_ASSERT(llm_tensor_read(backend, gradient, accumulated,
+                                    gradient->element_count * sizeof(*accumulated)) == LLM_OK);
+        for (size_t element = 0U; element < gradient->element_count; ++element) {
+            const float expected = 2.0F * single[index][element];
+            TEST_ASSERT(
+                close_enough(accumulated[element], expected, 1.0e-6F + fabsf(expected) * 1.0e-5F));
+        }
+        free(accumulated);
+        free(single[index]);
+    }
+    free(single);
+
+    llm_tensor_destroy(&logits_gradient);
+    llm_tensor_destroy(&targets);
+    llm_tensor_destroy(&logits);
+    llm_tensor_destroy(&inputs);
+    lm_model_destroy(model);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
 int main(void) {
     if (test_forward_and_gradients() != EXIT_SUCCESS ||
         test_seed_is_reproducible() != EXIT_SUCCESS ||
         test_transformer_is_causal() != EXIT_SUCCESS ||
-        test_scalable_transformer_smoke() != EXIT_SUCCESS) {
+        test_scalable_transformer_smoke() != EXIT_SUCCESS ||
+        test_backward_accumulates_every_parameter() != EXIT_SUCCESS) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

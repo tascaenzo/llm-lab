@@ -140,7 +140,12 @@ CPU per completare uno step.
 Il batcher predefinito percorre una permutazione riproducibile dei blocchi
 contigui non sovrapposti di 512 token: ogni blocco compare una sola volta
 nell'epoca, senza caricare l'intero stream llmdat in RAM. Lo stato della
-permutazione e' nel checkpoint.
+permutazione e' nel checkpoint. La permutazione e' affine — offset iniziale
+casuale piu' passo coprimo con il numero di blocchi — quindi copre tutta l'epoca
+esattamente una volta con memoria costante, ma non e' uniforme sullo spazio
+delle permutazioni: i blocchi di uno stesso batch restano equidistanti nel
+corpus. E' una proprieta' accettata in cambio dello streaming; una permutazione
+uniforme richiederebbe di materializzare tre milioni di indici.
 L'opzione --sampling random resta disponibile solo per compatibilita' o
 esperimenti brevi.
 
@@ -156,7 +161,7 @@ configurazione iniziale e':
       --beta1 0.9 --beta2 0.95 --epsilon 1e-8 --weight-decay 0.1 \
       --sampling shuffled --gradient-clip 1.0 \
       --checkpoint artifacts/models/italiano-base-75m/latest.llmckpt \
-      --checkpoint-every 10000 \
+      --checkpoint-every 2000 \
       --validation DATASET.validation.llmdat --validation-every 2000 \
       --validation-batches 100 \
       --best-checkpoint artifacts/models/italiano-base-75m/best.llmckpt \
@@ -167,6 +172,15 @@ viene scritto in modo atomico allo stesso percorso ogni intervallo e puo'
 essere ripreso con --resume; il formato v4 conserva anche accumulo, scheduler,
 sampler a blocchi e clipping. I checkpoint precedenti restano leggibili e i v3
 mantengono il sampler storico per una ripresa esatta.
+
+A 2,57 secondi per update, 380.954 update sono circa undici giorni di GPU
+continua: la cadenza dei checkpoint e' la finestra di lavoro che un crash puo'
+distruggere. Con --checkpoint-every 2000 quella finestra vale circa novanta
+minuti e ogni scrittura costa 884 MiB (valori piu' i due momenti AdamW), quindi
+il costo in I/O resta trascurabile rispetto al rischio. `SIGINT` e `SIGTERM`
+sono gestiti: il comando completa lo step in corso, esegue la validation
+finale, salva il checkpoint, registra un evento `interrupted` nel log JSONL e
+termina con esito zero. Ctrl-C e' quindi il modo corretto di fermare un run.
 
 Un'epoca contiene 3.047.632 blocchi completi e presenta 1.560.387.584 target
 token, lasciando fuori soltanto la coda di 392 token. Con otto blocchi per

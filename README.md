@@ -180,7 +180,9 @@ passaggio sui token del corpus. Per conservare il risultato,
 aggiungi `--checkpoint artifacts/models/m1.llmckpt`; per continuare da quel
 file usa `--resume artifacts/models/m1.llmckpt --checkpoint ...`. Il checkpoint
 salva pesi, momenti AdamW, step, configurazione e stato del batcher, cosi' la
-sequenza dei batch prosegue identica. Il trainer include scheduler, clipping,
+sequenza dei batch prosegue identica. Un run lungo si ferma con `Ctrl-C`:
+il comando completa lo step in corso, salva il checkpoint e riporta
+`"interrupted":true`, quindi il lavoro fatto non va perso. Il trainer include scheduler, clipping,
 sampler riproducibile e checkpoint periodici; la valutazione su validation e'
 disponibile con model evaluate. I contratti tecnici sono in
 [Modello Minimal](docs/model-minimal.md).

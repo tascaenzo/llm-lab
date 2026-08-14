@@ -120,6 +120,17 @@ parallele o scatter-add con indici duplicati; la suite usa tolleranze per
 operazione. NaN/Inf nelle opzioni vengono rifiutati dalla facciata comune.
 Softmax, cross-entropy e AdamW devono rispettare gli stessi errori numerici CPU.
 
+### Riproducibilita' per backend
+
+Su Metal alcune riduzioni sommano con atomiche float in ordine non
+deterministico: gradiente del peso di RMSNorm, gradienti di K e V
+dell'attention, scatter-add dell'embedding e riduzione della loss. Il seed rende
+quindi riproducibile la *sequenza dei batch*, non il valore esatto dei numeri: due
+run Metal identici possono differire negli ultimi bit e divergere lentamente. La
+build CPU resta deterministica a parita' di numero di thread. Chi ha bisogno di
+un risultato bit-a-bit ripetibile deve usare la CPU o attendere riduzioni
+deterministiche a due stadi.
+
 ## Gate di completamento
 
 Metal e' pronto per il training solo quando:
