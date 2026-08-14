@@ -30,19 +30,19 @@ Per studiare l'intero percorso e il ruolo di ogni file consulta la
 
 La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
-`.llmdat` e fornisce batch input/target al Modello Minimal. E' una rete CPU
-reale, piccola e backend-agnostic: embedding, blocco causale, output head,
-cross-entropy, backward esplicito e AdamW. Il runtime tensoriale
+`.llmdat` e fornisce batch input/target al Modello Minimal. E' una rete reale,
+piccola e backend-agnostic, eseguita su CPU e Metal: embedding, blocco causale,
+output head, cross-entropy, backward esplicito e AdamW. Il runtime tensoriale
 CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
 riduzioni, matmul, gather/scatter, softmax, cross-entropy e le primitive F32 di
 training: matmul trasposta, accumulo, SiLU, RMSNorm, RoPE, attention GQA causale
 con backward e AdamW. Il backend Metal dispone di pool dei buffer, batch
-asincroni espliciti, metriche e primitive F32 di base; il prossimo incremento
-porta tutte le primitive di training sul device fino alla parita' con la suite
-contrattuale CPU. Il runtime v1 accetta soltanto F32/U32: F16/BF16 sono
+asincroni espliciti, metriche e tutte le primitive F32 richieste dal decoder
+scalabile multi-layer, multi-head e SwiGLU di
+[Italiano-Base-75M](docs/italiano-base-75m.md). Il runtime v1 accetta soltanto F32/U32: F16/BF16 sono
 riservati e cast o mixed precision non fanno parte del contratto corrente.
-Le primitive Metal mancanti vengono completate dopo il Modello Minimal, guidate dalle forme e
-dai colli di bottiglia del modello reale. I sorgenti specifici dell'hardware
+Le prossime ottimizzazioni Metal saranno guidate dalle forme e dai colli di
+bottiglia del modello reale. I sorgenti specifici dell'hardware
 restano separati sotto `src/runtime/backends/`, cosi' CPU e Metal non entrano
 nel codice del modello.
 
@@ -126,7 +126,7 @@ Per aprire il laboratorio interattivo:
 
 ```sh
 ./build/debug/tokenizer_experiment \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok
 ```
 
 Il modello binario viene caricato una sola volta. Dal menu puoi convertire testo in
@@ -137,7 +137,7 @@ Per misurare compressione, velocita' e round-trip su un campione deterministico:
 
 ```sh
 ./build/release/llm-lab tokenizer evaluate \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   1048576 corpus/italiano.txt
 ```
 
@@ -150,9 +150,9 @@ scrive tre stream binari:
 
 ```sh
 ./build/debug/llm-lab dataset prepare \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   data/clean/italiano-wikipedia-v1/documents.jsonl \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2
 ```
 
 La directory che contiene il prefisso di output deve gia' esistere. Il report JSON
@@ -169,18 +169,20 @@ L'opzione `--layers 0` e' disponibile soltanto come baseline diagnostico.
 
 ```sh
 ./build/debug/llm-lab model train \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1.train.llmdat \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2.train.llmdat \
   100 --batch-size 2 --context 32 --hidden 64 \
   --learning-rate 0.001 --seed 1
 ```
 
-Il comando stampa loss e configurazione in JSON. Per conservare il risultato,
+Il comando stampa loss e configurazione in JSON. Il sampler `shuffled`
+percorre blocchi non sovrapposti, quindi un'epoca corrisponde davvero a un
+passaggio sui token del corpus. Per conservare il risultato,
 aggiungi `--checkpoint artifacts/models/m1.llmckpt`; per continuare da quel
 file usa `--resume artifacts/models/m1.llmckpt --checkpoint ...`. Il checkpoint
 salva pesi, momenti AdamW, step, configurazione e stato del batcher, cosi' la
-sequenza dei batch prosegue identica. La valutazione su validation e'
-disponibile con `model evaluate`; scheduler, clipping e checkpoint periodici
-restano fuori dalla milestone corrente. I contratti tecnici sono in
+sequenza dei batch prosegue identica. Il trainer include scheduler, clipping,
+sampler riproducibile e checkpoint periodici; la valutazione su validation e'
+disponibile con model evaluate. I contratti tecnici sono in
 [Modello Minimal](docs/model-minimal.md).
 
 Prima del primo aggiornamento il comando valida tutto il `.llmdat` (checksum e
@@ -192,7 +194,7 @@ Per provare un checkpoint con sampling riproducibile:
 
 ```sh
 ./build/debug/llm-lab model generate artifacts/models/m1-step-10000.llmckpt \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok 32 "La capitale d'Italia" \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok 32 "La capitale d'Italia" \
   --temperature 0.8 --top-k 40 --repetition-penalty 1.1 --seed 1
 ```
 
@@ -210,7 +212,7 @@ Per misurare invece il checkpoint sullo split non visto:
 
 ```sh
 ./build/debug/llm-lab model evaluate \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1.validation.llmdat \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2.validation.llmdat \
   artifacts/models/m1-step-10000.llmckpt 100 --batch-size 2 --seed 1
 ```
 

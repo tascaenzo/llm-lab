@@ -16,9 +16,10 @@ prima la pagina wiki e poi la specifica corrispondente.
 5. [Runtime tensoriale](runtime-tensoriale.md)
 6. [Runtime v1: training minimo su Apple Silicon](runtime-v1-architecture.md)
 7. [Modello Minimal: prima rete addestrabile](model-minimal.md)
-8. [Backend CPU](backend-cpu.md)
-9. [Backend Metal](backend-metal.md)
-10. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
+8. [Italiano-Base-75M: primo decoder utilizzabile](italiano-base-75m.md)
+9. [Backend CPU](backend-cpu.md)
+10. [Backend Metal](backend-metal.md)
+11. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

@@ -147,7 +147,8 @@ data/derived/italiano-wikipedia-v1/tokenizer-input/
 ```
 
 `documents.jsonl` conserva una riga JSON per pagina con ID, titolo, URL, licenza e
-testo. I file `part-*.txt` contengono solo testo e sono l'unico input del trainer.
+testo. I file `part-*.txt` contengono soltanto documenti dello split train,
+calcolato con la stessa FNV-1a usata dal dataset, e sono l'unico input del trainer.
 La dimensione delle parti non cambia il vocabolario: serve solo a non creare un
 singolo file troppo grande.
 
@@ -166,14 +167,23 @@ o elimina manualmente quella destinazione incompleta, oppure usa un nuovo `--nam
 
 ### 3. Addestrare il vocabolario reale a 32k
 
+Per un corpus storico che contiene parti create prima dello split train-only,
+si deriva un manifest corretto senza riprocessare il dump:
+
+```sh
+python3 utils/corpus/prepare_tokenizer_corpus.py \
+  --corpus-manifest data/clean/italiano-wikipedia-v1/manifest.json \
+  --output-manifest data/derived/italiano-wikipedia-v1/tokenizer-train-manifest.json
+```
+
 Lo script seguente legge le parti indicate dal manifesto, esegue `llm-lab` e crea
 sia il modello sia il suo manifesto di provenienza:
 
 ```sh
 python3 utils/corpus/train_tokenizer.py \
-  --corpus-manifest data/clean/italiano-wikipedia-v1/manifest.json \
+  --corpus-manifest data/derived/italiano-wikipedia-v1/tokenizer-train-manifest.json \
   --trainer build/debug/llm-lab \
-  --output artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  --output artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   --vocab-size 32000
 ```
 
@@ -185,8 +195,8 @@ Il risultato e':
 
 ```text
 artifacts/tokenizers/
-  italiano-wikipedia-v1.llmtok
-  italiano-wikipedia-v1.llmtok.json
+  italiano-wikipedia-v2.llmtok
+  italiano-wikipedia-v2.llmtok.json
 ```
 
 Il file `.json` registra snapshot e checksum del corpus, comando portabile,
@@ -208,7 +218,7 @@ Apri il tester interattivo passando il file prodotto:
 
 ```sh
 ./build/debug/tokenizer_experiment \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok
 ```
 
 Prova frasi italiane, osserva gli ID e verifica che la decodifica restituisca gli
@@ -223,9 +233,9 @@ tokenizer versionato:
 mkdir -p data/derived/italiano-wikipedia-v1/lm
 
 ./build/debug/llm-lab dataset prepare \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   data/clean/italiano-wikipedia-v1/documents.jsonl \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2
 ```
 
 Il comando produce gli stream `train`, `validation` e `test` senza modificare il
