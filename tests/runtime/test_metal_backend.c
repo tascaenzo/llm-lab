@@ -4,10 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "runtime/backend.h"
-#include "runtime/operations.h"
 #include "backend_contract_suite.h"
 #include "model/model.h"
+#include "runtime/backend.h"
+#include "runtime/operations.h"
 #include "test_support.h"
 
 static int close_enough(float left, float right) { return fabsf(left - right) < 2.0e-5F; }
@@ -39,14 +39,12 @@ static int compare_tensor_values(llm_backend *cpu_backend, const llm_tensor *cpu
             maximum_index = index;
         }
     }
-    const int matches = isfinite(metal_values[maximum_index]) != 0 &&
-                        maximum_error <= absolute_tolerance;
+    const int matches =
+        isfinite(metal_values[maximum_index]) != 0 && maximum_error <= absolute_tolerance;
     if (matches == 0) {
-        fprintf(stderr,
-                "%s parity mismatch: max_abs=%g at %zu (cpu=%g metal=%g), tolerance=%g\n",
-                stage, (double)maximum_error, maximum_index,
-                (double)cpu_values[maximum_index], (double)metal_values[maximum_index],
-                (double)absolute_tolerance);
+        fprintf(stderr, "%s parity mismatch: max_abs=%g at %zu (cpu=%g metal=%g), tolerance=%g\n",
+                stage, (double)maximum_error, maximum_index, (double)cpu_values[maximum_index],
+                (double)metal_values[maximum_index], (double)absolute_tolerance);
     }
     free(metal_values);
     free(cpu_values);
@@ -110,7 +108,8 @@ static int test_training_shape_matmul_and_loss_parity(llm_backend *metal_backend
     TEST_ASSERT(llm_tensor_write(metal_backend, &metal_right, right_values,
                                  hidden * vocabulary * sizeof(*right_values)) == LLM_OK);
     TEST_ASSERT(llm_tensor_write(cpu_backend, &cpu_targets, targets, sizeof(targets)) == LLM_OK);
-    TEST_ASSERT(llm_tensor_write(metal_backend, &metal_targets, targets, sizeof(targets)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(metal_backend, &metal_targets, targets, sizeof(targets)) ==
+                LLM_OK);
     free(right_values);
     free(left_values);
 
@@ -123,8 +122,8 @@ static int test_training_shape_matmul_and_loss_parity(llm_backend *metal_backend
 
     TEST_ASSERT(llm_cross_entropy_forward(cpu_backend, &cpu_logits, &cpu_targets, &cpu_loss) ==
                 LLM_OK);
-    TEST_ASSERT(llm_cross_entropy_backward(cpu_backend, &cpu_logits, &cpu_targets,
-                                           &cpu_gradient) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_backward(cpu_backend, &cpu_logits, &cpu_targets, &cpu_gradient) ==
+                LLM_OK);
     TEST_ASSERT(llm_backend_metal_begin_batch(metal_backend) == LLM_OK);
     TEST_ASSERT(llm_cross_entropy_forward(metal_backend, &metal_logits, &metal_targets,
                                           &metal_loss) == LLM_OK);
@@ -132,11 +131,11 @@ static int test_training_shape_matmul_and_loss_parity(llm_backend *metal_backend
                                            &metal_gradient) == LLM_OK);
     TEST_ASSERT(llm_backend_metal_end_batch(metal_backend) == LLM_OK);
     TEST_ASSERT(compare_tensor_values(cpu_backend, &cpu_loss, metal_backend, &metal_loss,
-                                      "training-shape cross-entropy loss", 2.0e-4F) ==
-                EXIT_SUCCESS);
+                                      "training-shape cross-entropy loss",
+                                      2.0e-4F) == EXIT_SUCCESS);
     TEST_ASSERT(compare_tensor_values(cpu_backend, &cpu_gradient, metal_backend, &metal_gradient,
-                                      "training-shape cross-entropy gradient", 2.0e-7F) ==
-                EXIT_SUCCESS);
+                                      "training-shape cross-entropy gradient",
+                                      2.0e-7F) == EXIT_SUCCESS);
 
     llm_tensor_destroy(&metal_gradient);
     llm_tensor_destroy(&cpu_gradient);
@@ -170,8 +169,8 @@ static int run_model_forward(llm_backend *backend, lm_model *model, llm_tensor *
     return status == LLM_OK ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-static float host_cross_entropy_loss(const float *logits, const uint32_t *targets,
-                                     size_t row_count, size_t vocabulary_size) {
+static float host_cross_entropy_loss(const float *logits, const uint32_t *targets, size_t row_count,
+                                     size_t vocabulary_size) {
     double total = 0.0;
     for (size_t row = 0U; row < row_count; ++row) {
         const float *const values = logits + row * vocabulary_size;
@@ -291,10 +290,10 @@ static int test_model_training_step_parity_for_layers(llm_backend *metal_backend
         char stage[128] = {0};
         (void)snprintf(stage, sizeof(stage), "initial parameter %s",
                        lm_model_parameter_name(cpu_model, parameter));
-        TEST_ASSERT(compare_tensor_values(cpu_backend, lm_model_parameter_value(cpu_model, parameter),
-                                          metal_backend,
-                                          lm_model_parameter_value(metal_model, parameter), stage,
-                                          0.0F) == EXIT_SUCCESS);
+        TEST_ASSERT(
+            compare_tensor_values(cpu_backend, lm_model_parameter_value(cpu_model, parameter),
+                                  metal_backend, lm_model_parameter_value(metal_model, parameter),
+                                  stage, 0.0F) == EXIT_SUCCESS);
     }
     const size_t input_shape[] = {2U, 32U};
     const size_t target_shape[] = {64U};
@@ -308,35 +307,46 @@ static int test_model_training_step_parity_for_layers(llm_backend *metal_backend
         inputs[index] = (uint32_t)((index * 17U + 11U) % 32000U);
         targets[index] = (uint32_t)((index * 19U + 7U) % 32000U);
     }
-    llm_tensor *const tensors[] = {&cpu_inputs, &metal_inputs, &cpu_targets, &metal_targets,
-                                   &cpu_logits, &metal_logits, &cpu_loss, &metal_loss,
+    llm_tensor *const tensors[] = {&cpu_inputs,   &metal_inputs,  &cpu_targets, &metal_targets,
+                                   &cpu_logits,   &metal_logits,  &cpu_loss,    &metal_loss,
                                    &cpu_gradient, &metal_gradient};
-    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_U32, 2U, input_shape, &cpu_inputs) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_U32, 2U, input_shape, &metal_inputs) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_U32, 1U, target_shape, &cpu_targets) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_U32, 1U, target_shape, &metal_targets) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 2U, logits_shape, &cpu_logits) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 2U, logits_shape, &metal_logits) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_U32, 2U, input_shape, &cpu_inputs) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_U32, 2U, input_shape, &metal_inputs) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_U32, 1U, target_shape, &cpu_targets) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_U32, 1U, target_shape, &metal_targets) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 2U, logits_shape, &cpu_logits) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 2U, logits_shape, &metal_logits) ==
+                LLM_OK);
     TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 0U, NULL, &cpu_loss) == LLM_OK);
     TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 0U, NULL, &metal_loss) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 2U, logits_shape, &cpu_gradient) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 2U, logits_shape, &metal_gradient) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 2U, logits_shape, &cpu_gradient) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 2U, logits_shape,
+                                  &metal_gradient) == LLM_OK);
     TEST_ASSERT(llm_tensor_write(cpu_backend, &cpu_inputs, inputs, sizeof(inputs)) == LLM_OK);
     TEST_ASSERT(llm_tensor_write(metal_backend, &metal_inputs, inputs, sizeof(inputs)) == LLM_OK);
     TEST_ASSERT(llm_tensor_write(cpu_backend, &cpu_targets, targets, sizeof(targets)) == LLM_OK);
-    TEST_ASSERT(llm_tensor_write(metal_backend, &metal_targets, targets, sizeof(targets)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(metal_backend, &metal_targets, targets, sizeof(targets)) ==
+                LLM_OK);
     TEST_ASSERT(test_model_forward_parity(cpu_backend, cpu_model, metal_backend, metal_model,
                                           &cpu_inputs, &metal_inputs, &cpu_logits, &metal_logits,
                                           targets, layer_count) == EXIT_SUCCESS);
     for (unsigned long long step = 1U; step <= 4U; ++step) {
         float cpu_loss_value = 0.0F, metal_loss_value = 0.0F;
         TEST_ASSERT(run_model_step(cpu_backend, cpu_model, &cpu_inputs, &cpu_targets, &cpu_logits,
-                                   &cpu_loss, &cpu_gradient, step, &cpu_loss_value) == EXIT_SUCCESS);
+                                   &cpu_loss, &cpu_gradient, step,
+                                   &cpu_loss_value) == EXIT_SUCCESS);
         TEST_ASSERT(run_model_step(metal_backend, metal_model, &metal_inputs, &metal_targets,
                                    &metal_logits, &metal_loss, &metal_gradient, step,
                                    &metal_loss_value) == EXIT_SUCCESS);
         if (fabsf(cpu_loss_value - metal_loss_value) > 2.0e-3F) {
-            fprintf(stderr, "model-step parity mismatch (layers=%zu) at step %llu: cpu=%g metal=%g\n",
+            fprintf(stderr,
+                    "model-step parity mismatch (layers=%zu) at step %llu: cpu=%g metal=%g\n",
                     layer_count, step, (double)cpu_loss_value, (double)metal_loss_value);
         }
         TEST_ASSERT(fabsf(cpu_loss_value - metal_loss_value) <= 2.0e-3F);
@@ -367,9 +377,96 @@ static int test_model_training_step_parity_for_layers(llm_backend *metal_backend
     return EXIT_SUCCESS;
 }
 
+static int test_scalable_model_training_step_parity(llm_backend *metal_backend) {
+    const lm_model_config config = {.vocabulary_size = 17U,
+                                    .context_length = 4U,
+                                    .hidden_size = 8U,
+                                    .layer_count = 2U,
+                                    .head_count = 4U,
+                                    .feed_forward_size = 16U,
+                                    .seed = UINT64_C(91)};
+    llm_backend *cpu_backend = NULL;
+    lm_model *cpu_model = NULL;
+    lm_model *metal_model = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&cpu_backend) == LLM_OK);
+    TEST_ASSERT(lm_model_create(cpu_backend, &config, &cpu_model) == LLM_OK);
+    TEST_ASSERT(lm_model_create(metal_backend, &config, &metal_model) == LLM_OK);
+    const size_t input_shape[] = {2U, 4U};
+    const size_t target_shape[] = {8U};
+    const size_t logits_shape[] = {8U, 17U};
+    llm_tensor cpu_inputs = {0}, metal_inputs = {0}, cpu_targets = {0}, metal_targets = {0};
+    llm_tensor cpu_logits = {0}, metal_logits = {0}, cpu_loss = {0}, metal_loss = {0};
+    llm_tensor cpu_gradient = {0}, metal_gradient = {0};
+    const uint32_t input_values[] = {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U};
+    const uint32_t target_values[] = {2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U};
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_U32, 2U, input_shape, &cpu_inputs) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_U32, 2U, input_shape, &metal_inputs) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_U32, 1U, target_shape, &cpu_targets) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_U32, 1U, target_shape, &metal_targets) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 2U, logits_shape, &cpu_logits) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 2U, logits_shape, &metal_logits) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 0U, NULL, &cpu_loss) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 0U, NULL, &metal_loss) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(cpu_backend, LLM_DTYPE_F32, 2U, logits_shape, &cpu_gradient) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(metal_backend, LLM_DTYPE_F32, 2U, logits_shape,
+                                  &metal_gradient) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(cpu_backend, &cpu_inputs, input_values, sizeof(input_values)) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_write(metal_backend, &metal_inputs, input_values,
+                                 sizeof(input_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(cpu_backend, &cpu_targets, target_values, sizeof(target_values)) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_write(metal_backend, &metal_targets, target_values,
+                                 sizeof(target_values)) == LLM_OK);
+    float cpu_loss_value = 0.0F, metal_loss_value = 0.0F;
+    TEST_ASSERT(run_model_step(cpu_backend, cpu_model, &cpu_inputs, &cpu_targets, &cpu_logits,
+                               &cpu_loss, &cpu_gradient, 1U, &cpu_loss_value) == EXIT_SUCCESS);
+    TEST_ASSERT(run_model_step(metal_backend, metal_model, &metal_inputs, &metal_targets,
+                               &metal_logits, &metal_loss, &metal_gradient, 1U,
+                               &metal_loss_value) == EXIT_SUCCESS);
+    TEST_ASSERT(fabsf(cpu_loss_value - metal_loss_value) <= 2.0e-5F);
+    for (size_t parameter = 0U; parameter < lm_model_parameter_count(cpu_model); ++parameter) {
+        char stage[128] = {0};
+        (void)snprintf(stage, sizeof(stage), "scalable updated parameter %s",
+                       lm_model_parameter_name(cpu_model, parameter));
+        TEST_ASSERT(
+            compare_tensor_values(cpu_backend, lm_model_parameter_value(cpu_model, parameter),
+                                  metal_backend, lm_model_parameter_value(metal_model, parameter),
+                                  stage, 5.0e-5F) == EXIT_SUCCESS);
+        (void)snprintf(stage, sizeof(stage), "scalable gradient %s",
+                       lm_model_parameter_name(cpu_model, parameter));
+        TEST_ASSERT(compare_tensor_values(
+                        cpu_backend, lm_model_parameter_gradient(cpu_model, parameter),
+                        metal_backend, lm_model_parameter_gradient(metal_model, parameter), stage,
+                        5.0e-4F) == EXIT_SUCCESS);
+    }
+    llm_tensor_destroy(&metal_gradient);
+    llm_tensor_destroy(&cpu_gradient);
+    llm_tensor_destroy(&metal_loss);
+    llm_tensor_destroy(&cpu_loss);
+    llm_tensor_destroy(&metal_logits);
+    llm_tensor_destroy(&cpu_logits);
+    llm_tensor_destroy(&metal_targets);
+    llm_tensor_destroy(&cpu_targets);
+    llm_tensor_destroy(&metal_inputs);
+    llm_tensor_destroy(&cpu_inputs);
+    lm_model_destroy(metal_model);
+    lm_model_destroy(cpu_model);
+    llm_backend_destroy(cpu_backend);
+    return EXIT_SUCCESS;
+}
+
 static int test_model_training_step_parity(llm_backend *metal_backend) {
     return test_model_training_step_parity_for_layers(metal_backend, 0U) == EXIT_SUCCESS &&
-                   test_model_training_step_parity_for_layers(metal_backend, 1U) == EXIT_SUCCESS
+                   test_model_training_step_parity_for_layers(metal_backend, 1U) == EXIT_SUCCESS &&
+                   test_scalable_model_training_step_parity(metal_backend) == EXIT_SUCCESS
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
 }
@@ -438,6 +535,8 @@ static int test_reshape_shared_storage(llm_backend *backend) {
     llm_metal_backend_metrics after_create = {0};
     TEST_ASSERT(llm_backend_metal_get_metrics(backend, &after_create) == LLM_OK);
     TEST_ASSERT(after_create.active_buffer_count == baseline.active_buffer_count + 1U);
+    TEST_ASSERT(after_create.active_buffer_bytes > baseline.active_buffer_bytes);
+    TEST_ASSERT(after_create.peak_active_buffer_bytes >= after_create.active_buffer_bytes);
 
     TEST_ASSERT(llm_tensor_reshape(&source, 1U, view_shape, &view) == LLM_OK);
     llm_metal_backend_metrics after_reshape = {0};
@@ -459,6 +558,7 @@ static int test_reshape_shared_storage(llm_backend *backend) {
     llm_metal_backend_metrics after_view_destroy = {0};
     TEST_ASSERT(llm_backend_metal_get_metrics(backend, &after_view_destroy) == LLM_OK);
     TEST_ASSERT(after_view_destroy.active_buffer_count == baseline.active_buffer_count);
+    TEST_ASSERT(after_view_destroy.active_buffer_bytes == baseline.active_buffer_bytes);
     return EXIT_SUCCESS;
 }
 
@@ -767,8 +867,7 @@ typedef int (*metal_backend_test)(llm_backend *backend);
 
 static int run_named_metal_test(const char *name, metal_backend_test test, llm_backend *backend) {
     const int result = test(backend);
-    printf("Metal verification: %-36s %s\n", name,
-           result == EXIT_SUCCESS ? "PASS" : "FAIL");
+    printf("Metal verification: %-36s %s\n", name, result == EXIT_SUCCESS ? "PASS" : "FAIL");
     return result;
 }
 

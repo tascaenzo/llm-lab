@@ -14,6 +14,8 @@ typedef struct llm_cpu_backend_config {
 /** Observable counters for profiling a Metal backend without exposing native objects. */
 typedef struct llm_metal_backend_metrics {
     size_t active_buffer_count;
+    size_t active_buffer_bytes;
+    size_t peak_active_buffer_bytes;
     size_t cached_buffer_count;
     size_t cached_buffer_bytes;
     unsigned long long submitted_command_buffers;

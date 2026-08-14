@@ -10,7 +10,7 @@
 typedef struct lm_model lm_model;
 typedef struct lm_trainer lm_trainer;
 
-/** Configuration shared by the minimal model and its future Transformer extensions. */
+/** Configuration shared by the Minimal Model and scalable decoder-only Transformer. */
 typedef struct lm_model_config {
     uint32_t vocabulary_size;
     size_t context_length;
@@ -31,9 +31,21 @@ typedef struct lm_trainer_config {
     float beta2;
     float epsilon;
     float weight_decay;
+    /** Number of micro-batches accumulated into one optimizer update. */
+    size_t gradient_accumulation_steps;
+    /** Number of optimizer updates for linear warmup; zero disables warmup. */
+    uint64_t warmup_steps;
+    /** Total optimizer updates for cosine decay; zero keeps a constant rate. */
+    uint64_t total_steps;
+    /** Learning-rate floor after warmup when total_steps is non-zero. */
+    float minimum_learning_rate;
+    /** Sampling policy for the training windows. */
+    lm_batcher_sampling sampling;
+    /** Global norm threshold; zero leaves gradients unclipped. */
+    float gradient_clip_norm;
 } lm_trainer_config;
 
-/** Creates M0: token embedding followed by an output projection. */
+/** Creates a decoder-only model described by config. */
 llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
                            lm_model **out_model);
 void lm_model_destroy(lm_model *model);
@@ -61,19 +73,30 @@ llm_tensor *lm_model_parameter_value(lm_model *model, size_t index);
 const llm_tensor *lm_model_parameter_gradient(const lm_model *model, size_t index);
 
 /** Creates a trainer bound to one training dataset and model. */
-llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset,
-                             const lm_trainer_config *config, lm_trainer **out_trainer);
+llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset, const lm_trainer_config *config,
+                             lm_trainer **out_trainer);
 void lm_trainer_destroy(lm_trainer *trainer);
+/** Copies the immutable training configuration into caller-owned storage. */
+llm_status lm_trainer_get_config(const lm_trainer *trainer, lm_trainer_config *out_config);
 
-/** Executes batch -> forward -> loss -> backward -> AdamW and returns the mean loss. */
+/** Executes one optimizer update and returns mean loss across its micro-batches. */
 llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss);
 unsigned long long lm_trainer_step_count(const lm_trainer *trainer);
+/** Returns the learning rate used by the most recent optimizer update. */
+float lm_trainer_learning_rate(const lm_trainer *trainer);
+/** Returns the global norm of the averaged gradients in the most recent update. */
+float lm_trainer_gradient_norm(const lm_trainer *trainer);
+
+/** Evaluates fixed random windows from a validation split without changing trainer state. */
+llm_status lm_model_evaluate_validation(lm_model *model, lm_dataset *dataset, size_t batch_size,
+                                        size_t batch_count, uint64_t seed, float *out_loss);
 
 /** Atomically saves model configuration, parameters, AdamW moments and trainer state. */
 llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset,
                                       const char *path);
 
-/** Restores a model from a checkpoint; with a dataset, also restores its trainer and batcher state. */
+/** Restores a model from a checkpoint; with a dataset, also restores its trainer and batcher state.
+ */
 llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
                                       lm_model **out_model, lm_trainer **out_trainer);
 

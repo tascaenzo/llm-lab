@@ -109,6 +109,114 @@ def main():
             raise AssertionError(training_report)
         if "Verifica dataset:" not in trained.stderr or "Training modello:" not in trained.stderr:
             raise AssertionError(f"avanzamento model assente:\n{trained.stderr}")
+        scalable_checkpoint = root / "scalable.llmckpt"
+        scalable_best_checkpoint = root / "scalable-best.llmckpt"
+        scalable_log = root / "scalable.jsonl"
+        scalable = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "train",
+                    f"{prefix}.train.llmdat",
+                    "2",
+                    "--batch-size",
+                    "1",
+                    "--context",
+                    "2",
+                    "--hidden",
+                    "4",
+                    "--layers",
+                    "2",
+                    "--heads",
+                    "2",
+                    "--ffn",
+                    "8",
+                    "--learning-rate",
+                    "0.001",
+                    "--seed",
+                    "123",
+                    "--checkpoint",
+                    str(scalable_checkpoint),
+                    "--validation",
+                    f"{prefix}.validation.llmdat",
+                    "--validation-every",
+                    "1",
+                    "--validation-batches",
+                    "1",
+                    "--best-checkpoint",
+                    str(scalable_best_checkpoint),
+                    "--log",
+                    str(scalable_log),
+                ]
+            ).stdout
+        )
+        if (
+            scalable["layer_count"] != 2
+            or scalable["head_count"] != 2
+            or scalable["feed_forward_size"] != 8
+            or scalable["parameter_count"] <= training_report["parameter_count"]
+            or not scalable_checkpoint.is_file()
+            or not scalable_best_checkpoint.is_file()
+            or not Path(f"{scalable_best_checkpoint}.metrics.json").is_file()
+            or not math.isfinite(scalable["validation_loss"])
+        ):
+            raise AssertionError(scalable)
+        log_events = [json.loads(line) for line in scalable_log.read_text().splitlines()]
+        if (
+            [event["event"] for event in log_events].count("train") != 2
+            or [event["event"] for event in log_events].count("validation") != 2
+            or log_events[-1]["event"] != "validation"
+            or not math.isfinite(log_events[-1]["best_loss"])
+            or not any(event.get("improved") for event in log_events)
+        ):
+            raise AssertionError(log_events)
+        scalable_evaluation = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "evaluate",
+                    f"{prefix}.validation.llmdat",
+                    str(scalable_checkpoint),
+                    "1",
+                    "--batch-size",
+                    "1",
+                    "--seed",
+                    "123",
+                ]
+            ).stdout
+        )
+        if not math.isfinite(scalable_evaluation["loss"]):
+            raise AssertionError(scalable_evaluation)
+        scalable_overfit_command = [
+            str(cli),
+            "model",
+            "train",
+            f"{prefix}.train.llmdat",
+            "1",
+            "--batch-size",
+            "1",
+            "--context",
+            "2",
+            "--hidden",
+            "8",
+            "--layers",
+            "2",
+            "--heads",
+            "2",
+            "--ffn",
+            "16",
+            "--learning-rate",
+            "0.01",
+            "--seed",
+            "77",
+        ]
+        scalable_initial_loss = json.loads(run(scalable_overfit_command).stdout)["loss"]
+        scalable_overfit_command[4] = "200"
+        scalable_final_loss = json.loads(run(scalable_overfit_command).stdout)["loss"]
+        if not scalable_final_loss < scalable_initial_loss * 0.8:
+            raise AssertionError((scalable_initial_loss, scalable_final_loss))
         generated = run(
             [str(cli), "model", "generate", str(generation_checkpoint), str(model), "2", "ciao"]
         )
@@ -236,6 +344,71 @@ def main():
             resumed["loss"], continuous["loss"], rel_tol=0.0, abs_tol=1e-7
         ):
             raise AssertionError((continuous, resumed))
+
+        scheduled_checkpoint = root / "scheduled.llmckpt"
+        scheduled = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "train",
+                    str(overfit_dataset),
+                    "3",
+                    "--batch-size",
+                    "1",
+                    "--context",
+                    "1",
+                    "--hidden",
+                    "4",
+                    "--learning-rate",
+                    "0.05",
+                    "--min-learning-rate",
+                    "0.01",
+                    "--gradient-accumulation",
+                    "2",
+                    "--warmup-steps",
+                    "2",
+                    "--total-steps",
+                    "4",
+                    "--gradient-clip",
+                    "1",
+                    "--seed",
+                    "19",
+                    "--checkpoint",
+                    str(scheduled_checkpoint),
+                    "--checkpoint-every",
+                    "1",
+                ]
+            ).stdout
+        )
+        if (
+            scheduled["gradient_accumulation_steps"] != 2
+            or not math.isclose(scheduled["learning_rate"], 0.03, rel_tol=0.0, abs_tol=1e-7)
+            or not math.isfinite(scheduled["gradient_norm"])
+            or scheduled["gradient_norm"] <= 0.0
+            or scheduled["sampling"] != "shuffled"
+            or not scheduled_checkpoint.is_file()
+        ):
+            raise AssertionError(scheduled)
+        scheduled_resumed = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "train",
+                    str(overfit_dataset),
+                    "1",
+                    "--resume",
+                    str(scheduled_checkpoint),
+                    "--checkpoint",
+                    str(root / "scheduled-resumed.llmckpt"),
+                ]
+            ).stdout
+        )
+        if scheduled_resumed["steps"] != 4 or not math.isclose(
+            scheduled_resumed["learning_rate"], 0.01, rel_tol=0.0, abs_tol=1e-7
+        ):
+            raise AssertionError(scheduled_resumed)
 
         repeated = subprocess.run(
             [str(cli), "dataset", "prepare", str(model), str(documents), str(prefix)],

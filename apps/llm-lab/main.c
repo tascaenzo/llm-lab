@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -282,12 +283,12 @@ static void show_model_dataset_open_progress(uint64_t bytes_read, uint64_t total
         for (size_t index = 0U; index < bar_width; ++index) {
             fputc(index < filled ? '#' : '-', stderr);
         }
-        fprintf(stderr, "] %5.1f%% %s/%s | %.1f MiB/s | ETA %s", fraction * 100.0,
-                completed_bytes, total_size, mebibytes_per_second, eta);
+        fprintf(stderr, "] %5.1f%% %s/%s | %.1f MiB/s | ETA %s", fraction * 100.0, completed_bytes,
+                total_size, mebibytes_per_second, eta);
         fflush(stderr);
     } else {
-        fprintf(stderr, "Verifica dataset: %5.1f%% %s/%s, %.1f MiB/s, ETA %s\n",
-                fraction * 100.0, completed_bytes, total_size, mebibytes_per_second, eta);
+        fprintf(stderr, "Verifica dataset: %5.1f%% %s/%s, %.1f MiB/s, ETA %s\n", fraction * 100.0,
+                completed_bytes, total_size, mebibytes_per_second, eta);
     }
     progress->last_update_at = now;
     progress->has_output = 1;
@@ -299,7 +300,8 @@ static void finish_model_dataset_open_progress(const cli_model_dataset_open_prog
     }
 }
 
-static void show_model_training_progress(size_t completed, size_t total, float loss, void *context) {
+static void show_model_training_progress(size_t completed, size_t total, float loss,
+                                         void *context) {
     cli_model_training_progress *progress = context;
     const double now = current_time_seconds();
     const int is_complete = completed >= total;
@@ -333,8 +335,7 @@ static void show_model_training_progress(size_t completed, size_t total, float l
         if (completed == 0U) {
             fprintf(stderr, "] %5.1f%% step 0/%zu | preparazione...", fraction * 100.0, total);
         } else {
-            fprintf(stderr,
-                    "] %5.1f%% step %zu/%zu | loss %.6f | %.2f step/s | ETA %s",
+            fprintf(stderr, "] %5.1f%% step %zu/%zu | loss %.6f | %.2f step/s | ETA %s",
                     fraction * 100.0, completed, total, loss, steps_per_second, eta);
         }
         fflush(stderr);
@@ -361,9 +362,15 @@ static void print_usage(const char *program) {
             "  %s tokenizer evaluate MODEL.llmtok MAX_BYTES INPUT...\n"
             "  %s dataset prepare MODEL.llmtok DOCUMENTS.jsonl OUTPUT_PREFIX\n"
             "  %s model train TRAIN.llmdat STEPS [--batch-size B] [--context T]"
-            " [--hidden C] [--layers 0|1] [--learning-rate LR] [--seed N]"
+            " [--hidden C] [--layers L] [--heads H] [--ffn F]"
+            " [--learning-rate LR] [--gradient-accumulation N]"
+            " [--warmup-steps N] [--total-steps N] [--min-learning-rate LR] [--seed N]"
+            " [--beta1 B] [--beta2 B] [--epsilon E] [--weight-decay W]"
+            " [--sampling shuffled|random] [--gradient-clip N]"
             " [--backend cpu|metal]"
-            " [--checkpoint FILE] [--resume FILE]\n"
+            " [--checkpoint FILE] [--checkpoint-every N] [--resume FILE]"
+            " [--validation FILE] [--validation-every N] [--validation-batches N]"
+            " [--best-checkpoint FILE] [--log FILE]\n"
             "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT"
             " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]\n"
             "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt STEPS"
@@ -473,9 +480,9 @@ static int generation_candidate_compare(const void *left, const void *right) {
     if (left_candidate->logit < right_candidate->logit) {
         return 1;
     }
-    return left_candidate->token < right_candidate->token
-               ? -1
-               : left_candidate->token > right_candidate->token ? 1 : 0;
+    return left_candidate->token < right_candidate->token   ? -1
+           : left_candidate->token > right_candidate->token ? 1
+                                                            : 0;
 }
 
 static uint64_t generation_next_random(uint64_t *state) {
@@ -513,17 +520,18 @@ static token_id sample_generation_token(const float *logits, uint32_t vocabulary
         candidates[token - 1U] = (cli_generation_candidate){.token = token, .logit = adjusted};
     }
     qsort(candidates, candidate_count, sizeof(*candidates), generation_candidate_compare);
-    const size_t selected_count = options->top_k < candidate_count ? options->top_k : candidate_count;
+    const size_t selected_count =
+        options->top_k < candidate_count ? options->top_k : candidate_count;
     const float maximum = candidates[0].logit;
     double weight_sum = 0.0;
     for (size_t index = 0U; index < selected_count; ++index) {
-        weight_sum += exp(((double)candidates[index].logit - (double)maximum) /
-                          (double)options->temperature);
+        weight_sum +=
+            exp(((double)candidates[index].logit - (double)maximum) / (double)options->temperature);
     }
     double sample = generation_uniform(&options->random_state) * weight_sum;
     for (size_t index = 0U; index < selected_count; ++index) {
-        sample -= exp(((double)candidates[index].logit - (double)maximum) /
-                      (double)options->temperature);
+        sample -=
+            exp(((double)candidates[index].logit - (double)maximum) / (double)options->temperature);
         if (sample <= 0.0) {
             return candidates[index].token;
         }
@@ -662,6 +670,82 @@ static int run_dataset_prepare(char **argv) {
     return 0;
 }
 
+static const char *model_sampling_name(lm_batcher_sampling sampling) {
+    if (sampling == LM_BATCHER_SHUFFLED_BLOCKS)
+        return "shuffled";
+    if (sampling == LM_BATCHER_SHUFFLED_WINDOWS)
+        return "shuffled-windows";
+    return "random";
+}
+
+static char *path_with_suffix(const char *path, const char *suffix) {
+    if (path == NULL || suffix == NULL)
+        return NULL;
+    const size_t path_length = strlen(path);
+    const size_t suffix_length = strlen(suffix);
+    if (path_length > SIZE_MAX - suffix_length - 1U)
+        return NULL;
+    char *result = malloc(path_length + suffix_length + 1U);
+    if (result != NULL) {
+        memcpy(result, path, path_length);
+        memcpy(result + path_length, suffix, suffix_length + 1U);
+    }
+    return result;
+}
+
+static int load_best_validation_loss(const char *checkpoint_path, double *out_loss) {
+    char *metadata_path = path_with_suffix(checkpoint_path, ".metrics.json");
+    if (metadata_path == NULL)
+        return 0;
+    FILE *file = fopen(metadata_path, "rb");
+    free(metadata_path);
+    if (file == NULL)
+        return 0;
+    char buffer[512] = {0};
+    const size_t length = fread(buffer, 1U, sizeof(buffer) - 1U, file);
+    const int read_failed = ferror(file) != 0 || fclose(file) != 0;
+    if (read_failed != 0)
+        return 0;
+    buffer[length] = '\0';
+    char *field = strstr(buffer, "\"loss\":");
+    if (field == NULL)
+        return 0;
+    char *end = NULL;
+    const double value = strtod(field + strlen("\"loss\":"), &end);
+    if (end == field + strlen("\"loss\":") || isfinite(value) == 0)
+        return 0;
+    *out_loss = value;
+    return 1;
+}
+
+static int save_best_validation_metadata(const char *checkpoint_path, unsigned long long step,
+                                         double loss) {
+    char *metadata_path = path_with_suffix(checkpoint_path, ".metrics.json");
+    char *temporary_path = path_with_suffix(checkpoint_path, ".metrics.json.part");
+    if (metadata_path == NULL || temporary_path == NULL) {
+        free(temporary_path);
+        free(metadata_path);
+        return 0;
+    }
+    FILE *file = fopen(temporary_path, "wb");
+    int success = file != NULL;
+    if (success != 0) {
+        success = fprintf(file,
+                          "{\"schema\":\"llm-lab-best-checkpoint-v1\",\"step\":%llu,"
+                          "\"loss\":%.9g,\"perplexity\":%.9g}\n",
+                          step, loss, exp(loss)) > 0;
+        if (fclose(file) != 0)
+            success = 0;
+    }
+    if (success != 0 && rename(temporary_path, metadata_path) != 0)
+        success = 0;
+    if (success == 0)
+        (void)remove(temporary_path);
+    free(temporary_path);
+    free(metadata_path);
+    return success;
+}
+
 static int run_model_train(int argc, char **argv) {
     size_t steps = 0U;
     lm_trainer_config trainer_config = {.batch_size = 2U,
@@ -671,11 +755,25 @@ static int run_model_train(int argc, char **argv) {
                                         .beta1 = 0.9F,
                                         .beta2 = 0.999F,
                                         .epsilon = 1.0e-8F,
-                                        .weight_decay = 0.01F};
+                                        .weight_decay = 0.01F,
+                                        .gradient_accumulation_steps = 1U,
+                                        .warmup_steps = 0U,
+                                        .total_steps = 0U,
+                                        .minimum_learning_rate = 1.0e-3F,
+                                        .sampling = LM_BATCHER_SHUFFLED_BLOCKS,
+                                        .gradient_clip_norm = 0.0F};
     size_t hidden_size = 64U;
     size_t layer_count = 1U;
+    size_t head_count = 1U;
+    size_t feed_forward_size = 0U;
     const char *checkpoint_path = NULL;
     const char *resume_path = NULL;
+    const char *validation_path = NULL;
+    const char *best_checkpoint_path = NULL;
+    const char *log_path = NULL;
+    size_t checkpoint_every = 0U;
+    size_t validation_every = 0U;
+    size_t validation_batches = 100U;
     int use_metal = 0;
     int has_model_options = 0;
     if (parse_positive_size(argv[4], &steps) == 0) {
@@ -700,10 +798,52 @@ static int run_model_train(int argc, char **argv) {
             parsed = parse_positive_size(value, &hidden_size);
             has_model_options = 1;
         } else if (strcmp(option, "--layers") == 0) {
-            parsed = parse_size(value, &layer_count) && layer_count <= 1U;
+            parsed = parse_size(value, &layer_count);
+            has_model_options = 1;
+        } else if (strcmp(option, "--heads") == 0) {
+            parsed = parse_positive_size(value, &head_count);
+            has_model_options = 1;
+        } else if (strcmp(option, "--ffn") == 0) {
+            parsed = parse_size(value, &feed_forward_size);
             has_model_options = 1;
         } else if (strcmp(option, "--learning-rate") == 0) {
             parsed = parse_positive_float(value, &trainer_config.learning_rate);
+            has_model_options = 1;
+        } else if (strcmp(option, "--gradient-accumulation") == 0) {
+            parsed = parse_positive_size(value, &trainer_config.gradient_accumulation_steps);
+            has_model_options = 1;
+        } else if (strcmp(option, "--warmup-steps") == 0) {
+            parsed = parse_seed(value, &trainer_config.warmup_steps);
+            has_model_options = 1;
+        } else if (strcmp(option, "--total-steps") == 0) {
+            parsed = parse_seed(value, &trainer_config.total_steps);
+            has_model_options = 1;
+        } else if (strcmp(option, "--min-learning-rate") == 0) {
+            parsed = parse_positive_float(value, &trainer_config.minimum_learning_rate);
+            has_model_options = 1;
+        } else if (strcmp(option, "--beta1") == 0) {
+            parsed = parse_positive_float(value, &trainer_config.beta1);
+            has_model_options = 1;
+        } else if (strcmp(option, "--beta2") == 0) {
+            parsed = parse_positive_float(value, &trainer_config.beta2);
+            has_model_options = 1;
+        } else if (strcmp(option, "--epsilon") == 0) {
+            parsed = parse_positive_float(value, &trainer_config.epsilon);
+            has_model_options = 1;
+        } else if (strcmp(option, "--weight-decay") == 0) {
+            parsed = parse_positive_float(value, &trainer_config.weight_decay);
+            has_model_options = 1;
+        } else if (strcmp(option, "--sampling") == 0) {
+            if (strcmp(value, "shuffled") == 0) {
+                trainer_config.sampling = LM_BATCHER_SHUFFLED_BLOCKS;
+                parsed = 1;
+            } else if (strcmp(value, "random") == 0) {
+                trainer_config.sampling = LM_BATCHER_RANDOM_WINDOWS;
+                parsed = 1;
+            }
+            has_model_options = 1;
+        } else if (strcmp(option, "--gradient-clip") == 0) {
+            parsed = parse_positive_float(value, &trainer_config.gradient_clip_norm);
             has_model_options = 1;
         } else if (strcmp(option, "--seed") == 0) {
             parsed = parse_seed(value, &trainer_config.seed);
@@ -718,8 +858,23 @@ static int run_model_train(int argc, char **argv) {
         } else if (strcmp(option, "--checkpoint") == 0 && checkpoint_path == NULL) {
             checkpoint_path = value;
             parsed = value[0] != '\0';
+        } else if (strcmp(option, "--checkpoint-every") == 0) {
+            parsed = parse_positive_size(value, &checkpoint_every);
         } else if (strcmp(option, "--resume") == 0 && resume_path == NULL) {
             resume_path = value;
+            parsed = value[0] != '\0';
+        } else if (strcmp(option, "--validation") == 0 && validation_path == NULL) {
+            validation_path = value;
+            parsed = value[0] != '\0';
+        } else if (strcmp(option, "--validation-every") == 0) {
+            parsed = parse_positive_size(value, &validation_every);
+        } else if (strcmp(option, "--validation-batches") == 0) {
+            parsed = parse_positive_size(value, &validation_batches);
+        } else if (strcmp(option, "--best-checkpoint") == 0 && best_checkpoint_path == NULL) {
+            best_checkpoint_path = value;
+            parsed = value[0] != '\0';
+        } else if (strcmp(option, "--log") == 0 && log_path == NULL) {
+            log_path = value;
             parsed = value[0] != '\0';
         }
         if (parsed == 0) {
@@ -728,7 +883,27 @@ static int run_model_train(int argc, char **argv) {
         }
     }
     if (resume_path != NULL && has_model_options != 0) {
-        fprintf(stderr, "--resume restores model and trainer settings; do not override their options.\n");
+        fprintf(stderr,
+                "--resume restores model and trainer settings; do not override their options.\n");
+        return 1;
+    }
+    if (checkpoint_every != 0U && checkpoint_path == NULL) {
+        fprintf(stderr, "--checkpoint-every requires --checkpoint FILE.\n");
+        return 1;
+    }
+    if (validation_path == NULL && (validation_every != 0U || best_checkpoint_path != NULL)) {
+        fprintf(stderr, "Validation options require --validation FILE.\n");
+        return 1;
+    }
+    if (validation_path != NULL && validation_every == 0U)
+        validation_every = 2000U;
+    if (checkpoint_path != NULL && best_checkpoint_path != NULL &&
+        strcmp(checkpoint_path, best_checkpoint_path) == 0) {
+        fprintf(stderr, "Latest and best checkpoint paths must be different.\n");
+        return 1;
+    }
+    if (trainer_config.minimum_learning_rate > trainer_config.learning_rate) {
+        fprintf(stderr, "--min-learning-rate must not exceed --learning-rate.\n");
         return 1;
     }
 
@@ -741,7 +916,8 @@ static int run_model_train(int argc, char **argv) {
         argv[3], show_model_dataset_open_progress, &dataset_progress, &dataset);
     finish_model_dataset_open_progress(&dataset_progress);
     if (dataset_status != LM_DATASET_OK) {
-        fprintf(stderr, "Opening training dataset failed: %s\n", lm_dataset_status_string(dataset_status));
+        fprintf(stderr, "Opening training dataset failed: %s\n",
+                lm_dataset_status_string(dataset_status));
         return 1;
     }
     if (lm_dataset_get_split(dataset) != LM_DATASET_TRAIN) {
@@ -750,17 +926,37 @@ static int run_model_train(int argc, char **argv) {
         return 1;
     }
 
+    lm_dataset *validation_dataset = NULL;
+    if (validation_path != NULL) {
+        dataset_progress = (cli_model_dataset_open_progress){
+            .started_at = current_time_seconds(),
+            .interactive = standard_error_is_terminal(),
+        };
+        dataset_status =
+            lm_dataset_open_with_progress(validation_path, show_model_dataset_open_progress,
+                                          &dataset_progress, &validation_dataset);
+        finish_model_dataset_open_progress(&dataset_progress);
+        if (dataset_status != LM_DATASET_OK ||
+            lm_dataset_get_split(validation_dataset) != LM_DATASET_VALIDATION) {
+            fprintf(stderr, "Opening validation dataset failed: %s\n",
+                    lm_dataset_status_string(dataset_status));
+            lm_dataset_close(validation_dataset);
+            lm_dataset_close(dataset);
+            return 1;
+        }
+    }
+
     llm_backend *backend = NULL;
     lm_model *model = NULL;
     lm_trainer *trainer = NULL;
-    llm_status status = use_metal != 0 ? llm_backend_metal_create(&backend)
-                                       : llm_backend_cpu_create(&backend);
+    llm_status status =
+        use_metal != 0 ? llm_backend_metal_create(&backend) : llm_backend_cpu_create(&backend);
     lm_model_config model_config = {.vocabulary_size = lm_dataset_model_vocabulary_size(dataset),
                                     .context_length = trainer_config.context_length,
                                     .hidden_size = hidden_size,
                                     .layer_count = layer_count,
-                                    .head_count = layer_count == 0U ? 0U : 1U,
-                                    .feed_forward_size = 0U,
+                                    .head_count = layer_count == 0U ? 0U : head_count,
+                                    .feed_forward_size = layer_count == 0U ? 0U : feed_forward_size,
                                     .seed = trainer_config.seed};
     if (status == LLM_OK && resume_path != NULL) {
         status = lm_trainer_load_checkpoint(backend, dataset, resume_path, &model, &trainer);
@@ -773,14 +969,95 @@ static int run_model_train(int argc, char **argv) {
     if (status == LLM_OK) {
         status = lm_model_get_config(model, &model_config);
     }
+    if (status == LLM_OK) {
+        status = lm_trainer_get_config(trainer, &trainer_config);
+    }
     if (status != LLM_OK) {
         fprintf(stderr, "Creating model training failed: %s\n", llm_status_string(status));
         lm_trainer_destroy(trainer);
         lm_model_destroy(model);
         llm_backend_destroy(backend);
+        lm_dataset_close(validation_dataset);
         lm_dataset_close(dataset);
         return 1;
     }
+    if (validation_dataset != NULL &&
+        lm_dataset_model_vocabulary_size(validation_dataset) != model_config.vocabulary_size) {
+        fprintf(stderr, "Training and validation vocabularies do not match.\n");
+        lm_trainer_destroy(trainer);
+        lm_model_destroy(model);
+        llm_backend_destroy(backend);
+        lm_dataset_close(validation_dataset);
+        lm_dataset_close(dataset);
+        return 1;
+    }
+    uint64_t parameter_value_count = 0U;
+    for (size_t index = 0U; index < lm_model_parameter_count(model); ++index) {
+        const llm_tensor *parameter = lm_model_parameter_value(model, index);
+        if (parameter == NULL || parameter->element_count > UINT64_MAX - parameter_value_count) {
+            fprintf(stderr, "Counting model parameters failed.\n");
+            lm_trainer_destroy(trainer);
+            lm_model_destroy(model);
+            llm_backend_destroy(backend);
+            lm_dataset_close(validation_dataset);
+            lm_dataset_close(dataset);
+            return 1;
+        }
+        parameter_value_count += parameter->element_count;
+    }
+    fprintf(stderr,
+            "Modello: %zu layer, %zu head, hidden %zu, FFN %zu, contesto %zu, "
+            "%.2fM parametri.\n",
+            model_config.layer_count, model_config.head_count, model_config.hidden_size,
+            model_config.feed_forward_size, model_config.context_length,
+            (double)parameter_value_count / 1000000.0);
+
+    FILE *log_file = NULL;
+    if (log_path != NULL) {
+        log_file = fopen(log_path, "a");
+        if (log_file == NULL) {
+            fprintf(stderr, "Opening training log failed.\n");
+            lm_trainer_destroy(trainer);
+            lm_model_destroy(model);
+            llm_backend_destroy(backend);
+            lm_dataset_close(validation_dataset);
+            lm_dataset_close(dataset);
+            return 1;
+        }
+        (void)setvbuf(log_file, NULL, _IOLBF, 0U);
+        fprintf(log_file,
+                "{\"schema\":\"llm-lab-training-event-v1\",\"event\":\"run\","
+                "\"start_step\":%llu,\"requested_updates\":%zu,\"parameter_count\":%" PRIu64
+                ",\"backend\":\"%s\",\"sampling\":\"%s\",\"batch_size\":%zu,"
+                "\"context_length\":%zu,\"gradient_accumulation\":%zu,"
+                "\"validation_every\":%zu,\"validation_batches\":%zu}\n",
+                lm_trainer_step_count(trainer), steps, parameter_value_count,
+                use_metal != 0 ? "metal" : "cpu", model_sampling_name(trainer_config.sampling),
+                trainer_config.batch_size, trainer_config.context_length,
+                trainer_config.gradient_accumulation_steps, validation_every, validation_batches);
+    }
+
+    if (trainer_config.batch_size > SIZE_MAX / trainer_config.context_length ||
+        trainer_config.batch_size * trainer_config.context_length >
+            SIZE_MAX / trainer_config.gradient_accumulation_steps) {
+        fprintf(stderr, "Counting tokens per update failed.\n");
+        if (log_file != NULL)
+            (void)fclose(log_file);
+        lm_trainer_destroy(trainer);
+        lm_model_destroy(model);
+        llm_backend_destroy(backend);
+        lm_dataset_close(validation_dataset);
+        lm_dataset_close(dataset);
+        return 1;
+    }
+    const size_t tokens_per_update = trainer_config.batch_size * trainer_config.context_length *
+                                     trainer_config.gradient_accumulation_steps;
+    double best_validation_loss = INFINITY;
+    if (best_checkpoint_path != NULL)
+        (void)load_best_validation_loss(best_checkpoint_path, &best_validation_loss);
+    double latest_validation_loss = INFINITY;
+    int has_validation_result = 0;
+    unsigned long long last_checkpoint_step = ULLONG_MAX;
 
     cli_model_training_progress training_progress = {
         .started_at = current_time_seconds(),
@@ -789,6 +1066,7 @@ static int run_model_train(int argc, char **argv) {
     float loss = 0.0F;
     show_model_training_progress(0U, steps, loss, &training_progress);
     for (size_t index = 0U; index < steps; ++index) {
+        const double step_started_at = current_time_seconds();
         status = lm_trainer_step(trainer, &loss);
         if (status != LLM_OK) {
             finish_model_training_progress(&training_progress);
@@ -797,19 +1075,129 @@ static int run_model_train(int argc, char **argv) {
             lm_trainer_destroy(trainer);
             lm_model_destroy(model);
             llm_backend_destroy(backend);
+            if (log_file != NULL)
+                (void)fclose(log_file);
+            lm_dataset_close(validation_dataset);
             lm_dataset_close(dataset);
             return 1;
+        }
+        const double step_seconds = current_time_seconds() - step_started_at;
+        const unsigned long long global_step = lm_trainer_step_count(trainer);
+        const double tokens_per_second =
+            step_seconds > 0.0 ? (double)tokens_per_update / step_seconds : 0.0;
+        llm_metal_backend_metrics metal_metrics = {0};
+        if (use_metal != 0)
+            (void)llm_backend_metal_get_metrics(backend, &metal_metrics);
+        const uint64_t tokens_seen = global_step <= UINT64_MAX / (uint64_t)tokens_per_update
+                                         ? (uint64_t)global_step * (uint64_t)tokens_per_update
+                                         : UINT64_MAX;
+        if (log_file != NULL) {
+            fprintf(log_file,
+                    "{\"schema\":\"llm-lab-training-event-v1\",\"event\":\"train\","
+                    "\"step\":%llu,\"tokens\":%" PRIu64 ",\"loss\":%.9g,"
+                    "\"learning_rate\":%.9g,\"gradient_norm\":%.9g,"
+                    "\"step_seconds\":%.9g,\"steps_per_second\":%.9g,"
+                    "\"tokens_per_second\":%.9g,"
+                    "\"metal_active_bytes\":%zu,\"metal_peak_active_bytes\":%zu,"
+                    "\"metal_total_gpu_seconds\":%.9g}\n",
+                    global_step, tokens_seen, loss, lm_trainer_learning_rate(trainer),
+                    lm_trainer_gradient_norm(trainer), step_seconds,
+                    step_seconds > 0.0 ? 1.0 / step_seconds : 0.0, tokens_per_second,
+                    metal_metrics.active_buffer_bytes, metal_metrics.peak_active_buffer_bytes,
+                    metal_metrics.total_gpu_seconds);
+        }
+        const int final_requested_step = index + 1U == steps;
+        const int should_validate =
+            validation_dataset != NULL &&
+            (global_step % (unsigned long long)validation_every == 0U || final_requested_step != 0);
+        if (should_validate != 0) {
+            finish_model_training_progress(&training_progress);
+            fprintf(stderr, "Validation step %llu: %zu batch...\n", global_step,
+                    validation_batches);
+            float validation_loss = 0.0F;
+            status = lm_model_evaluate_validation(model, validation_dataset,
+                                                  trainer_config.batch_size, validation_batches,
+                                                  trainer_config.seed, &validation_loss);
+            if (status != LLM_OK) {
+                fprintf(stderr, "Validation failed: %s\n", llm_status_string(status));
+                if (log_file != NULL)
+                    (void)fclose(log_file);
+                lm_trainer_destroy(trainer);
+                lm_model_destroy(model);
+                llm_backend_destroy(backend);
+                lm_dataset_close(validation_dataset);
+                lm_dataset_close(dataset);
+                return 1;
+            }
+            latest_validation_loss = validation_loss;
+            has_validation_result = 1;
+            const int improved = latest_validation_loss < best_validation_loss;
+            if (improved != 0 && best_checkpoint_path != NULL) {
+                status = lm_trainer_save_checkpoint(trainer, dataset, best_checkpoint_path);
+                if (status == LLM_OK &&
+                    save_best_validation_metadata(best_checkpoint_path, global_step,
+                                                  latest_validation_loss) == 0) {
+                    status = LLM_BACKEND_ERROR;
+                }
+                if (status != LLM_OK) {
+                    fprintf(stderr, "Saving best checkpoint failed: %s\n",
+                            llm_status_string(status));
+                    if (log_file != NULL)
+                        (void)fclose(log_file);
+                    lm_trainer_destroy(trainer);
+                    lm_model_destroy(model);
+                    llm_backend_destroy(backend);
+                    lm_dataset_close(validation_dataset);
+                    lm_dataset_close(dataset);
+                    return 1;
+                }
+            }
+            if (improved != 0)
+                best_validation_loss = latest_validation_loss;
+            fprintf(stderr, "Validation: loss %.6f, perplexity %.3f%s\n", latest_validation_loss,
+                    exp(latest_validation_loss), improved != 0 ? ", nuovo best" : "");
+            if (log_file != NULL) {
+                fprintf(log_file,
+                        "{\"schema\":\"llm-lab-training-event-v1\","
+                        "\"event\":\"validation\",\"step\":%llu,\"batches\":%zu,"
+                        "\"loss\":%.9g,\"perplexity\":%.9g,\"best_loss\":%.9g,"
+                        "\"improved\":%s}\n",
+                        global_step, validation_batches, latest_validation_loss,
+                        exp(latest_validation_loss), best_validation_loss,
+                        improved != 0 ? "true" : "false");
+            }
+            training_progress.last_update_at = 0.0;
+        }
+        if (checkpoint_every != 0U && global_step % (unsigned long long)checkpoint_every == 0U) {
+            status = lm_trainer_save_checkpoint(trainer, dataset, checkpoint_path);
+            if (status != LLM_OK) {
+                finish_model_training_progress(&training_progress);
+                fprintf(stderr, "Saving periodic checkpoint failed: %s\n",
+                        llm_status_string(status));
+                lm_trainer_destroy(trainer);
+                lm_model_destroy(model);
+                llm_backend_destroy(backend);
+                if (log_file != NULL)
+                    (void)fclose(log_file);
+                lm_dataset_close(validation_dataset);
+                lm_dataset_close(dataset);
+                return 1;
+            }
+            last_checkpoint_step = global_step;
         }
         show_model_training_progress(index + 1U, steps, loss, &training_progress);
     }
     finish_model_training_progress(&training_progress);
-    if (checkpoint_path != NULL) {
+    if (checkpoint_path != NULL && last_checkpoint_step != lm_trainer_step_count(trainer)) {
         status = lm_trainer_save_checkpoint(trainer, dataset, checkpoint_path);
         if (status != LLM_OK) {
             fprintf(stderr, "Saving checkpoint failed: %s\n", llm_status_string(status));
             lm_trainer_destroy(trainer);
             lm_model_destroy(model);
             llm_backend_destroy(backend);
+            if (log_file != NULL)
+                (void)fclose(log_file);
+            lm_dataset_close(validation_dataset);
             lm_dataset_close(dataset);
             return 1;
         }
@@ -817,15 +1205,30 @@ static int run_model_train(int argc, char **argv) {
     printf("{\"schema\":\"llm-lab-model-training-v1\",\"steps\":%llu,"
            "\"loss\":%.8f,\"vocabulary_size\":%" PRIu32 ","
            "\"context_length\":%zu,\"hidden_size\":%zu,\"layer_count\":%zu,"
-           "\"backend\":\"%s\","
-           "\"checkpoint_saved\":%s}\n",
+           "\"head_count\":%zu,\"feed_forward_size\":%zu,\"parameter_count\":%" PRIu64 ","
+           "\"gradient_accumulation_steps\":%zu,\"learning_rate\":%.9g,"
+           "\"gradient_norm\":%.9g,\"sampling\":\"%s\","
+           "\"backend\":\"%s\",\"validation_loss\":",
            lm_trainer_step_count(trainer), loss, model_config.vocabulary_size,
            model_config.context_length, model_config.hidden_size, model_config.layer_count,
-           use_metal != 0 ? "metal" : "cpu",
-           checkpoint_path == NULL ? "false" : "true");
+           model_config.head_count, model_config.feed_forward_size, parameter_value_count,
+           trainer_config.gradient_accumulation_steps, lm_trainer_learning_rate(trainer),
+           lm_trainer_gradient_norm(trainer), model_sampling_name(trainer_config.sampling),
+           use_metal != 0 ? "metal" : "cpu");
+    if (has_validation_result != 0)
+        printf("%.8f,\"validation_perplexity\":%.8f,", latest_validation_loss,
+               exp(latest_validation_loss));
+    else
+        printf("null,\"validation_perplexity\":null,");
+    printf("\"checkpoint_saved\":%s,\"best_checkpoint_saved\":%s}\n",
+           checkpoint_path == NULL ? "false" : "true",
+           best_checkpoint_path == NULL || isfinite(best_validation_loss) == 0 ? "false" : "true");
+    if (log_file != NULL && fclose(log_file) != 0)
+        fprintf(stderr, "Closing training log failed.\n");
     lm_trainer_destroy(trainer);
     lm_model_destroy(model);
     llm_backend_destroy(backend);
+    lm_dataset_close(validation_dataset);
     lm_dataset_close(dataset);
     return 0;
 }
@@ -834,27 +1237,23 @@ static size_t valid_utf8_sequence_length(const unsigned char *bytes, size_t leng
     if (length == 0U || bytes[0] < 0x80U) {
         return length == 0U ? 0U : 1U;
     }
-    if (bytes[0] >= 0xc2U && bytes[0] <= 0xdfU && length >= 2U &&
-        bytes[1] >= 0x80U && bytes[1] <= 0xbfU) {
+    if (bytes[0] >= 0xc2U && bytes[0] <= 0xdfU && length >= 2U && bytes[1] >= 0x80U &&
+        bytes[1] <= 0xbfU) {
         return 2U;
     }
     if (length >= 3U &&
         ((bytes[0] == 0xe0U && bytes[1] >= 0xa0U && bytes[1] <= 0xbfU) ||
-         ((bytes[0] >= 0xe1U && bytes[0] <= 0xecU) && bytes[1] >= 0x80U &&
-          bytes[1] <= 0xbfU) ||
+         ((bytes[0] >= 0xe1U && bytes[0] <= 0xecU) && bytes[1] >= 0x80U && bytes[1] <= 0xbfU) ||
          (bytes[0] == 0xedU && bytes[1] >= 0x80U && bytes[1] <= 0x9fU) ||
-         ((bytes[0] >= 0xeeU && bytes[0] <= 0xefU) && bytes[1] >= 0x80U &&
-          bytes[1] <= 0xbfU)) &&
+         ((bytes[0] >= 0xeeU && bytes[0] <= 0xefU) && bytes[1] >= 0x80U && bytes[1] <= 0xbfU)) &&
         bytes[2] >= 0x80U && bytes[2] <= 0xbfU) {
         return 3U;
     }
     if (length >= 4U &&
         ((bytes[0] == 0xf0U && bytes[1] >= 0x90U && bytes[1] <= 0xbfU) ||
-         ((bytes[0] >= 0xf1U && bytes[0] <= 0xf3U) && bytes[1] >= 0x80U &&
-          bytes[1] <= 0xbfU) ||
+         ((bytes[0] >= 0xf1U && bytes[0] <= 0xf3U) && bytes[1] >= 0x80U && bytes[1] <= 0xbfU) ||
          (bytes[0] == 0xf4U && bytes[1] >= 0x80U && bytes[1] <= 0x8fU)) &&
-        bytes[2] >= 0x80U && bytes[2] <= 0xbfU && bytes[3] >= 0x80U &&
-        bytes[3] <= 0xbfU) {
+        bytes[2] >= 0x80U && bytes[2] <= 0xbfU && bytes[3] >= 0x80U && bytes[3] <= 0xbfU) {
         return 4U;
     }
     return 0U;
@@ -872,7 +1271,8 @@ static void write_generation_bytes(const unsigned char *bytes, size_t length) {
         } else if (value == '\t') {
             fputs("\\t", stdout);
         } else if (value >= 0x80U) {
-            const size_t sequence_length = valid_utf8_sequence_length(bytes + index, length - index);
+            const size_t sequence_length =
+                valid_utf8_sequence_length(bytes + index, length - index);
             if (sequence_length != 0U) {
                 (void)fwrite(bytes + index, 1U, sequence_length, stdout);
                 index += sequence_length - 1U;
@@ -891,10 +1291,8 @@ static int run_model_generate(int argc, char **argv) {
         fprintf(stderr, "TOKENS must be a positive integer supported by this system.\n");
         return 1;
     }
-    cli_generation_options options = {.temperature = 0.8F,
-                                      .repetition_penalty = 1.1F,
-                                      .top_k = 40U,
-                                      .random_state = UINT64_C(1)};
+    cli_generation_options options = {
+        .temperature = 0.8F, .repetition_penalty = 1.1F, .top_k = 40U, .random_state = UINT64_C(1)};
     for (int index = 7; index < argc; index += 2) {
         if (index + 1 >= argc) {
             fprintf(stderr, "Model generation options require a value.\n");
@@ -924,11 +1322,13 @@ static int run_model_generate(int argc, char **argv) {
     tokenizer *tokenizer = NULL;
     tokenizer_status tokenizer_result = tokenizer_load(argv[4], &tokenizer);
     if (tokenizer_result != TOKENIZER_OK) {
-        fprintf(stderr, "Loading tokenizer failed: %s\n", tokenizer_status_string(tokenizer_result));
+        fprintf(stderr, "Loading tokenizer failed: %s\n",
+                tokenizer_status_string(tokenizer_result));
         return 1;
     }
     token_sequence sequence = {0};
-    tokenizer_result = tokenizer_encode(tokenizer, (const unsigned char *)argv[6], strlen(argv[6]), &sequence);
+    tokenizer_result =
+        tokenizer_encode(tokenizer, (const unsigned char *)argv[6], strlen(argv[6]), &sequence);
     if (tokenizer_result != TOKENIZER_OK || sequence.length == 0U ||
         sequence.length > SIZE_MAX - generated_count) {
         fprintf(stderr, "Encoding prompt failed: %s\n", tokenizer_status_string(tokenizer_result));
@@ -936,7 +1336,8 @@ static int run_model_generate(int argc, char **argv) {
         tokenizer_destroy(tokenizer);
         return 1;
     }
-    token_id *all_tokens = realloc(sequence.ids, (sequence.length + generated_count) * sizeof(*all_tokens));
+    token_id *all_tokens =
+        realloc(sequence.ids, (sequence.length + generated_count) * sizeof(*all_tokens));
     if (all_tokens == NULL) {
         fprintf(stderr, "Generating text failed: allocation failed\n");
         token_sequence_destroy(&sequence);
@@ -957,7 +1358,8 @@ static int run_model_generate(int argc, char **argv) {
     }
     if (status != LLM_OK || tokenizer_vocabulary_size(tokenizer) + 1U != config.vocabulary_size) {
         fprintf(stderr, "Loading checkpoint failed: %s\n",
-                status == LLM_OK ? "tokenizer vocabulary does not match checkpoint" : llm_status_string(status));
+                status == LLM_OK ? "tokenizer vocabulary does not match checkpoint"
+                                 : llm_status_string(status));
         lm_model_destroy(model);
         llm_backend_destroy(backend);
         token_sequence_destroy(&sequence);
@@ -1010,9 +1412,9 @@ static int run_model_generate(int argc, char **argv) {
         }
         if (status == LLM_OK) {
             const float *row = host_logits + (used - 1U) * config.vocabulary_size;
-            sequence.ids[available] = sample_generation_token(
-                row, config.vocabulary_size, sequence.ids, available, config.context_length,
-                candidates, recent_tokens, &options);
+            sequence.ids[available] =
+                sample_generation_token(row, config.vocabulary_size, sequence.ids, available,
+                                        config.context_length, candidates, recent_tokens, &options);
         }
     }
     if (status == LLM_OK) {
@@ -1063,7 +1465,8 @@ static int run_model_evaluate(int argc, char **argv) {
             parsed = parse_seed(argv[index + 1], &seed);
         }
         if (parsed == 0) {
-            fprintf(stderr, "Invalid model evaluation option: %s %s\n", argv[index], argv[index + 1]);
+            fprintf(stderr, "Invalid model evaluation option: %s %s\n", argv[index],
+                    argv[index + 1]);
             return 1;
         }
     }
@@ -1114,8 +1517,8 @@ static int run_model_evaluate(int argc, char **argv) {
     if (host_inputs == NULL || host_targets == NULL) {
         status = LLM_ALLOCATION_FAILED;
     }
-    if (status == LLM_OK && lm_batcher_create(dataset, batch_size, config.context_length, seed, &batcher) !=
-                             LM_DATASET_OK) {
+    if (status == LLM_OK && lm_batcher_create(dataset, batch_size, config.context_length, seed,
+                                              &batcher) != LM_DATASET_OK) {
         status = LLM_BACKEND_ERROR;
     }
     if (status == LLM_OK) {
@@ -1137,9 +1540,11 @@ static int run_model_evaluate(int argc, char **argv) {
             status = LLM_BACKEND_ERROR;
             break;
         }
-        status = llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
+        status =
+            llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
         if (status == LLM_OK) {
-            status = llm_tensor_write(backend, &targets, host_targets, token_count * sizeof(*host_targets));
+            status = llm_tensor_write(backend, &targets, host_targets,
+                                      token_count * sizeof(*host_targets));
         }
         if (status == LLM_OK) {
             status = lm_model_forward(model, &inputs, &logits);
@@ -1158,8 +1563,8 @@ static int run_model_evaluate(int argc, char **argv) {
     if (status == LLM_OK) {
         const double mean_loss = loss_sum / (double)steps;
         printf("{\"schema\":\"llm-lab-model-evaluation-v1\",\"batches\":%zu,"
-               "\"loss\":%.8f,\"perplexity\":%.8f,\"layer_count\":%zu}\n", steps,
-               mean_loss, exp(mean_loss), config.layer_count);
+               "\"loss\":%.8f,\"perplexity\":%.8f,\"layer_count\":%zu}\n",
+               steps, mean_loss, exp(mean_loss), config.layer_count);
     } else {
         fprintf(stderr, "Model evaluation failed: %s\n", llm_status_string(status));
     }

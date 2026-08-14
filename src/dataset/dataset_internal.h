@@ -37,7 +37,12 @@ struct lm_batcher {
     lm_dataset *dataset;
     size_t batch_size;
     size_t context_length;
+    lm_batcher_sampling sampling;
     uint64_t random_state;
+    uint64_t epoch;
+    uint64_t sample_index;
+    uint64_t next_offset;
+    uint64_t stride;
     token_id *window;
 };
 

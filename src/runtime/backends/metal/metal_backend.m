@@ -349,11 +349,14 @@ llm_status llm_backend_metal_reset_metrics(llm_backend *backend) {
     llm_metal_context *context = backend->context;
     const double compilation_seconds = context->metrics.pipeline_compilation_seconds;
     const size_t active_count = context->metrics.active_buffer_count;
+    const size_t active_bytes = context->metrics.active_buffer_bytes;
     const size_t cached_count = context->metrics.cached_buffer_count;
     const size_t cached_bytes = context->metrics.cached_buffer_bytes;
     context->metrics = (llm_metal_backend_metrics){0};
     context->metrics.pipeline_compilation_seconds = compilation_seconds;
     context->metrics.active_buffer_count = active_count;
+    context->metrics.active_buffer_bytes = active_bytes;
+    context->metrics.peak_active_buffer_bytes = active_bytes;
     context->metrics.cached_buffer_count = cached_count;
     context->metrics.cached_buffer_bytes = cached_bytes;
     return LLM_OK;
