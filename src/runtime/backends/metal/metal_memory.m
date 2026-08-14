@@ -166,6 +166,10 @@ llm_status llm_metal_allocate(void *opaque_context, size_t byte_count, void **ou
             buffer->next = context->buffers;
             context->buffers = buffer;
             ++context->metrics.active_buffer_count;
+            context->metrics.active_buffer_bytes += buffer->capacity;
+            if (context->metrics.active_buffer_bytes > context->metrics.peak_active_buffer_bytes) {
+                context->metrics.peak_active_buffer_bytes = context->metrics.active_buffer_bytes;
+            }
             (void)pthread_mutex_unlock(&context->buffer_mutex);
             *out_memory = buffer;
             return LLM_OK;
@@ -189,6 +193,10 @@ llm_status llm_metal_allocate(void *opaque_context, size_t byte_count, void **ou
         buffer->next = context->buffers;
         context->buffers = buffer;
         ++context->metrics.active_buffer_count;
+        context->metrics.active_buffer_bytes += buffer->capacity;
+        if (context->metrics.active_buffer_bytes > context->metrics.peak_active_buffer_bytes) {
+            context->metrics.peak_active_buffer_bytes = context->metrics.active_buffer_bytes;
+        }
         (void)pthread_mutex_unlock(&context->buffer_mutex);
         *out_memory = buffer;
         return LLM_OK;
@@ -210,6 +218,7 @@ void llm_metal_deallocate(void *opaque_context, void *memory) {
     if (*link == target) {
         *link = target->next;
         --context->metrics.active_buffer_count;
+        context->metrics.active_buffer_bytes -= target->capacity;
     } else {
         target = NULL;
     }

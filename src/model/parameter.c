@@ -12,6 +12,26 @@ static uint64_t next_random(uint64_t *state) {
     return value;
 }
 
+static char *duplicate_name(const char *name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    size_t length = 0U;
+    while (name[length] != '\0') {
+        if (length == SIZE_MAX - 1U) {
+            return NULL;
+        }
+        ++length;
+    }
+    char *result = malloc(length + 1U);
+    if (result != NULL) {
+        for (size_t index = 0U; index <= length; ++index) {
+            result[index] = name[index];
+        }
+    }
+    return result;
+}
+
 static llm_status initialize_values(lm_model_parameter *parameter, llm_backend *backend,
                                     uint64_t *random_state) {
     if (parameter == NULL || backend == NULL || random_state == NULL) {
@@ -29,8 +49,8 @@ static llm_status initialize_values(lm_model_parameter *parameter, llm_backend *
         const float unit = (float)bits / 16777215.0F;
         values[index] = (unit * 2.0F - 1.0F) * 0.02F;
     }
-    const llm_status status =
-        llm_tensor_write(backend, &parameter->value, values, parameter->value.element_count * sizeof(*values));
+    const llm_status status = llm_tensor_write(backend, &parameter->value, values,
+                                               parameter->value.element_count * sizeof(*values));
     free(values);
     return status;
 }
@@ -41,7 +61,11 @@ llm_status lm_model_parameter_create(lm_model_parameter *parameter, llm_backend 
     if (parameter == NULL || backend == NULL || name == NULL || random_state == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
-    *parameter = (lm_model_parameter){.name = name};
+    *parameter = (lm_model_parameter){0};
+    parameter->name = duplicate_name(name);
+    if (parameter->name == NULL) {
+        return LLM_ALLOCATION_FAILED;
+    }
     llm_status status = llm_tensor_create(backend, LLM_DTYPE_F32, rank, shape, &parameter->value);
     if (status == LLM_OK) {
         status = llm_tensor_create(backend, LLM_DTYPE_F32, rank, shape, &parameter->gradient);
@@ -78,6 +102,7 @@ void lm_model_parameter_destroy(lm_model_parameter *parameter) {
     llm_tensor_destroy(&parameter->first_moment);
     llm_tensor_destroy(&parameter->gradient);
     llm_tensor_destroy(&parameter->value);
+    free(parameter->name);
     *parameter = (lm_model_parameter){0};
 }
 

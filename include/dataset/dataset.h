@@ -37,6 +37,24 @@ typedef struct lm_dataset_prepare_report {
 typedef struct lm_dataset lm_dataset;
 typedef struct lm_batcher lm_batcher;
 
+typedef enum lm_batcher_sampling {
+    /** Independent random windows; retained for legacy checkpoint compatibility. */
+    LM_BATCHER_RANDOM_WINDOWS = 0,
+    /** Legacy permutation of every overlapping window offset (checkpoint v3 compatibility). */
+    LM_BATCHER_SHUFFLED_WINDOWS = 1,
+    /** A shuffled permutation of non-overlapping context-sized blocks. */
+    LM_BATCHER_SHUFFLED_BLOCKS = 2
+} lm_batcher_sampling;
+
+/** Serializable state of a batcher. */
+typedef struct lm_batcher_state {
+    uint64_t random_state;
+    uint64_t epoch;
+    uint64_t sample_index;
+    uint64_t next_offset;
+    uint64_t stride;
+} lm_batcher_state;
+
 typedef void (*lm_dataset_progress_callback)(uint64_t bytes_read, uint64_t total_bytes,
                                              uint64_t documents_processed,
                                              const uint64_t token_counts[3], void *context);
@@ -84,6 +102,11 @@ lm_dataset_status lm_dataset_read_tokens(lm_dataset *dataset, uint64_t token_off
 /** Creates a deterministic random-window batcher. The dataset must outlive it. */
 lm_dataset_status lm_batcher_create(lm_dataset *dataset, size_t batch_size, size_t context_length,
                                     uint64_t seed, lm_batcher **out_batcher);
+/** Creates a batcher with an explicit sampling policy. */
+lm_dataset_status lm_batcher_create_with_sampling(lm_dataset *dataset, size_t batch_size,
+                                                  size_t context_length, uint64_t seed,
+                                                  lm_batcher_sampling sampling,
+                                                  lm_batcher **out_batcher);
 
 void lm_batcher_destroy(lm_batcher *batcher);
 
@@ -93,6 +116,9 @@ size_t lm_batcher_context_length(const lm_batcher *batcher);
 /** Returns/restores the PRNG state used for deterministic batch selection. */
 uint64_t lm_batcher_random_state(const lm_batcher *batcher);
 lm_dataset_status lm_batcher_set_random_state(lm_batcher *batcher, uint64_t state);
+/** Returns/restores complete sampling state for exact checkpoint resume. */
+lm_dataset_status lm_batcher_get_state(const lm_batcher *batcher, lm_batcher_state *out_state);
+lm_dataset_status lm_batcher_set_state(lm_batcher *batcher, const lm_batcher_state *state);
 
 /** Fills batch_size * context_length input and target tokens. */
 lm_dataset_status lm_batcher_next(lm_batcher *batcher, token_id *out_inputs, token_id *out_targets);

@@ -6,7 +6,7 @@ llm_status lm_output_head_forward(lm_model *model, llm_tensor *logits) {
     }
     const size_t shape[] = {model->forward_batch_size * model->config.context_length,
                             model->config.hidden_size};
-    const llm_tensor *input = model->config.layer_count == 0U ? &model->hidden : &model->transformed_hidden;
+    const llm_tensor *input = lm_model_output_hidden(model);
     llm_tensor hidden_rows = {0};
     llm_status status = llm_tensor_reshape(input, 2U, shape, &hidden_rows);
     if (status == LLM_OK) {
@@ -22,9 +22,8 @@ llm_status lm_output_head_backward(lm_model *model, const llm_tensor *logits_gra
     }
     const size_t row_count = model->forward_batch_size * model->config.context_length;
     const size_t shape[] = {row_count, model->config.hidden_size};
-    const llm_tensor *input = model->config.layer_count == 0U ? &model->hidden : &model->transformed_hidden;
-    llm_tensor *input_gradient = model->config.layer_count == 0U ? &model->hidden_gradient
-                                                                   : &model->transformed_hidden_gradient;
+    const llm_tensor *input = lm_model_output_hidden(model);
+    llm_tensor *input_gradient = lm_model_output_hidden_gradient(model);
     llm_tensor hidden_rows = {0};
     llm_tensor hidden_gradient_rows = {0};
     const llm_matmul_options input_gradient_options = {.transpose_left = 0, .transpose_right = 1};
@@ -39,8 +38,7 @@ llm_status lm_output_head_backward(lm_model *model, const llm_tensor *logits_gra
     }
     if (status == LLM_OK) {
         status = llm_matmul_ex(model->backend, &hidden_rows, logits_gradient,
-                               &weight_gradient_options,
-                               &model->output_weight_gradient_workspace);
+                               &weight_gradient_options, &model->output_weight_gradient_workspace);
     }
     if (status == LLM_OK) {
         status = llm_accumulate(model->backend, &model->output_weight_gradient_workspace,
