@@ -77,7 +77,13 @@ llm_status llm_silu_backward(llm_backend *backend, const llm_tensor *input,
 llm_status llm_rms_norm(llm_backend *backend, const llm_tensor *input, const llm_tensor *weight,
                         float epsilon, llm_tensor *output);
 
-/** Computes input and weight gradients for weighted RMS normalization. */
+/**
+ * Computes input and weight gradients for weighted RMS normalization.
+ *
+ * Both outputs are overwritten, weight_gradient included: it is a reduction
+ * over every row, not an accumulator. Callers that accumulate gradients across
+ * micro-batches must pass a workspace and add it into the parameter gradient.
+ */
 llm_status llm_rms_norm_backward(llm_backend *backend, const llm_tensor *input,
                                  const llm_tensor *weight, const llm_tensor *output_gradient,
                                  float epsilon, llm_tensor *input_gradient,

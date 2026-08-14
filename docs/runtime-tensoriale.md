@@ -95,6 +95,15 @@ Il runtime pubblico contiene:
 Non contiene `llm_cast` o `llm_matmul_mixed_f32`. Aggiungerli in un singolo
 backend senza una revisione comune del contratto sarebbe un errore di scope.
 
+### Gradienti: sovrascrittura, non accumulo
+
+Nessuna operazione di backward accumula nei propri output: li sovrascrive.
+Vale anche per il gradiente del peso di `llm_rms_norm_backward`, che e' una
+riduzione su tutte le righe e non un accumulatore. Chi somma gradienti su piu'
+micro-batch deve quindi scrivere in un workspace e poi usare `llm_accumulate`
+sul gradiente del parametro. Le uniche eccezioni sono `llm_accumulate` e
+`llm_scatter_add_rows`, che accumulano per definizione.
+
 ## Shape Transformer canoniche
 
 ```text

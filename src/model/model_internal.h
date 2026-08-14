@@ -3,6 +3,9 @@
 
 #include "model/model.h"
 
+/** Epsilon shared by every RMSNorm of the decoder, forward and backward. */
+#define LM_RMS_NORM_EPSILON 1.0e-5F
+
 typedef struct lm_model_parameter {
     char *name;
     llm_tensor value;
@@ -60,6 +63,7 @@ struct lm_model {
     llm_tensor attention_weight_gradient_workspace;
     llm_tensor mlp_up_weight_gradient_workspace;
     llm_tensor mlp_down_weight_gradient_workspace;
+    llm_tensor norm_weight_gradient_workspace;
     llm_tensor rope_cos_table;
     llm_tensor rope_sin_table;
     size_t forward_batch_size;
@@ -77,6 +81,9 @@ struct lm_trainer {
     llm_tensor gradient_mean_square;
     llm_tensor gradient_sum_square;
     llm_tensor gradient_norm_square;
+    /** One partial-sums tensor per parameter, shaped like its leading dimensions. */
+    llm_tensor *gradient_partials;
+    size_t gradient_partial_count;
     token_id *host_inputs;
     token_id *host_targets;
     unsigned long long step;
@@ -89,6 +96,19 @@ llm_status lm_model_parameter_create(lm_model_parameter *parameter, llm_backend 
                                      uint64_t *random_state);
 void lm_model_parameter_destroy(lm_model_parameter *parameter);
 llm_status lm_model_parameter_zero_grad(lm_model_parameter *parameter, llm_backend *backend);
+
+/**
+ * Backward pass of one RMSNorm that accumulates into the weight gradient.
+ *
+ * llm_rms_norm_backward overwrites its weight gradient output, so the norm
+ * parameters need the same workspace-then-accumulate treatment as the linear
+ * weights: without it only the last micro-batch of a gradient accumulation
+ * would reach the norm weights.
+ */
+llm_status lm_rms_norm_backward_accumulate(lm_model *model, const llm_tensor *input,
+                                           lm_model_parameter *norm,
+                                           const llm_tensor *output_gradient,
+                                           llm_tensor *input_gradient);
 
 llm_status lm_embedding_forward(lm_model *model, const llm_tensor *input_ids);
 llm_status lm_embedding_backward(lm_model *model, const llm_tensor *input_ids);

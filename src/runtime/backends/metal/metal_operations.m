@@ -1277,8 +1277,13 @@ static llm_status metal_cross_entropy_dispatch(void *opaque_context, llm_metal_p
         return status;
     }
     if (pipeline == LLM_METAL_PIPELINE_CROSS_ENTROPY_FORWARD) {
-        float *loss_value = [metal_buffer_handle(output) contents];
-        loss_value[0] = 0.0F;
+        /* The kernel accumulates into this scalar, so it must start at zero.
+           Clearing it with a queued blit keeps the order against any work
+           already encoded in an open batch; a plain host store would not. */
+        status = llm_metal_zero(context, output, sizeof(float));
+        if (status != LLM_OK) {
+            return status;
+        }
     }
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
