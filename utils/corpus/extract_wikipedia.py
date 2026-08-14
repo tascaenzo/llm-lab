@@ -51,6 +51,23 @@ RawPage = Tuple[str, str, str]
 CleanPage = Tuple[str, str, str]
 
 
+def fnv1a_64(text: str) -> int:
+    value = 14695981039346656037
+    for byte in text.encode("utf-8"):
+        value ^= byte
+        value = (value * 1099511628211) & ((1 << 64) - 1)
+    return value
+
+
+def document_split(document_id: str) -> str:
+    bucket = fnv1a_64(document_id) % 10000
+    if bucket < 9000:
+        return "train"
+    if bucket < 9500:
+        return "validation"
+    return "test"
+
+
 def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
@@ -482,6 +499,8 @@ def main() -> int:
             "duplicates_skipped": 0,
             "documents_written": 0,
             "text_bytes_written": 0,
+            "tokenizer_train_documents": 0,
+            "tokenizer_train_bytes": 0,
         }
 
         deduplication = sqlite3.connect(deduplication_path)
@@ -515,7 +534,10 @@ def main() -> int:
                 }
                 documents_file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
                 documents_file.write("\n")
-                part_writer.write_document(text)
+                if document_split(record["id"]) == "train":
+                    part_writer.write_document(text)
+                    statistics["tokenizer_train_documents"] += 1
+                    statistics["tokenizer_train_bytes"] += len(text.encode("utf-8"))
                 statistics["documents_written"] += 1
                 statistics["text_bytes_written"] += len(text.encode("utf-8"))
 
@@ -557,6 +579,13 @@ def main() -> int:
             "outputs": {
                 "documents": relative_to_project(documents_path, project_root),
                 "tokenizer_input": [relative_to_project(path, project_root) for path in part_writer.paths],
+                "tokenizer_input_split": "train",
+            },
+            "split": {
+                "algorithm": "fnv1a-64-mod-10000",
+                "train_buckets": [0, 8999],
+                "validation_buckets": [9000, 9499],
+                "test_buckets": [9500, 9999],
             },
             "statistics": statistics,
         }

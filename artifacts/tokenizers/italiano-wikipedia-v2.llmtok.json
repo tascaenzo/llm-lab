@@ -1,0 +1,137 @@
+{
+  "schema": "llm-lab-tokenizer-artifact-v2",
+  "created_at": "2026-08-14T09:47:57.994793+00:00",
+  "tokenizer": {
+    "file": "artifacts/tokenizers/italiano-wikipedia-v2.llmtok",
+    "sha256": "b3f3b67b3c6cb8bd898f74fe11b1d1d8decf7455b416d83389cb01c1ff32355f",
+    "format": {
+      "kind": "binary",
+      "version": 1,
+      "byte_order": "little-endian",
+      "payload_checksum": "sha256"
+    },
+    "target_vocabulary_size": 32000,
+    "actual_vocabulary_size": 32000,
+    "merge_count": 31744
+  },
+  "trainer": {
+    "file": "build/release/llm-lab",
+    "sha256": "4829e57c8d29705650ade5dccbf0caa5ef5aa643c3603ad20b7ad6657906f51e",
+    "git_commit": "e8cad55cde7bc13202012a22a70506dbf3f7d3e1",
+    "git_worktree_dirty": true,
+    "build_configuration": "release"
+  },
+  "execution": {
+    "training_seconds": 48.01240045800023,
+    "training_peak_memory_kib": 4315552
+  },
+  "evaluation": {
+    "schema": "llm-lab-tokenizer-evaluation-v1",
+    "bytes": 1048576,
+    "tokens": 379368,
+    "bytes_per_token": 2.764008,
+    "seconds": 0.038367,
+    "mebibytes_per_second": 26.064065,
+    "round_trip": true
+  },
+  "corpus": {
+    "manifest": "data/derived/italiano-wikipedia-v1/tokenizer-train-manifest.json",
+    "manifest_sha256": "329da68de475dd3f1e31a9aba995b6f2adcc00e99ab1035d67244e9e3546d8dc",
+    "tokenizer_input": [
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-000.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-001.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-002.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-003.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-004.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-005.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-006.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-007.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-008.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-009.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-010.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-011.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-012.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-013.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-014.txt",
+      "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-015.txt"
+    ],
+    "tokenizer_input_split": "train",
+    "snapshot": {
+      "schema": "llm-lab-tokenizer-corpus-v1",
+      "name": "italiano-wikipedia-v1-train-only",
+      "created_at": "2026-08-14T09:46:58.348981+00:00",
+      "source_manifest": "data/clean/italiano-wikipedia-v1/manifest.json",
+      "source_manifest_sha256": "257522a4c8dbd3d7bcc697b94190b3c49efbd3f3aeb8bdc69114d91241738cb2",
+      "split": {
+        "algorithm": "fnv1a-64-mod-10000",
+        "selected": "train",
+        "train_buckets": [
+          0,
+          8999
+        ],
+        "validation_buckets": [
+          9000,
+          9499
+        ],
+        "test_buckets": [
+          9500,
+          9999
+        ]
+      },
+      "outputs": {
+        "documents": "data/clean/italiano-wikipedia-v1/documents.jsonl",
+        "tokenizer_input": [
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-000.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-001.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-002.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-003.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-004.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-005.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-006.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-007.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-008.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-009.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-010.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-011.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-012.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-013.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-014.txt",
+          "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-015.txt"
+        ],
+        "tokenizer_input_split": "train"
+      },
+      "statistics": {
+        "documents": {
+          "train": 1503988,
+          "validation": 84030,
+          "test": 84114
+        },
+        "train_text_bytes": 4180179230,
+        "parts": 16
+      }
+    }
+  },
+  "command": [
+    "build/release/llm-lab",
+    "tokenizer",
+    "train",
+    "artifacts/tokenizers/italiano-wikipedia-v2.llmtok",
+    "32000",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-000.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-001.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-002.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-003.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-004.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-005.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-006.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-007.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-008.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-009.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-010.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-011.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-012.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-013.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-014.txt",
+    "data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-015.txt"
+  ]
+}

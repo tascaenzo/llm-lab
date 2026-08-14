@@ -45,7 +45,7 @@ architettura. Usa pero' gli stessi concetti che resteranno nel modello grande:
 L'obiettivo raggiunto e' quindi piu' importante di un esempio fittizio:
 dimostra un training step reale e misurabile.
 
-## CPU come riferimento, Metal come prossimo gate
+## CPU come riferimento, Metal per il training
 
 ~~~text
 Modello Minimal / trainer
@@ -54,24 +54,21 @@ Modello Minimal / trainer
        runtime API llm_*
             |
             +-- CPU: riferimento numerico completo
-            `-- Metal: accelerazione da completare
+            `-- Metal: training del Modello Minimal
 ~~~
 
-La CPU esegue oggi tutto il percorso. Metal dispone gia' delle primitive di base,
-ma non ancora di RMSNorm, RoPE, causal attention, relativo backward e AdamW.
-
-Il prossimo sviluppo non e' continuare per molte ore il training CPU né creare
-una rete separata: e' migliorare il runtime e portare su Metal l'intero training
-step del Modello Minimal. Su stessi input e seed confronteremo:
+CPU e' il riferimento numerico; Metal esegue l'intero training step del Modello
+Minimal, incluse RMSNorm, RoPE, causal attention, backward e AdamW. Su stessi
+input e seed il progetto continua a confrontare:
 
 1. logits;
 2. loss;
 3. gradienti;
 4. pesi dopo l'update AdamW.
 
-I risultati Metal devono essere compatibili con CPU entro una tolleranza
-dichiarata. Solo allora misureremo velocita', batch massimo, uso memoria e
-colli di bottiglia, e inizieremo training piu' lunghi.
+I risultati Metal devono restare compatibili con CPU entro una tolleranza
+dichiarata. Il checkpoint Metal a due milioni di step dimostra il percorso
+end-to-end; la prossima applicazione di questi test e' il decoder scalabile.
 
 ## Crescita della stessa rete
 
@@ -80,14 +77,14 @@ La configurazione contiene gia' gli assi che fanno crescere il decoder:
 | Campo | Stato Minimal | Evoluzione successiva |
 |---|---:|---|
 | hidden_size | configurabile | rappresentazioni piu' ampie |
-| layer_count | 1 | pila di blocchi |
-| head_count | 1 | multi-head attention |
-| feed_forward_size | 0 | MLP SwiGLU |
+| layer_count | configurabile | pila di blocchi |
+| head_count | configurabile | multi-head attention |
+| feed_forward_size | configurabile | MLP SwiGLU |
 | context_length | configurabile | input piu' lunghi |
 
-Dopo la parita' Metal, il forward/backward verra' generalizzato a piu' layer,
-multi-head e SwiGLU. Trainer, checkpoint, dataset e confini CPU/Metal resteranno
-gli stessi: il modello crescera' per configurazione, non per sostituzione.
+Il forward/backward e' generalizzato a piu' layer, multi-head e SwiGLU.
+Trainer, checkpoint, dataset e confini CPU/Metal restano gli stessi: il
+modello cresce per configurazione, non per sostituzione.
 
 I costi principali sono:
 
@@ -95,12 +92,13 @@ I costi principali sono:
 - hidden size maggiore: molte matrici crescono in modo quadratico;
 - contesto maggiore: l'attention cresce circa con il quadrato del contesto.
 
-Per questo il target iniziale piu' grande verra' scelto dopo il benchmark Metal,
-non soltanto in base al numero nominale di parametri.
+Il target iniziale piu' grande e' [Italiano-Base-75M](14-italiano-base-75m.md):
+il benchmark Metal determina il micro-batch sostenibile, non il numero nominale
+di parametri.
 
-## Criteri di completamento del prossimo gate
+## Criteri di completamento del decoder scalabile
 
-Prima di aumentare la rete, devono essere veri tutti questi punti:
+Prima del training prolungato Base-75M, devono essere veri tutti questi punti:
 
 - nessun fallback CPU durante lo step Metal;
 - test di parita' CPU/Metal per forward, backward e update;
@@ -108,4 +106,5 @@ Prima di aumentare la rete, devono essere veri tutti questi punti:
 - benchmark riproducibile con forme di training reali;
 - nessuna regressione dei test CPU e del training sul dataset minuscolo.
 
-La specifica operativa e' in [Modello Minimal](../docs/model-minimal.md).
+La specifica operativa del target e' in
+[Italiano-Base-75M](../docs/italiano-base-75m.md).

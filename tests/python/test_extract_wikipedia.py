@@ -67,6 +67,14 @@ class CleanWikitextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             extractor.safe_name("---")
 
+    def test_document_split_matches_dataset_contract(self):
+        splits = {
+            extractor.document_split(f"wikipedia-it:{page_id}")
+            for page_id in range(1, 1000)
+        }
+        self.assertEqual(splits, {"train", "validation", "test"})
+        self.assertEqual(extractor.fnv1a_64("hello"), 0xA430D84680AABD0B)
+
 
 if __name__ == "__main__":
     unittest.main()

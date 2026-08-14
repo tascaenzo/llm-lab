@@ -101,11 +101,16 @@ Il batcher opera direttamente sul file e non carica l'intero corpus in RAM. Per
 `batch_size = B` e `context_length = T`, il chiamante fornisce due buffer da
 `B * T` token.
 
-Per ogni riga del batch viene scelto un offset nell'intervallo:
+Il sampler predefinito `shuffled` divide lo stream in blocchi contigui non
+sovrapposti di `T` target. Il numero di esempi per epoca e':
 
 ```text
-0 <= offset < token_count - T
+floor((token_count - 1) / T)
 ```
+
+Gli indici dei blocchi vengono percorsi con una permutazione affine
+riproducibile; ogni blocco compare esattamente una volta prima dell'epoca
+successiva e il suo offset e' `block_index * T`.
 
 e vengono letti `T + 1` token:
 
@@ -114,7 +119,11 @@ inputs [row, :] = tokens[offset     .. offset + T - 1]
 targets[row, :] = tokens[offset + 1 .. offset + T]
 ```
 
-Un PRNG interno con seed esplicito rende la sequenza degli offset riproducibile.
+L'opzione `random` sceglie invece finestre sovrapposte indipendenti
+nell'intervallo `0 <= offset < token_count - T` ed e' riservata agli
+esperimenti. Il sampler storico su tutti gli offset sovrapposti resta caricabile
+soltanto per riprendere checkpoint v3. Un PRNG interno con seed esplicito rende
+la sequenza riproducibile.
 Il batcher rifiuta dataset con meno di `T + 1` token e moltiplicazioni che
 eccedono `size_t`.
 
@@ -122,17 +131,17 @@ eccedono `size_t`.
 
 ```sh
 ./build/debug/llm-lab dataset prepare \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   data/clean/italiano-wikipedia-v1/documents.jsonl \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2
 ```
 
 Il prefisso finale produce:
 
 ```text
-italiano-wikipedia-v1.train.llmdat
-italiano-wikipedia-v1.validation.llmdat
-italiano-wikipedia-v1.test.llmdat
+italiano-wikipedia-v2.train.llmdat
+italiano-wikipedia-v2.validation.llmdat
+italiano-wikipedia-v2.test.llmdat
 ```
 
 La directory padre del prefisso deve esistere; la v1 crea i tre file, non la
@@ -152,5 +161,6 @@ la pubblicazione e la verifica finale dei tre file possono terminare poco dopo i
 - ogni documento termina con un solo `<EOD>`;
 - gli input e target del batch sono traslati di una posizione;
 - stesso seed significa stessi batch;
+- `shuffled` visita una sola volta ogni blocco non sovrapposto per epoca;
 - corruzione di header o payload viene rilevata;
 - un errore non lascia file finali incompleti.

@@ -79,9 +79,10 @@ La guida operativa e' in [primo modello addestrabile](13-primo-modello-addestrab
 le differenze finite, un corpus minuscolo viene overfittato con loss in calo e
 un run ripreso da checkpoint coincide con lo stesso run continuo.
 
-## Fase 5 — Transformer
+## Fase 5 — Decoder Transformer scalabile
 
-**Stato: il blocco causale e' nel Modello Minimal; scalabilita' generica ancora da fare.**
+**Stato: il blocco causale e' nel Modello Minimal; il prossimo target e'
+Italiano-Base-75M.**
 
 - embedding dei token e posizione rappresentata con RoPE;
 - singola testa di attenzione causale;
@@ -92,19 +93,23 @@ un run ripreso da checkpoint coincide con lo stesso run continuo.
 **Verifica:** il modello impara una piccola sequenza nota e cambiare un token
 futuro non modifica le attivazioni delle posizioni precedenti.
 
-Il Modello Minimal implementa un blocco causale CPU con RMSNorm, Q/K/V, RoPE, attention,
-proiezione e residual. Per mantenere il riferimento numerico semplice accetta
-solo un layer e una head, senza MLP. Dopo la parita' Metal, lo stesso modello
-verra' generalizzato a piu' layer, multi-head e SwiGLU; non sara' un secondo
-modello indipendente.
+Il Modello Minimal implementa un blocco causale con RMSNorm, Q/K/V, RoPE,
+attention, proiezione e residual. Per mantenere il riferimento numerico
+semplice accetta solo un layer e una head, senza MLP. Lo stesso modello verra'
+generalizzato a piu' layer, multi-head e SwiGLU; non sara' un secondo modello
+indipendente. Il primo target concreto e' [Italiano-Base-75M](14-italiano-base-75m.md):
+12 layer, hidden size 512, 8 head, SwiGLU 1536 e contesto 512.
 
-## Fase 6 — Training affidabile
+## Fase 6 — Training affidabile e run Base-75M
 
-- scheduler del learning rate e gradient clipping;
-- validation periodica;
-- seed e logging delle metriche.
+- sampler streaming senza rimpiazzo ed epoche riproducibili: completato;
+- scheduler del learning rate, gradient clipping, gradient accumulation e
+  checkpoint periodici: completati;
+- validation periodica, checkpoint migliore;
+- seed, token elaborati e logging di metriche e memoria.
 
-**Verifica:** un run interrotto riparte correttamente e la validation loss e' tracciata.
+**Verifica:** un run interrotto riparte correttamente, la validation loss e'
+tracciata e un'intera epoca sul corpus equivale a un numero noto di token.
 
 ## Fase 7 — Generazione e analisi
 
@@ -116,20 +121,21 @@ modello indipendente.
 
 ## Fase 8 — Backend accelerati e scalabilita'
 
-**Stato: accelerazione Metal di base validata; il prossimo gate e' la parita'
-di training del Modello Minimal.**
+**Stato: il training del Modello Minimal e' eseguito su Metal; il prossimo gate
+e' la parita' esplicita del decoder scalabile.**
 
 - completare Metal sulle primitive richieste dal modello reale;
 - test di conformita' tra dispositivi;
-- mixed precision;
+- benchmark sulle forme 75M e profiling della memoria;
 - kernel fusi e profiling.
 
 **Verifica:** lo stesso modello produce risultati numericamente compatibili su
 backend diversi senza modificare i layer.
 
-## Fase 9 — Estensioni
+## Fase 9 — Italiano-Chat-75M ed estensioni
 
-- dataset piu' ricco;
+- dataset istruzione/risposta italiano con licenza verificata;
+- token di ruolo e loss mascherata per fine-tuning supervisionato;
 - Multi-head Latent Attention;
 - Mixture of Experts;
 - Multi-Token Prediction;
@@ -140,15 +146,14 @@ backend diversi senza modificare i layer.
 ## Decisione corrente
 
 Il runtime tensoriale CPU di riferimento implementa l'intero contratto di
-training F32/U32. Metal ha una base validata su Apple M4: memoria, batch, GEMM
-(anche trasposto via MPS), embedding, cross-entropy, `accumulate` e SiLU sono
-disponibili; RMSNorm, RoPE, attention GQA e AdamW restano da implementare.
+training F32/U32. Metal implementa il percorso completo del Modello Minimal,
+inclusi RMSNorm, RoPE, attention causale e AdamW; il checkpoint a 2 milioni di
+step e' il riferimento integrato. CPU resta il riferimento numerico per
+confrontare logits, loss, gradienti e parametri aggiornati.
 
-La decisione corrente e' fermare i run CPU lunghi dopo avere validato il
-Modello Minimal e
-portare a Metal l'intero training step: RMSNorm, RoPE, attention causale,
-backward e AdamW. CPU e' il riferimento numerico per confrontare logits, loss,
-gradienti e parametri aggiornati. Solo dopo questa parita' verranno avviati
-run estesi e la configurazione multi-layer. CUDA resta fuori dallo scope finche' non esistono
-hardware e CI per testarne correttezza e prestazioni. Mixed precision, KV cache,
-fusion e backend ulteriori richiederanno contratti separati quando necessari.
+La decisione corrente e' implementare il decoder scalabile e il trainer
+affidabile richiesti da [Italiano-Base-75M](14-italiano-base-75m.md), poi
+eseguire il primo run esteso sul Mac M4. CUDA resta fuori dallo scope finche'
+non esistono hardware e CI per testarne correttezza e prestazioni. Mixed
+precision, KV cache, fusion e backend ulteriori richiederanno contratti
+separati quando necessari.

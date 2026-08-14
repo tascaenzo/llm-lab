@@ -1,16 +1,15 @@
 # Modello Minimal — prima rete addestrabile del progetto
 
-**Stato:** implementato su CPU. Il Modello Minimal e' la prima rete completa
-del progetto: usa dataset reale, forward, loss, backward, AdamW, checkpoint,
-ripresa, generazione greedy e valutazione. Il suo scopo e' validare il runtime
-end-to-end con forme e carichi reali prima di ottimizzarlo e portare il training
-interamente su Metal.
+**Stato:** implementato su CPU e Metal. Il Modello Minimal e' la prima rete
+completa del progetto: usa dataset reale, forward, loss, backward, AdamW,
+checkpoint, ripresa, generazione e valutazione. Il suo scopo e' validare il
+runtime end-to-end con forme e carichi reali prima di far crescere il decoder.
 
 Non rappresenta una famiglia separata di modelli da mantenere nel tempo. E' il
-riferimento piccolo della stessa architettura decoder-only che crescera' in
-profondita', numero di head e MLP dopo la parita' CPU/Metal.
+riferimento piccolo della stessa architettura decoder-only, ora scalabile in
+profondita', numero di head e dimensione dell'MLP.
 
-## Architettura attuale
+## Architettura del riferimento minimo
 
 ```text
 input IDs [B,T]
@@ -23,8 +22,9 @@ input IDs [B,T]
   -> cross-entropy con target [B*T]
 ```
 
-Il modello esegue oggi un solo blocco causale e una sola head; non ha ancora
-MLP/SwiGLU. `--layers 0` resta soltanto un baseline diagnostico senza attention
+Questa configurazione esegue un solo blocco causale, una sola head e non usa
+MLP/SwiGLU. Il decoder supporta anche pile multi-layer, attenzione multi-head e
+MLP SwiGLU. `--layers 0` resta soltanto un baseline diagnostico senza attention
 per confronti e compatibilita' dei checkpoint: non e' una fase o un prodotto
 distinto.
 
@@ -47,7 +47,7 @@ model / trainer
 runtime API llm_*
        |
        +-- CPU: riferimento numerico completo
-       `-- Metal: backend da completare e confrontare
+       `-- Metal: backend verificato contro il riferimento CPU
 ```
 
 - `lm_model` possiede parametri e workspace delle attivazioni, non il backend.
@@ -67,7 +67,7 @@ src/model/trainer.c                  batch, loss e optimizer step
 src/model/checkpoint.c               salvataggio/ripresa atomici
 ```
 
-## Configurazione: stato attuale e crescita futura
+## Configurazione
 
 `lm_model_config` descrive gli assi della rete che rimarranno validi:
 
@@ -76,16 +76,18 @@ src/model/checkpoint.c               salvataggio/ripresa atomici
 | `vocabulary_size` | derivato dal dataset | dimensione embedding/head |
 | `context_length` | configurabile | token elaborati per esempio |
 | `hidden_size` | configurabile | ampiezza delle rappresentazioni |
-| `layer_count` | 1 | numero di blocchi in pila |
-| `head_count` | 1 | teste di attention per blocco |
-| `feed_forward_size` | 0 | dimensione dell'MLP SwiGLU futuro |
+| `layer_count` | configurabile | numero di blocchi in pila |
+| `head_count` | configurabile | teste di attention per blocco |
+| `feed_forward_size` | configurabile | dimensione dell'MLP SwiGLU |
 | `seed` | configurabile | inizializzazione riproducibile |
 
-Oggi la validazione ammette il blocco singolo (`layer_count=1`,
-`head_count=1`, `feed_forward_size=0`). Il registry dei parametri e il formato
-checkpoint sono dinamici; la prossima evoluzione generalizzera' il forward e
-backward a piu' layer e head, aggiungendo due normalizzazioni e SwiGLU per
-blocco. Sara' quindi la stessa rete a dimensioni diverse, non una riscrittura.
+Il decoder accetta una pila di layer, multi-head attention e SwiGLU. La
+configurazione `layer_count=1`, `head_count=1`, `feed_forward_size=0` resta
+supportata esclusivamente per caricare e confrontare il checkpoint del Modello
+Minimal; una configurazione scalabile richiede `layer_count > 0`,
+`head_count > 0`, `feed_forward_size > 0` e `hidden_size % head_count == 0`.
+Il registry dei parametri e il formato checkpoint sono dinamici: e' la stessa
+rete a dimensioni diverse, non una riscrittura.
 
 Il costo cresce circa linearmente con i layer, quadraticamente con
 `hidden_size` per molte matrici, e quadraticamente con `context_length` per
@@ -96,7 +98,7 @@ misurato il runtime Metal con il Modello Minimal.
 
 ```sh
 ./build/debug/llm-lab model train TRAIN.llmdat STEPS \
-  --batch-size 2 --context 32 --hidden 64 --layers 1 \
+  --batch-size 2 --context 32 --hidden 64 --layers 1 --heads 1 --ffn 0 \
   --learning-rate 0.001 --seed 1 \
   --checkpoint artifacts/models/minimal-step-1000.llmckpt
 ```
@@ -149,15 +151,15 @@ La sua configurazione e' `vocabulary_size=32001`, `hidden_size=64`, un layer,
 una head, contesto 32 e batch 2. Il checksum SHA-256 e'
 `ce0957ca5aeeeb6960efc95a721d8539840904917737ccbf8147a876f6b0d803`.
 
-## Gate per l'ottimizzazione Metal
+## Riferimento Metal per il decoder scalabile
 
-Il Modello Minimal e' il test di integrazione per il runtime. Prima di lanciare
-training prolungati o aumentare i parametri, Metal deve eseguire lo stesso
-training step senza fallback CPU: RMSNorm, RoPE, causal attention, backward e
-AdamW. I test di parita' confronteranno CPU e Metal su stessi input e seed:
-logits, loss, gradienti e pesi dopo l'update devono essere compatibili entro
-la tolleranza dichiarata.
+Il Modello Minimal e' il test di integrazione per il runtime. Il trainer Metal
+raggruppa forward, backward e AdamW in un batch sul device; il checkpoint a due
+milioni di step dimostra l'esecuzione end-to-end. Il prossimo gate applica la
+stessa disciplina al decoder scalabile: CPU e Metal devono concordare su input
+e seed identici per logits, loss, gradienti e pesi dopo l'update, entro le
+tolleranze dichiarate.
 
-Solo dopo questo gate si procedera' a ottimizzare batch, contesto, memoria e
-kernel, e a rendere configurabili pila di layer, multi-head e SwiGLU per un
-modello piu' grande.
+Il target approvato per questa evoluzione e'
+[Italiano-Base-75M](italiano-base-75m.md); il Modello Minimal resta il suo
+riferimento di correttezza e non viene sostituito.

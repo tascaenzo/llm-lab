@@ -78,9 +78,9 @@ tokenizer `.llmtok`, invece, occupa circa 248 KiB e viene conservato in
 | `data/raw/wikipedia-it/source.json` | downloader | URL, data, licenza e checksum della fonte | estrattore e audit umano | Dimostra da dove arrivano i dati |
 | `data/clean/italiano-wikipedia-v1/documents.jsonl` | estrattore | Un documento pulito per riga, con ID e metadati | preparatore del dataset | Sorgente canonica da cui derivano gli split |
 | `data/clean/italiano-wikipedia-v1/manifest.json` | estrattore | Configurazione, filtri, statistiche e percorsi | trainer del tokenizer e audit | Rende riproducibile la selezione del corpus |
-| `data/derived/italiano-wikipedia-v1/tokenizer-input/part-*.txt` | estrattore | Solo testo, diviso in 18 parti | trainer BPE | Serve soltanto a imparare il vocabolario, non al training del modello |
-| `artifacts/tokenizers/italiano-wikipedia-v1.llmtok` | trainer BPE | 256 byte token e 31.744 merge | preparatore dataset, generazione futura | Converte testo in ID e ID testuali in byte |
-| `artifacts/tokenizers/italiano-wikipedia-v1.llmtok.json` | wrapper del trainer | Checksum, corpus, comando, commit e metriche | audit e riproduzione | Impedisce di confondere tokenizer con provenienze diverse |
+| `data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-*.txt` | derivatore train-only | Solo testo dello split train | trainer BPE | Validation e test non influenzano il vocabolario |
+| `artifacts/tokenizers/italiano-wikipedia-v2.llmtok` | trainer BPE | 256 byte token e 31.744 merge | preparatore dataset, generazione futura | Converte testo in ID e ID testuali in byte |
+| `artifacts/tokenizers/italiano-wikipedia-v2.llmtok.json` | wrapper del trainer | Checksum, split train, comando, commit e metriche | audit e riproduzione | Impedisce di confondere tokenizer con provenienze diverse |
 | `*.train.llmdat` | `dataset prepare` | Stream dei token di training | batcher del trainer futuro | Produce esempi che aggiornano i pesi |
 | `*.validation.llmdat` | `dataset prepare` | Stream dei token di validation | ciclo di valutazione futuro | Misura la loss senza modificare i pesi |
 | `*.test.llmdat` | `dataset prepare` | Stream dei token di test | valutazione finale futura | Misura il modello soltanto dopo le decisioni di sviluppo |
@@ -141,7 +141,7 @@ dall'ordine delle righe.
 Durante la stessa estrazione e' stata creata una vista contenente soltanto testo:
 
 ```text
-data/derived/italiano-wikipedia-v1/tokenizer-input/
+data/derived/italiano-wikipedia-v1/tokenizer-train-input/
   part-000.txt
   ...
   part-017.txt
@@ -154,8 +154,8 @@ Il trainer ha costruito:
 
 ```text
 artifacts/tokenizers/
-  italiano-wikipedia-v1.llmtok
-  italiano-wikipedia-v1.llmtok.json
+  italiano-wikipedia-v2.llmtok
+  italiano-wikipedia-v2.llmtok.json
 ```
 
 Il tokenizer risultante contiene:
@@ -197,10 +197,10 @@ Gli artefatti reali prodotti sono:
 
 | Split | Documenti | Token, incluso `<EOD>` | Dimensione approssimativa |
 |---|---:|---:|---:|
-| training | 1.503.988 | 1.560.394.499 | 5,8 GiB |
-| validation | 84.030 | 86.211.119 | 329 MiB |
-| test | 84.114 | 86.321.484 | 329 MiB |
-| **Totale** | **1.672.132** | **1.732.927.102** | **6,5 GiB** |
+| training | 1.503.988 | 1.560.387.976 | 5,8 GiB |
+| validation | 84.030 | 86.224.269 | 329 MiB |
+| test | 84.114 | 86.330.188 | 329 MiB |
+| **Totale** | **1.672.132** | **1.732.942.433** | **6,5 GiB** |
 
 Il totale dei documenti coincide con `documents.jsonl`: nessuna pagina e' stata
 persa e nessuna pagina appartiene a piu' split.
