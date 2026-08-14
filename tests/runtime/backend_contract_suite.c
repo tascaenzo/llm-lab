@@ -1,9 +1,9 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "backend_contract_suite.h"
 #include "runtime/backend.h"
 #include "runtime/operations.h"
-#include "backend_contract_suite.h"
 #include "test_support.h"
 
 static int close_with_tolerance(float left, float right, float tolerance) {
@@ -232,8 +232,7 @@ static int test_rope_forward_backward(llm_backend *backend) {
     llm_tensor invalid_cosine = {0};
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, invalid_table_shape,
                                   &invalid_cosine) == LLM_OK);
-    TEST_ASSERT(llm_rope(backend, &input, &invalid_cosine, &sine, &rotated) ==
-                LLM_INVALID_SHAPE);
+    TEST_ASSERT(llm_rope(backend, &input, &invalid_cosine, &sine, &rotated) == LLM_INVALID_SHAPE);
     llm_tensor_destroy(&invalid_cosine);
     llm_tensor_destroy(&sine);
     llm_tensor_destroy(&cosine);
@@ -368,12 +367,12 @@ static int test_attention_gradients(llm_backend *backend) {
     const size_t mismatched_shape[] = {1U, 3U, 1U, 2U};
     llm_tensor mismatched_key = {0};
     llm_tensor mismatched_value = {0};
-    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, mismatched_shape,
-                                  &mismatched_key) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, mismatched_shape, &mismatched_key) ==
+                LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, mismatched_shape,
                                   &mismatched_value) == LLM_OK);
-    TEST_ASSERT(llm_attention_forward(backend, &query, &mismatched_key, &mismatched_value,
-                                      &options, &output) == LLM_INVALID_SHAPE);
+    TEST_ASSERT(llm_attention_forward(backend, &query, &mismatched_key, &mismatched_value, &options,
+                                      &output) == LLM_INVALID_SHAPE);
     llm_tensor_destroy(&mismatched_value);
     llm_tensor_destroy(&mismatched_key);
 
