@@ -361,7 +361,8 @@ static void print_usage(const char *program) {
             "Usage:\n"
             "  %s tokenizer train OUTPUT.llmtok VOCAB_SIZE INPUT...\n"
             "  %s tokenizer evaluate MODEL.llmtok MAX_BYTES INPUT...\n"
-            "  %s dataset prepare MODEL.llmtok DOCUMENTS.jsonl OUTPUT_PREFIX\n"
+            "  %s dataset prepare MODEL.llmtok DOCUMENTS.jsonl OUTPUT_PREFIX"
+            " [--reserved-tokens N]\n"
             "  %s model train TRAIN.llmdat STEPS [--batch-size B] [--context T]"
             " [--hidden C] [--layers L] [--heads H] [--ffn F]"
             " [--learning-rate LR] [--gradient-accumulation N]"
@@ -641,14 +642,23 @@ static int run_tokenizer_evaluate(int argc, char **argv) {
     return 0;
 }
 
-static int run_dataset_prepare(char **argv) {
+static int run_dataset_prepare(int argc, char **argv) {
+    size_t reserved_tokens = 0U;
+    for (int index = 6; index < argc; index += 2) {
+        if (index + 1 >= argc || strcmp(argv[index], "--reserved-tokens") != 0 ||
+            parse_size(argv[index + 1], &reserved_tokens) == 0 || reserved_tokens > UINT32_MAX) {
+            fprintf(stderr, "Invalid dataset option: use --reserved-tokens N.\n");
+            return 1;
+        }
+    }
     cli_dataset_progress progress = {
         .started_at = current_time_seconds(),
         .interactive = standard_error_is_terminal(),
     };
     lm_dataset_prepare_report report = {0};
-    const lm_dataset_status status = lm_dataset_prepare_jsonl_with_progress(
-        argv[3], argv[4], argv[5], show_dataset_progress, &progress, &report);
+    const lm_dataset_status status =
+        lm_dataset_prepare_jsonl_reserved(argv[3], argv[4], argv[5], (uint32_t)reserved_tokens,
+                                          show_dataset_progress, &progress, &report);
     finish_dataset_progress(&progress);
     if (status != LM_DATASET_OK) {
         fprintf(stderr, "Dataset preparation failed: %s\n", lm_dataset_status_string(status));
@@ -658,14 +668,16 @@ static int run_dataset_prepare(char **argv) {
     printf("{\"schema\":\"llm-lab-dataset-report-v1\","
            "\"tokenizer_vocabulary_size\":%" PRIu32 ","
            "\"model_vocabulary_size\":%" PRIu32 ","
+           "\"reserved_token_count\":%" PRIu32 ","
            "\"end_of_document_token\":%" PRIu32 ","
            "\"splits\":{"
            "\"train\":{\"documents\":%" PRIu64 ",\"tokens\":%" PRIu64 "},"
            "\"validation\":{\"documents\":%" PRIu64 ",\"tokens\":%" PRIu64 "},"
            "\"test\":{\"documents\":%" PRIu64 ",\"tokens\":%" PRIu64 "}}}\n",
            report.tokenizer_vocabulary_size, report.model_vocabulary_size,
-           report.end_of_document_token, report.document_counts[LM_DATASET_TRAIN],
-           report.token_counts[LM_DATASET_TRAIN], report.document_counts[LM_DATASET_VALIDATION],
+           report.reserved_token_count, report.end_of_document_token,
+           report.document_counts[LM_DATASET_TRAIN], report.token_counts[LM_DATASET_TRAIN],
+           report.document_counts[LM_DATASET_VALIDATION],
            report.token_counts[LM_DATASET_VALIDATION], report.document_counts[LM_DATASET_TEST],
            report.token_counts[LM_DATASET_TEST]);
     return 0;
@@ -1622,8 +1634,8 @@ int main(int argc, char **argv) {
     if (argc >= 6 && strcmp(argv[1], "tokenizer") == 0 && strcmp(argv[2], "evaluate") == 0) {
         return run_tokenizer_evaluate(argc, argv);
     }
-    if (argc == 6 && strcmp(argv[1], "dataset") == 0 && strcmp(argv[2], "prepare") == 0) {
-        return run_dataset_prepare(argv);
+    if (argc >= 6 && strcmp(argv[1], "dataset") == 0 && strcmp(argv[2], "prepare") == 0) {
+        return run_dataset_prepare(argc, argv);
     }
     if (argc >= 5 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "train") == 0) {
         return run_model_train(argc, argv);

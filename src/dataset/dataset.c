@@ -54,6 +54,15 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
     const char *tokenizer_path, const char *documents_jsonl_path, const char *output_prefix,
     lm_dataset_progress_callback progress_callback, void *progress_context,
     lm_dataset_prepare_report *out_report) {
+    return lm_dataset_prepare_jsonl_reserved(tokenizer_path, documents_jsonl_path, output_prefix,
+                                             0U, progress_callback, progress_context, out_report);
+}
+
+lm_dataset_status
+lm_dataset_prepare_jsonl_reserved(const char *tokenizer_path, const char *documents_jsonl_path,
+                                  const char *output_prefix, uint32_t reserved_token_count,
+                                  lm_dataset_progress_callback progress_callback,
+                                  void *progress_context, lm_dataset_prepare_report *out_report) {
     if (tokenizer_path == NULL || documents_jsonl_path == NULL || output_prefix == NULL ||
         out_report == NULL) {
         return LM_DATASET_INVALID_ARGUMENT;
@@ -67,10 +76,12 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
                                                                : LM_DATASET_TOKENIZER_ERROR;
     }
     const uint32_t vocabulary_size = tokenizer_vocabulary_size(tokenizer);
-    if (vocabulary_size == UINT32_MAX) {
+    if (vocabulary_size == UINT32_MAX || reserved_token_count > UINT32_MAX - vocabulary_size - 1U) {
         tokenizer_destroy(tokenizer);
         return LM_DATASET_OVERFLOW;
     }
+    /* <EOD> sits at the tokenizer size; the reserved identifiers follow it. */
+    const uint32_t model_vocabulary_size = vocabulary_size + 1U + reserved_token_count;
 
     unsigned char tokenizer_checksum[32] = {0};
     lm_dataset_status status = sha256_file(tokenizer_path, tokenizer_checksum);
@@ -97,7 +108,8 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
         status = LM_DATASET_IO_ERROR;
     }
     if (status == LM_DATASET_OK) {
-        status = lm_dataset_writers_publish(writers, vocabulary_size, tokenizer_checksum);
+        status = lm_dataset_writers_publish(writers, model_vocabulary_size, vocabulary_size,
+                                            tokenizer_checksum);
     }
     if (status == LM_DATASET_OK) {
         for (size_t index = 0U; index < LM_DATASET_SPLIT_COUNT; ++index) {
@@ -105,7 +117,8 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
             out_report->token_counts[index] = writers[index].token_count;
         }
         out_report->tokenizer_vocabulary_size = vocabulary_size;
-        out_report->model_vocabulary_size = vocabulary_size + 1U;
+        out_report->model_vocabulary_size = model_vocabulary_size;
+        out_report->reserved_token_count = reserved_token_count;
         out_report->end_of_document_token = vocabulary_size;
         for (size_t index = 0U; index < LM_DATASET_SPLIT_COUNT; ++index) {
             writers[index].published = 0;
