@@ -40,6 +40,11 @@ import sys
 import unicodedata
 from pathlib import Path
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?:;])\s+|\n+")
 WHITESPACE = re.compile(r"\s+")
 
@@ -166,6 +171,9 @@ def main() -> int:
     statistics = []
     args.output.parent.mkdir(parents=True, exist_ok=True)
     total_kept = 0
+    total_documents = sum(count_lines(path) for _, path in sources)
+    progress = ProgressBar("Deduplicazione", total_documents, "documenti")
+    processed_documents = 0
 
     with args.output.open("w", encoding="utf-8") as sink:
         for name, path in sources:
@@ -194,6 +202,11 @@ def main() -> int:
                     document = json.loads(line)
                     text = document.get("text") or ""
                     entry["documents_read"] += 1
+                    processed_documents += 1
+                    progress.update(
+                        processed_documents,
+                        f"tenuti {total_kept:,}; fonte {name}",
+                    )
 
                     exact = digest(normalize(text))
                     owner = exact_seen.get(exact)
@@ -241,6 +254,8 @@ def main() -> int:
                 f"{entry['dropped_exact']} esatti + {entry['dropped_overlap']} sovrapposti scartati",
                 file=sys.stderr,
             )
+
+    progress.finish(processed_documents, f"tenuti {total_kept:,}")
 
     report = {
         "schema": "llm-lab-deduplication-v1",

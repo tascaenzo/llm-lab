@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,7 @@ CORPUS = ROOT / "utils" / "corpus"
 DEFAULT_NAME = "italiano-v3"
 RESERVED_TOKENS = 7
 PRIORITY = ["wikipedia-it", "wikisource-it", "gutenberg-ita", "fineweb2-ita"]
+MAX_PARALLEL_DOWNLOADS = 3
 
 
 @dataclass
@@ -42,6 +44,7 @@ class Stage:
     note: str = ""
     interpreter: str = "python"
     inputs: list[Path] = field(default_factory=list)
+    parallel_group: str | None = None
 
     def satisfied(self) -> bool:
         return bool(self.outputs) and all(path.exists() for path in self.outputs)
@@ -86,12 +89,16 @@ def human(size: int) -> str:
     return f"{size:.1f} TiB"
 
 
+def stage_command(stage: Stage, python: str) -> list[str]:
+    return [str(part) for part in ([python] + stage.command if stage.interpreter == "python" else stage.command)]
+
+
 def run(stage: Stage, python: str) -> bool:
-    command = [python] + stage.command if stage.interpreter == "python" else stage.command
+    command = stage_command(stage, python)
     print(f"\n\033[1m▶ {stage.title}\033[0m")
     print(f"  $ {' '.join(str(part) for part in command)}")
     started = time.monotonic()
-    result = subprocess.run([str(part) for part in command], cwd=ROOT)
+    result = subprocess.run(command, cwd=ROOT)
     elapsed = time.monotonic() - started
     if result.returncode != 0:
         print(f"\n  \033[31mFallito\033[0m dopo {elapsed:.0f}s: {stage.title}", file=sys.stderr)
@@ -106,6 +113,47 @@ def run(stage: Stage, python: str) -> bool:
         return False
     print(f"  completato in {elapsed:.0f}s")
     return True
+
+
+def run_parallel(stages: list[Stage], python: str) -> bool:
+    """Runs independent download stages with bounded concurrency.
+
+    Child progress is switched to line-oriented logs so concurrent writes remain
+    readable instead of competing for one carriage-return progress bar.
+    """
+    # I tre download piu' voluminosi sono indipendenti e determinano il tempo
+    # critico. Gutenberg resta concorrente, ma non deve ritardare FineWeb.
+    pending = sorted(stages, key=lambda stage: stage.key == "download-gutenberg")
+    active: list[tuple[Stage, subprocess.Popen, float]] = []
+    succeeded = True
+    while pending or active:
+        while pending and len(active) < MAX_PARALLEL_DOWNLOADS:
+            stage = pending.pop(0)
+            command = stage_command(stage, python)
+            print(f"\n\033[1m▶ {stage.title}\033[0m (parallelo)")
+            print(f"  $ {' '.join(command)}")
+            environment = os.environ.copy()
+            environment["LLM_LAB_PROGRESS_LOG"] = "1"
+            active.append((stage, subprocess.Popen(command, cwd=ROOT, env=environment), time.monotonic()))
+        if not active:
+            continue
+        time.sleep(0.25)
+        still_running: list[tuple[Stage, subprocess.Popen, float]] = []
+        for stage, process, started in active:
+            result = process.poll()
+            if result is None:
+                still_running.append((stage, process, started))
+                continue
+            elapsed = time.monotonic() - started
+            missing = [path for path in stage.outputs if not path.exists()]
+            if result != 0 or missing:
+                succeeded = False
+                detail = f"manca {missing[0]}" if missing else f"codice {result}"
+                print(f"\n  \033[31mFallito\033[0m dopo {elapsed:.0f}s: {stage.title} ({detail})", file=sys.stderr)
+            else:
+                print(f"\n  completato in {elapsed:.0f}s: {stage.title}")
+        active = still_running
+    return succeeded
 
 
 def build_plan(options: argparse.Namespace) -> list[Stage]:
@@ -126,8 +174,9 @@ def build_plan(options: argparse.Namespace) -> list[Stage]:
                 "download-wikipedia",
                 "Scarico il dump di Wikipedia italiano",
                 [CORPUS / "download_wikipedia.py"],
-                [raw_wikipedia],
+                [raw_wikipedia / "source.json"],
                 "circa 4 GB compressi",
+                parallel_group="downloads",
             )
         )
         stages.append(
@@ -149,8 +198,9 @@ def build_plan(options: argparse.Namespace) -> list[Stage]:
                 "download-wikisource",
                 "Scarico il dump di Wikisource italiano",
                 [CORPUS / "download_wikisource.py", "--destination", raw_wikisource],
-                [raw_wikisource],
+                [raw_wikisource / "source.json"],
                 "circa 420 MiB",
+                parallel_group="downloads",
             )
         )
         stages.append(
@@ -194,6 +244,7 @@ def build_plan(options: argparse.Namespace) -> list[Stage]:
                 ],
                 [raw_gutenberg / "catalog.json"],
                 "un libro alla volta, con pausa per il mirror",
+                parallel_group="downloads",
             )
         )
         stages.append(
@@ -228,6 +279,7 @@ def build_plan(options: argparse.Namespace) -> list[Stage]:
                 ],
                 [raw_fineweb / "source.json"],
                 f"circa {options.shards * 4.5:.0f} GiB",
+                parallel_group="downloads",
             )
         )
         stages.append(
@@ -383,7 +435,7 @@ def interactive_options(defaults: argparse.Namespace) -> argparse.Namespace:
         sources.append("wikisource-it")
     if ask_yes(
         "Includere Project Gutenberg italiano (richiede una allowlist di diritti verificata)?",
-        default=False,
+        default=True,
     ):
         sources.append("gutenberg-ita")
     if ask_yes("Includere FineWeb-2 italiano (web, richiede pyarrow)?"):
@@ -418,8 +470,8 @@ def interactive_options(defaults: argparse.Namespace) -> argparse.Namespace:
                 quotas[source] = remaining / 100
                 print(f"  {source}: {remaining}% (il resto)")
             else:
-                default = {"wikipedia-it": 25, "wikisource-it": 15, "gutenberg-ita": 10}.get(
-                    source, 60
+                default = {"wikipedia-it": 25, "wikisource-it": 15, "gutenberg-ita": 5}.get(
+                    source, 55
                 )
                 value = ask_int(f"  {source} (%)", min(default, remaining), minimum=0)
                 value = min(value, remaining)
@@ -497,7 +549,19 @@ def main() -> int:
         print("Annullato.")
         return 0
 
+    download_stages = [stage for stage in stages if stage.parallel_group == "downloads"]
+    if download_stages:
+        pending_downloads = [stage for stage in download_stages if not stage.satisfied() or options.force]
+        completed_downloads = [stage for stage in download_stages if stage not in pending_downloads]
+        for stage in completed_downloads:
+            print(f"\n\033[1m▶ {stage.title}\033[0m\n  gia' fatto, salto")
+        if pending_downloads and not run_parallel(pending_downloads, sys.executable):
+            print("\nLa catena si e' fermata durante i download.", file=sys.stderr)
+            return 1
+
     for stage in stages:
+        if stage.parallel_group == "downloads":
+            continue
         if stage.satisfied() and not options.force:
             print(f"\n\033[1m▶ {stage.title}\033[0m\n  gia' fatto, salto")
             continue

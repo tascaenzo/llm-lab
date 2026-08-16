@@ -1,5 +1,15 @@
 {
   "schema": "llm-lab-gutenberg-allowlist-v1",
   "jurisdiction": "IT",
-  "books": []
+  "books": [
+    {
+      "id": 1012,
+      "title": "La Divina Commedia di Dante",
+      "author": "Dante Alighieri",
+      "author_death_year": 1321,
+      "rights": "public-domain-it",
+      "evidence": "Autore morto nel 1321; scheda Project Gutenberg 1012 in lingua italiana, senza restrizione di copyright USA; verifica manuale richiesta anche della licenza inclusa nell'edizione scaricata.",
+      "verified_at": "2026-08-16"
+    }
+  ]
 }

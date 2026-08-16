@@ -29,6 +29,11 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 FNV_OFFSET = 0xCBF29CE484222325
 FNV_PRIME = 0x100000001B3
 UINT64_MASK = 0xFFFFFFFFFFFFFFFF
@@ -70,7 +75,7 @@ def measure_bytes_per_token(binary: Path, tokenizer: Path, documents: Path) -> f
         sample_path.unlink(missing_ok=True)
 
 
-def index_documents(path: Path) -> tuple[list[tuple[int, int, int]], int]:
+def index_documents(path: Path, progress: ProgressBar | None = None) -> tuple[list[tuple[int, int, int]], int]:
     """Ritorna (hash, offset, byte del testo) per documento, piu' il totale."""
     entries = []
     total = 0
@@ -83,6 +88,8 @@ def index_documents(path: Path) -> tuple[list[tuple[int, int, int]], int]:
                 entries.append((fnv1a_64(record.get("id") or ""), offset, size))
                 total += size
             offset = handle.tell()
+            if progress is not None:
+                progress.update(offset, f"documenti {len(entries):,}")
     entries.sort()
     return entries, total
 
@@ -136,7 +143,9 @@ def main() -> int:
                 return 1
         else:
             ratio = DEFAULT_BYTES_PER_TOKEN
-        entries, available_bytes = index_documents(source)
+        indexing = ProgressBar(f"Indicizzazione {name}", source.stat().st_size, "bytes")
+        entries, available_bytes = index_documents(source, indexing)
+        indexing.finish(source.stat().st_size, f"documenti {len(entries):,}")
         available_tokens = available_bytes / ratio
         wanted_tokens = args.target_tokens * quotas[name]
         # Una fonte piu' povera della sua quota si prende per intero: meglio un
@@ -166,6 +175,9 @@ def main() -> int:
         for item in plan:
             written_bytes = 0
             written_documents = 0
+            progress = ProgressBar(
+                f"Mix {item['source']}", item["byte_budget"], "bytes"
+            )
             with item["path"].open("rb") as handle:
                 for _, offset, size in item["entries"]:
                     if written_bytes >= item["byte_budget"]:
@@ -174,6 +186,8 @@ def main() -> int:
                     sink.write(handle.readline().decode("utf-8"))
                     written_bytes += size
                     written_documents += 1
+                    progress.update(written_bytes, f"documenti {written_documents:,}")
+            progress.finish(written_bytes, f"documenti {written_documents:,}")
             statistics.append(
                 {
                     "source": item["source"],

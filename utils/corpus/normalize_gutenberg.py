@@ -24,6 +24,11 @@ import sys
 import unicodedata
 from pathlib import Path
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 START_MARKER = re.compile(r"\*\*\*\s*START OF (?:THE|THIS) PROJECT GUTENBERG EBOOK.*?\*\*\*", re.I)
 END_MARKER = re.compile(r"\*\*\*\s*END OF (?:THE|THIS) PROJECT GUTENBERG EBOOK.*?\*\*\*", re.I)
 # I file piu' vecchi chiudono senza asterischi: "End of Project Gutenberg's <titolo>".
@@ -112,15 +117,18 @@ def main() -> int:
         "documents_written": 0,
         "characters_written": 0,
     }
+    paths = sorted((args.input / "texts").glob("*.txt"))
+    progress = ProgressBar("Normalizzazione Gutenberg", len(paths), "libri")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8") as sink:
-        for path in sorted((args.input / "texts").glob("*.txt")):
+        for book_index, path in enumerate(paths, 1):
             identifier = int(path.stem)
             book = books.get(identifier, {})
             statistics["books_read"] += 1
             body = strip_license(path.read_text(encoding="utf-8", errors="replace"))
             if body is None:
                 statistics["books_without_markers"] += 1
+                progress.update(book_index, f"documenti {statistics['documents_written']:,}")
                 continue
             body = clean(body)
             for index, section in enumerate(sections(body, args.section_characters)):
@@ -143,6 +151,9 @@ def main() -> int:
                 )
                 statistics["documents_written"] += 1
                 statistics["characters_written"] += len(section)
+            progress.update(book_index, f"documenti {statistics['documents_written']:,}")
+
+    progress.finish(len(paths), f"documenti {statistics['documents_written']:,}")
 
     args.output.with_suffix(".manifest.json").write_text(
         json.dumps(

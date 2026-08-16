@@ -17,11 +17,15 @@ import argparse
 import hashlib
 import json
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
 
 DATASET = "HuggingFaceFW/fineweb-2"
 CONFIGURATION = "ita_Latn"
@@ -73,8 +77,8 @@ def download_shard(path: str, expected_size: int, destination: Path) -> str:
 
     response = request(f"{RESOLVE_URL}/{path}", headers)
     received = already
-    started = time.monotonic()
-    last_report = 0.0
+    progress = ProgressBar(f"Download {destination.name}", expected_size, "bytes")
+    progress.update(received, force=True)
     with destination.open("ab" if already else "wb") as output:
         while True:
             block = response.read(CHUNK)
@@ -83,19 +87,8 @@ def download_shard(path: str, expected_size: int, destination: Path) -> str:
             output.write(block)
             digest.update(block)
             received += len(block)
-            now = time.monotonic()
-            if now - last_report >= 1.0:
-                elapsed = max(now - started, 1e-9)
-                speed = (received - already) / elapsed / (1 << 20)
-                percent = 100.0 * received / expected_size if expected_size else 0.0
-                print(
-                    f"\r  {destination.name}: {percent:5.1f}% "
-                    f"{format_bytes(received)}/{format_bytes(expected_size)} {speed:6.1f} MiB/s",
-                    end="",
-                    file=sys.stderr,
-                )
-                last_report = now
-    print("", file=sys.stderr)
+            progress.update(received)
+    progress.finish(received, "download completato")
     if expected_size and received != expected_size:
         raise RuntimeError(f"{path}: attesi {expected_size} byte, ricevuti {received}")
     return digest.hexdigest()

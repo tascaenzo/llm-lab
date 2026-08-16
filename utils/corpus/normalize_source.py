@@ -24,6 +24,11 @@ import sys
 import unicodedata
 from pathlib import Path
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 SOURCES = {
     "fineweb2-ita": {
         "prefix": "fineweb2",
@@ -93,6 +98,10 @@ def convert_parquet(
         "skipped_empty": 0,
         "characters_written": 0,
     }
+    total_rows = 0
+    for path in paths:
+        total_rows += parquet.ParquetFile(path).metadata.num_rows
+    progress = ProgressBar("Normalizzazione FineWeb", total_rows, "documenti")
     seen: set[str] = set()
     with output.open("w", encoding="utf-8") as sink:
         for path in paths:
@@ -140,7 +149,11 @@ def convert_parquet(
                     )
                     statistics["documents_written"] += 1
                     statistics["characters_written"] += len(text)
-            print(f"  {path.name}: {statistics['documents_written']} documenti", file=sys.stderr)
+                progress.update(
+                    statistics["rows_read"],
+                    f"tenuti {statistics['documents_written']:,}; shard {path.name}",
+                )
+    progress.finish(statistics["rows_read"], f"tenuti {statistics['documents_written']:,}")
     return statistics
 
 
