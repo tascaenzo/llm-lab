@@ -235,8 +235,8 @@ def safe_name(value: str) -> str:
     return result
 
 
-def discover_dump(project_root: Path) -> Path:
-    candidates = sorted((project_root / "data" / "raw" / "wikipedia-it").glob("*-pages-articles.xml.bz2"))
+def discover_dump(project_root: Path, source: str) -> Path:
+    candidates = sorted((project_root / "data" / "raw" / source).glob("*-pages-articles.xml.bz2"))
     if len(candidates) != 1:
         raise RuntimeError("specificare --input: non e' stato trovato un solo dump pages-articles")
     return candidates[0]
@@ -437,6 +437,16 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, help="dump .xml.bz2; se omesso viene rilevato in data/raw")
     parser.add_argument("--name", default="italiano-wikipedia-v1", help="nome stabile del corpus")
+    # Wikisource usa lo stesso formato di dump. Parametrizzare la provenienza
+    # evita di dover duplicare l'estrattore, e soprattutto evita che i suoi
+    # documenti finiscano con identificatori del namespace di Wikipedia.
+    parser.add_argument("--source", default="wikipedia-it", help="nome della fonte e namespace degli ID")
+    parser.add_argument("--license", dest="license_name", default="CC BY-SA", help="licenza dichiarata")
+    parser.add_argument(
+        "--url-template",
+        default="https://it.wikipedia.org/?curid={page_id}",
+        help="modello dell'URL del documento, con {page_id}",
+    )
     parser.add_argument("--clean-root", type=Path, default=project_root / "data" / "clean")
     parser.add_argument("--derived-root", type=Path, default=project_root / "data" / "derived")
     parser.add_argument("--min-characters", type=int, default=200)
@@ -474,7 +484,12 @@ def main() -> int:
     try:
         validate_args(args)
         name = safe_name(args.name)
-        input_path = args.input if args.input is not None else discover_dump(project_root)
+        source = args.source
+        license_name = args.license_name
+        url_template = args.url_template
+        input_path = (
+            args.input if args.input is not None else discover_dump(project_root, args.source)
+        )
         input_path = input_path.resolve()
         if not input_path.is_file():
             raise RuntimeError(f"dump non trovato: {input_path}")
@@ -525,10 +540,10 @@ def main() -> int:
                     continue
 
                 record = {
-                    "id": f"wikipedia-it:{page_id}",
-                    "source": "wikipedia-it",
-                    "license": "CC BY-SA",
-                    "url": f"https://it.wikipedia.org/?curid={page_id}",
+                    "id": f"{source}:{page_id}",
+                    "source": source,
+                    "license": license_name,
+                    "url": url_template.format(page_id=page_id),
                     "title": title,
                     "text": text,
                 }
