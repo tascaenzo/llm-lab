@@ -120,6 +120,27 @@ parallele o scatter-add con indici duplicati; la suite usa tolleranze per
 operazione. NaN/Inf nelle opzioni vengono rifiutati dalla facciata comune.
 Softmax, cross-entropy e AdamW devono rispettare gli stessi errori numerici CPU.
 
+### Profilo per operazione
+
+Un update di training e' una sequenza fissa e nota di operazioni, quindi il suo
+profilo e' la somma di ogni forma misurata per il numero di volte che compare.
+`utils/benchmarks/profile_model.py` enumera quelle forme con le molteplicita'
+lette da `src/model` e le misura con `runtime_benchmark`:
+
+```sh
+python3 utils/benchmarks/profile_model.py \
+  --benchmark build/release/utils/benchmarks/runtime_benchmark
+```
+
+Serve a scegliere cosa ottimizzare guardando i numeri invece del sorgente. La
+prima esecuzione sul modello canonico ha corretto quattro priorita' che leggendo
+il codice sembravano ovvie: l'output head e la cross-entropy, sospettati di
+valere meta' dello step, pesano rispettivamente l'8,9% e l'1,6%, mentre
+l'attention vale il 62,5% pur essendo il 4,1% delle operazioni aritmetiche.
+
+Va rilanciato dopo ogni ottimizzazione: dice se il guadagno e' arrivato dove ci
+si aspettava, e quando il collo di bottiglia si e' spostato altrove.
+
 ### Riproducibilita' per backend
 
 Su Metal alcune riduzioni sommano con atomiche float in ordine non
