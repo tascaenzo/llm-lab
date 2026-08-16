@@ -164,9 +164,11 @@ def build_plan(options: argparse.Namespace) -> list[Stage]:
                     "--source",
                     "wikisource-it",
                     "--license",
-                    "Public domain",
+                    "Wikisource per-page license; verify provenance",
                     "--url-template",
                     "https://it.wikisource.org/?curid={page_id}",
+                    "--namespace",
+                    "108",
                 ],
                 [wikisource_documents],
                 "stesso estrattore di Wikipedia, provenienza diversa",
@@ -187,6 +189,8 @@ def build_plan(options: argparse.Namespace) -> list[Stage]:
                     str(options.gutenberg_books),
                     "--destination",
                     raw_gutenberg,
+                    "--allowlist",
+                    options.gutenberg_allowlist,
                 ],
                 [raw_gutenberg / "catalog.json"],
                 "un libro alla volta, con pausa per il mirror",
@@ -377,7 +381,10 @@ def interactive_options(defaults: argparse.Namespace) -> argparse.Namespace:
         sources.append("wikipedia-it")
     if ask_yes("Includere Wikisource italiano (narrativo, pubblico dominio)?"):
         sources.append("wikisource-it")
-    if ask_yes("Includere Project Gutenberg italiano (narrativo, prosa lunga)?"):
+    if ask_yes(
+        "Includere Project Gutenberg italiano (richiede una allowlist di diritti verificata)?",
+        default=False,
+    ):
         sources.append("gutenberg-ita")
     if ask_yes("Includere FineWeb-2 italiano (web, richiede pyarrow)?"):
         sources.append("fineweb2-ita")
@@ -411,8 +418,8 @@ def interactive_options(defaults: argparse.Namespace) -> argparse.Namespace:
                 quotas[source] = remaining / 100
                 print(f"  {source}: {remaining}% (il resto)")
             else:
-                default = {"wikipedia-it": 20, "wikisource-it": 8, "gutenberg-ita": 7}.get(
-                    source, 55
+                default = {"wikipedia-it": 25, "wikisource-it": 15, "gutenberg-ita": 10}.get(
+                    source, 60
                 )
                 value = ask_int(f"  {source} (%)", min(default, remaining), minimum=0)
                 value = min(value, remaining)
@@ -433,6 +440,11 @@ def main() -> int:
         help="tokenizer esistente, usato solo per stimare i token nelle quote",
     )
     parser.add_argument("--overlap-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--gutenberg-allowlist",
+        default="utils/corpus/gutenberg-it-allowlist.json",
+        help="allowlist dei titoli Gutenberg verificati per l'Italia",
+    )
     parser.add_argument("--dry-run", action="store_true", help="mostra il piano e termina")
     parser.add_argument("--force", action="store_true", help="riesegue anche gli stadi completati")
     options = parser.parse_args()

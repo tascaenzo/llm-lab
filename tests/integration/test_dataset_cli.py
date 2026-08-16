@@ -222,6 +222,55 @@ def main():
         )
         if not generated.stdout.strip():
             raise AssertionError("generazione vuota")
+
+        # The base pretraining vocabulary can reserve IDs for a future SFT
+        # protocol.  Generation must keep those IDs out until they have a
+        # textual definition, rather than rejecting the checkpoint or trying
+        # to decode an unknown token.
+        reserved_prefix = root / "reserved-dataset"
+        reserved_report = json.loads(
+            run(
+                [
+                    str(cli),
+                    "dataset",
+                    "prepare",
+                    str(model),
+                    str(documents),
+                    str(reserved_prefix),
+                    "--reserved-tokens",
+                    "3",
+                ]
+            ).stdout
+        )
+        if reserved_report["model_vocabulary_size"] != 268:
+            raise AssertionError(reserved_report)
+        reserved_checkpoint = root / "reserved.llmckpt"
+        run(
+            [
+                str(cli),
+                "model",
+                "train",
+                f"{reserved_prefix}.train.llmdat",
+                "2",
+                "--batch-size",
+                "1",
+                "--context",
+                "1",
+                "--hidden",
+                "4",
+                "--learning-rate",
+                "0.01",
+                "--seed",
+                "123",
+                "--checkpoint",
+                str(reserved_checkpoint),
+            ]
+        )
+        reserved_generated = run(
+            [str(cli), "model", "generate", str(reserved_checkpoint), str(model), "2", "ciao"]
+        )
+        if not reserved_generated.stdout.strip():
+            raise AssertionError("generazione con ID riservati vuota")
         sampled_command = [
             str(cli),
             "model",

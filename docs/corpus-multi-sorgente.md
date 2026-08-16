@@ -1,6 +1,6 @@
 # Corpus multi-sorgente — specifica
 
-**Stato:** progettato, non implementato. Estende il [piano operativo del
+**Stato:** implementato per il pilot, con audit obbligatorio prima del run lungo. Estende il [piano operativo del
 corpus](corpus.md) da una sola fonte a un insieme di fonti con licenza
 verificata, deduplicazione incrociata e quote di miscelazione dichiarate.
 
@@ -52,11 +52,10 @@ C non cambia.
 
 | Fonte | Quota | Licenza | Registro che aggiunge |
 |---|---:|---|---|
-| FineWeb-2, sottoinsieme `ita_Latn` | 55% | ODC-By 1.0 | web generale, lingua contemporanea, registri informali |
-| Wikipedia italiano | 20% | CC BY-SA | enciclopedico, nucleo pulito |
-| Wikisource IT | 8% | pubblico dominio | **narrativo**: testi trascritti e revisionati |
-| Gutenberg IT | 7% | pubblico dominio | **narrativo**: romanzi e saggi integrali |
-| EUR-Lex italiano, Normattiva | 10% | riuso con attribuzione | formale e giuridico |
+| FineWeb-2, sottoinsieme `ita_Latn` | 60% | ODC-By 1.0 | web generale, lingua contemporanea, registri informali |
+| Wikipedia italiano | 25% | CC BY-SA | enciclopedico, nucleo pulito |
+| Wikisource IT | 15% | licenza per pagina da registrare | **narrativo**: testi trascritti e revisionati |
+| Gutenberg IT | opzionale | allowlist con verifica per l'Italia | romanzi e saggi integrali, solo dopo verifica dei diritti |
 
 Indirizzi, verificati il 16 agosto 2026:
 
@@ -70,10 +69,11 @@ Indirizzi, verificati il 16 agosto 2026:
 | EUR-Lex | <https://eur-lex.europa.eu/> | fuori dalla prima versione |
 | Normattiva | <https://www.normattiva.it/> | fuori dalla prima versione |
 
-Su Wikisource una precisazione che costa tempo se scoperta tardi: molte pagine
-del namespace principale contengono solo direttive di trasclusione, e il testo
-vero sta nel namespace `Pagina:` (`ns=108`). Il formato del dump e' quello di
-Wikipedia, ma l'estrattore va adattato.
+Per Wikisource l'estrattore seleziona esplicitamente il namespace `Pagina:`
+(`ns=108`): le pagine principali contengono spesso direttive di trasclusione che
+non sono testo utile nel dump XML grezzo. Il namespace estratto resta scritto nel
+manifesto e va sottoposto a un audit campionato prima di usare la quota nel run
+lungo.
 
 Le quote sono espresse in token dopo la deduplicazione, non in documenti ne' in
 byte. FineWeb-2 arriva gia' filtrato e deduplicato al proprio interno: e' la
@@ -96,12 +96,11 @@ giustificato dalla quota che coprirebbero.
 Le due fonti narrative implementate hanno vincoli diversi da FineWeb-2:
 
 **Wikisource** usa lo stesso dump MediaWiki di Wikipedia, 421 MiB, e riusa
-`extract_wikipedia.py`. L'estrattore e' stato pero' parametrizzato: `id`,
-`source`, `license` e `url` erano cablati su `wikipedia-it`, quindi usarlo cosi'
-com'era avrebbe prodotto documenti Wikisource con identificatori nel namespace
-di Wikipedia — esattamente la collisione che questa specifica vieta.
+`extract_wikipedia.py` selezionando `--namespace 108`. `id`, `source`, licenza,
+URL e namespace sono dichiarati nel manifesto: questo evita collisioni e rende
+ispezionabile la scelta dei frammenti narrativi.
 
-**Gutenberg** si scarica un libro alla volta dai mirror ufficiali
+**Gutenberg** non entra nel default: si scarica un libro alla volta dai mirror ufficiali
 (`gutenberg.pglaf.org`, `aleph.gutenberg.org`), perche' `www.gutenberg.org`
 limita il download automatico; il catalogo italiano arriva da gutendex.com e
 conta circa 1.100 titoli. Ogni file contiene una licenza in inglese di alcune
@@ -112,7 +111,10 @@ delimitano, ma i file piu' vecchi chiudono con `End of Project Gutenberg's
 piu' a sinistra, altrimenti fra le due resta il colophon del trascrittore. Un
 libro senza marcatori viene scartato invece che ripulito a indovinare.
 
-I libri vengono infine spezzati in sezioni di circa ottomila caratteri tagliando
+Prima del download serve `gutenberg-it-allowlist.json`: ogni ID deve avere
+evidenza di pubblico dominio in Italia. Il catalogo Gutendex e il suo campo
+`copyright: false` sono un controllo aggiuntivo, non una dichiarazione legale
+sufficiente. I libri vengono infine spezzati in sezioni di circa ottomila caratteri tagliando
 su righe vuote: un romanzo intero non entra in una finestra di contesto, e la
 sezione conserva l'ID del libro nel proprio per risalire alla fonte.
 
@@ -142,8 +144,9 @@ Due livelli, in quest'ordine:
 
 1. **Esatta.** SHA-256 del testo normalizzato (minuscole, spazi collassati,
    punteggiatura invariata). Cattura i mirror integrali a costo trascurabile.
-2. **Approssimata.** MinHash su shingle di 5 parole con indice LSH, soglia di
-   Jaccard 0,8. Cattura mirror parziali, boilerplate e riformattazioni.
+2. **Approssimata.** Sovrapposizione di frasi normalizzate, stimata con un
+   filtro di Bloom, soglia 0,5. Cattura mirror parziali, boilerplate e
+   riformattazioni senza dichiarare un MinHash/LSH che non viene eseguito.
 
 Quando due documenti collidono si tiene quello della fonte con priorita' piu'
 alta: `wikipedia` > `libri` > `istituzionale` > `web`. La copia web viene
@@ -195,10 +198,7 @@ tokenizer:
 
 ```text
 32000  <EOD>
-32001  <|user|>
-32002  <|assistant|>
-32003  <|end|>
-32004..32007  liberi
+32001..32007  riservati a un protocollo SFT futuro
 model_vocabulary_size = 32008
 ```
 
@@ -206,7 +206,9 @@ Gli slot liberi non compaiono mai nei dati di pretraining: ricevono gradiente
 solo attraverso il denominatore della softmax, che li spinge verso il basso. E'
 il comportamento atteso. Costano 1.024 parametri ciascuno fra embedding e
 output head, cioe' nulla, e sono l'unico modo per rendere possibile il
-fine-tuning conversazionale senza ridimensionare il modello.
+fine-tuning conversazionale senza ridimensionare il modello. Non sono ancora
+token testuali: fino a quando SFT non definira' serializzazione, encoding e
+decoding, la generazione li esclude esplicitamente.
 
 ## Strumenti da costruire
 
@@ -223,8 +225,8 @@ fine-tuning conversazionale senza ridimensionare il modello.
 | `utils/corpus/mix_corpus.py` | applica le quote in token e scrive il manifesto finale |
 | `llm-lab dataset prepare --reserved-tokens N` | riserva gli slot speciali nel vocabolario del modello |
 
-`extract_wikipedia.py` resta invariato: diventa il normalizzatore della sola
-fonte Wikipedia. `prepare_tokenizer_corpus.py` e `train_tokenizer.py` non
+`extract_wikipedia.py` supporta anche il namespace esplicito di Wikisource.
+`prepare_tokenizer_corpus.py` e `train_tokenizer.py` non
 cambiano: lo split e' derivato da FNV-1a a 64 bit dell'ID, funzione pura che non
 sa da quale fonte arrivi il documento.
 

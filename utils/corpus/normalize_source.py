@@ -105,7 +105,11 @@ def convert_parquet(
                 for record in records:
                     statistics["rows_read"] += 1
                     score = record.get("language_score")
-                    if record.get("language") != descriptor["language"] or (
+                    # FineWeb-2 is already partitioned by language in the
+                    # dataset configuration.  Some published shards omit the
+                    # redundant column, so reject only an explicit mismatch.
+                    if (record.get("language") is not None and
+                        record.get("language") != descriptor["language"]) or (
                         score is not None and score < minimum_language_score
                     ):
                         statistics["skipped_language"] += 1
