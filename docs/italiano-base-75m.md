@@ -15,9 +15,9 @@ codice: conserva API `lm_model`, trainer, checkpoint e backend CPU/Metal.
 
 Il target e' il Mac mini Apple M4 con 24 GiB di memoria unificata usato per il
 Modello Minimal. Il vincolo non e' riempire tutta la RAM con il massimo numero
-di parametri: i 1.560.387.976 token dello split train disponibile determinano
-una dimensione di modello che puo' essere addestrata con dati sufficienti e
-verificata localmente.
+di parametri: i 2.557.390.263 token dello split train di `italiano-v3`
+determinano una dimensione di modello che puo' essere addestrata con dati
+sufficienti e verificata localmente.
 
 ## Obiettivo di prodotto
 
@@ -37,12 +37,12 @@ necessario per il prodotto `Italiano-Chat-75M`.
 
 | Campo | Valore | Motivazione |
 |---|---:|---|
-| vocabolario LM | 32.001 | tokenizer train-only italiano v2 piu' `<EOD>` |
+| vocabolario LM | 32.008 | tokenizer train-only `italiano-v3`, `<EOD>` e 7 slot SFT riservati |
 | contesto `T` | 512 | permette completamenti piu' lunghi del riferimento a 32 token |
 | hidden size `C` | 512 | ampiezza adatta al budget del corpus e dell'hardware |
 | layer `L` | 12 | profondita' sufficiente per dipendenze linguistiche non locali |
 | attention head `H` | 8 | `head_dimension = C / H = 64` |
-| feed-forward `F` | 1.536 | MLP SwiGLU con rapporto 3x rispetto a `C` |
+| feed-forward `F` | 1.608 | MLP SwiGLU scelto per portare il totale a 75,01M parametri |
 | precisione | F32 | contratto runtime v1; nessun cast o mixed precision |
 | output embedding | non condiviso | prima implementazione semplice e coerente col Modello Minimal |
 
@@ -56,17 +56,17 @@ La prima implementazione usa proiezioni senza bias e una RMSNorm prima di
 attention, una prima di MLP e una RMSNorm finale:
 
 ```text
-embedding                     V * C                  = 16.384.512
-output head                   C * V                  = 16.384.512
+embedding                     V * C                  = 16.388.096
+output head                   C * V                  = 16.388.096
 attention per layer           4 * C * C              =  1.048.576
-SwiGLU per layer              3 * C * F              =  2.359.296
+SwiGLU per layer              3 * C * F              =  2.469.888
 RMSNorm                       (2 * L + 1) * C        =     12.800
 ---------------------------------------------------------------
-totale                        circa                    73.676.288
+totale                                                 75.010.560
 ```
 
-Il nome `75M` e' quindi un arrotondamento descrittivo. Non deve essere usato
-per identificare una milestone Metal o un checkpoint.
+Il nome `75M` identifica questa configurazione entro lo 0,014%; non deve essere
+usato da solo per identificare una milestone Metal o un checkpoint.
 
 ## Architettura del decoder
 
@@ -111,7 +111,7 @@ serializzare configurazione, valori, gradienti AdamW e stato del batcher.
 ## Budget di memoria e batch
 
 F32 con AdamW mantiene per ogni parametro valore, gradiente, primo e secondo
-momento: il solo stato parametrico richiede circa 1,10 GiB. Con micro-batch 4
+momento: il solo stato parametrico richiede circa 1,12 GiB. Con micro-batch 4
 e contesto 512, logits e gradiente dei logits occupano circa 250 MiB ciascuno.
 Attivazioni, gradienti intermedi, attention e buffer Metal aumentano il picco;
 il loro valore effettivo deve essere misurato, non stimato come disponibilita'
@@ -154,10 +154,10 @@ micro-batch per update come --gradient-accumulation. Per esempio, la
 configurazione iniziale e':
 
     ./build/release/llm-lab model train DATASET.train.llmdat 10000 \
-      --backend metal --context 512 --hidden 512 --layers 12 --heads 8 --ffn 1536 \
+      --backend metal --context 512 --hidden 512 --layers 12 --heads 8 --ffn 1608 \
       --batch-size 4 --gradient-accumulation 2 \
       --learning-rate 3e-4 --min-learning-rate 3e-5 \
-      --warmup-steps 8000 --total-steps 380954 \
+      --warmup-steps 8000 --total-steps 624362 \
       --beta1 0.9 --beta2 0.95 --epsilon 1e-8 --weight-decay 0.1 \
       --sampling shuffled --gradient-clip 1.0 \
       --checkpoint artifacts/models/italiano-base-75m/latest.llmckpt \
@@ -173,18 +173,18 @@ essere ripreso con --resume; il formato v4 conserva anche accumulo, scheduler,
 sampler a blocchi e clipping. I checkpoint precedenti restano leggibili e i v3
 mantengono il sampler storico per una ripresa esatta.
 
-A 2,57 secondi per update, 380.954 update sono circa undici giorni di GPU
+A circa 2 secondi per update, 624.362 update sono circa quindici giorni di GPU
 continua: la cadenza dei checkpoint e' la finestra di lavoro che un crash puo'
-distruggere. Con --checkpoint-every 2000 quella finestra vale circa novanta
-minuti e ogni scrittura costa 884 MiB (valori piu' i due momenti AdamW), quindi
-il costo in I/O resta trascurabile rispetto al rischio. `SIGINT` e `SIGTERM`
+distruggere. Con --checkpoint-every 2000 quella finestra vale circa settanta
+minuti e ogni scrittura costa circa 859 MiB (valori piu' i due momenti AdamW),
+quindi il costo in I/O resta trascurabile rispetto al rischio. `SIGINT` e `SIGTERM`
 sono gestiti: il comando completa lo step in corso, esegue la validation
 finale, salva il checkpoint, registra un evento `interrupted` nel log JSONL e
 termina con esito zero. Ctrl-C e' quindi il modo corretto di fermare un run.
 
-Un'epoca contiene 3.047.632 blocchi completi e presenta 1.560.387.584 target
-token, lasciando fuori soltanto la coda di 392 token. Con otto blocchi per
-update corrisponde esattamente a 380.954 update. Il primo piano sperimentale e':
+Un'epoca contiene 4.994.902 blocchi completi. Con otto blocchi per update, i
+624.362 update completi presentano 2.557.386.752 target token e lasciano fuori
+solo 3.511 token. Il primo piano sperimentale e':
 
 | Parametro | Valore iniziale | Regola |
 |---|---:|---|
@@ -196,7 +196,7 @@ update corrisponde esattamente a 380.954 update. Il primo piano sperimentale e':
 | weight decay | `0.1` | non applicato ai pesi RMSNorm |
 | clipping | norma globale `1.0` | misurare e registrare le occorrenze |
 | validation | ogni 2.000 update | batch e seed fissi, separati dal test |
-| checkpoint | ogni 10.000 update | mantenere anche il migliore per validation |
+| checkpoint | ogni 2.000 update | mantenere anche il migliore per validation |
 
 Il numero di token, non soltanto il numero di step, e' la metrica primaria del
 run. Il log JSONL persistente include loss train, learning rate, norma del
