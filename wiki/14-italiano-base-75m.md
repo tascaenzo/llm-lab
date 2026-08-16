@@ -9,6 +9,18 @@ utili i completamenti in italiano.
 La specifica operativa e' in
 [Italiano-Base-75M](../docs/italiano-base-75m.md).
 
+## Su quali dati
+
+Il modello nasceva per essere addestrato sulla sola Wikipedia italiana. La
+scelta e' cambiata: il corpus diventa multi-sorgente, perche' Wikipedia insegna
+un registro solo e l'obiettivo dichiarato include il testo narrativo, che li'
+non c'e'.
+
+Il momento per decidere e' adesso e non dopo, per un motivo preciso: il
+tokenizer si costruisce sul corpus, e il vocabolario che ne esce non si puo'
+piu' cambiare una volta addestrato il modello. La composizione delle fonti e' in
+[docs/corpus-multi-sorgente.md](../docs/corpus-multi-sorgente.md).
+
 ## Perche' non basta rendere il Modello Minimal piu' lungo
 
 Il riferimento attuale ha un layer, una head, hidden size 64 e contesto 32. E'

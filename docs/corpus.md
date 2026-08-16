@@ -89,9 +89,13 @@ un tokenizer byte-level. Le decisioni di pulizia eliminano markup e rumore, non
 riscrivono arbitrariamente l'italiano.
 
 Il corpus corrente si chiama `italiano-wikipedia-v1`: identifica una configurazione
-precisa, non “l'ultima Wikipedia disponibile”. Manteniamo un solo corpus e un solo
-tokenizer finche' il progetto non richiedera' esplicitamente il confronto tra
-versioni diverse.
+precisa, non “l'ultima Wikipedia disponibile”.
+
+Questo documento descrive la sola fonte Wikipedia, che resta il nucleo pulito del
+corpus e il normalizzatore di riferimento. La composizione multi-sorgente che la
+estende — fonti, quote, deduplicazione incrociata e slot riservati nel
+vocabolario — e' specificata in [corpus-multi-sorgente.md](corpus-multi-sorgente.md).
+Da li' passa anche l'esecuzione dell'intera catena.
 
 ## Procedura completa: `italiano-wikipedia-v1`
 
