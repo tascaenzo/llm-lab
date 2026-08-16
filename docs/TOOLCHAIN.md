@@ -75,3 +75,17 @@ completo e non richiedono rete.
 ## Aggiungere dipendenze in futuro
 
 Per ora la base non ha librerie esterne: anche il tokenizer BPE e' implementato nel repository. Se una dipendenza diventera' necessaria, verra' registrata con versione bloccata e istruzioni riproducibili; non aggiungeremo download impliciti nella fase di configurazione CMake.
+
+## Preparazione del corpus multi-sorgente
+
+Gli strumenti in `utils/corpus/` usano la libreria standard, con una sola
+eccezione: `normalize_source.py` legge Parquet e richiede `pyarrow`.
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install pyarrow
+.venv/bin/python utils/corpus/normalize_source.py --help
+```
+
+La dipendenza vive solo nella preparazione dati offline. Il runtime di training
+resta senza dipendenze: la build C non la vede e non la richiede.

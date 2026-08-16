@@ -56,8 +56,22 @@ Dato `V = tokenizer_vocabulary_size(tokenizer)`:
 
 ```text
 ID <EOD>       = V
-vocabolario LM = V + 1
+vocabolario LM = V + 1 + R
 ```
+
+`R` e' il numero di identificatori riservati richiesti con `--reserved-tokens R`,
+zero per default. Gli identificatori riservati stanno sopra `<EOD>` e **non
+compaiono mai nei dati**: ricevono gradiente solo attraverso il denominatore
+della softmax, che li spinge verso il basso.
+
+Esistono perche' il vocabolario e' l'unica dimensione del modello che non si puo'
+cambiare dopo il pretraining: embedding e output head sono indicizzati da esso, e
+allargarlo dopo invalida ogni checkpoint. Riservare gli slot in anticipo e'
+l'unico modo per introdurre in seguito i token di ruolo di un fine-tuning
+conversazionale. Ogni slot costa `2 * C` parametri, cioe' 1.024 con `C = 512`.
+
+Con `R = 0` gli artefatti sono identici byte per byte a quelli prodotti prima che
+l'opzione esistesse. Un lettore accetta qualunque `vocabolario LM >= V + 1`.
 
 La pipeline rifiuta `V == UINT32_MAX`. Dopo ogni documento codifica `text` e
 aggiunge esattamente un `<EOD>`, anche per un testo vuoto. Il token speciale vive

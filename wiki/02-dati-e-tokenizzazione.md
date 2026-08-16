@@ -17,6 +17,31 @@ quali parole, registri e argomenti il modello incontrera' piu' spesso. Il piano
 concreto di raccolta e preparazione del corpus italiano e' in
 [docs/corpus.md](../docs/corpus.md).
 
+### Perche' una fonte sola non basta
+
+Wikipedia e' pulita e legalmente limpida, e per questo e' il punto di partenza
+naturale. Ma e' scritta tutta nello stesso modo: terza persona, tempo presente,
+frasi dichiarative, strutture ripetute. Un modello che ha letto solo quello
+scrive in quel modo qualunque cosa gli si chieda, perche' non ha mai visto un
+dialogo, un racconto o una discussione.
+
+Il rimedio non e' piu' testo: e' testo **diverso**. Aggiungere pagine web porta
+la lingua contemporanea e i registri informali; aggiungere libri di pubblico
+dominio — Wikisource e Project Gutenberg — porta la prosa lunga, che nessun'altra
+fonte contiene: un romanzo ha periodi, dialoghi e una struttura che una voce
+enciclopedica non ha mai.
+
+Mescolare fonti introduce pero' un problema che non esiste con una sola: lo
+stesso testo puo' comparire due volte. Wikipedia e' copiata ovunque nel web,
+quindi un corpus web ne contiene inevitabilmente delle copie. Se una copia
+finisce nell'insieme di addestramento e l'altra in quello di valutazione, il
+modello viene misurato su testo che ha gia' letto e il risultato sembra migliore
+di quanto sia. La **deduplicazione incrociata** serve a questo, e va fatta prima
+di dividere i dati, non dopo.
+
+La composizione del corpus multi-sorgente e' specificata in
+[docs/corpus-multi-sorgente.md](../docs/corpus-multi-sorgente.md).
+
 ## 2. Dal testo ai token
 
 Una rete neurale riceve numeri, non caratteri. Il tokenizer spezza una stringa in unita' discrete dette **token** e assegna a ogni token un ID intero.
@@ -130,6 +155,22 @@ Il **vocabolario** e' la tabella `token <-> ID`. Include spesso token speciali:
 - eventualmente `UNK` (token sconosciuto).
 
 Un tokenizer deve essere reversibile quanto possibile: `decode(encode(testo))` dovrebbe restituire lo stesso testo o una versione normalizzata prevedibile.
+
+Nel progetto il vocabolario e' 32.000 token imparati dal corpus, piu' `<EOD>` che
+segna la fine di un documento, piu' **sette identificatori riservati e vuoti**.
+
+Quei sette slot sembrano uno spreco e invece sono una precauzione necessaria. Il
+vocabolario e' l'unica dimensione del modello che non si puo' cambiare dopo
+l'addestramento: le tabelle di embedding e di uscita hanno una riga per ogni
+identificatore, quindi aggiungerne uno significa cambiare forma a quelle matrici
+e buttare via i pesi. Se in futuro si vorra' insegnare al modello a conversare
+serviranno marcatori come `<|user|>` e `<|assistant|>`: riservarli adesso costa
+un migliaio di parametri, aggiungerli dopo costerebbe l'intero addestramento.
+
+Uno slot riservato non compare mai nei dati. Riceve gradiente solo perche'
+partecipa al denominatore della softmax, che ne tiene bassa la probabilita': il
+modello impara a non produrlo mai, ed e' esattamente cio' che serve finche' non
+gli si dara' un significato.
 
 ## 5. Creare esempi per il language modeling
 

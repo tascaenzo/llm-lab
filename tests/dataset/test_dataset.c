@@ -243,6 +243,36 @@ int main(void) {
     TEST_ASSERT(lm_dataset_prepare_jsonl(model_path, LLM_LAB_TEST_DOCUMENTS_PATH, output_prefix,
                                          &report) == LM_DATASET_OUTPUT_EXISTS);
 
+    /*
+     * Reserved identifiers widen the model vocabulary above <EOD> without
+     * appearing in the data, so a later fine-tuning stage can add role tokens
+     * without resizing the embedding and invalidating every checkpoint.
+     */
+    char reserved_prefix[512] = {0};
+    TEST_ASSERT(snprintf(reserved_prefix, sizeof(reserved_prefix), "%s/dataset-reserved",
+                         LLM_LAB_TEST_BINARY_DIR) > 0);
+    cleanup_outputs(reserved_prefix);
+    lm_dataset_prepare_report reserved_report = {0};
+    TEST_ASSERT(lm_dataset_prepare_jsonl_reserved(model_path, LLM_LAB_TEST_DOCUMENTS_PATH,
+                                                  reserved_prefix, 7U, NULL, NULL,
+                                                  &reserved_report) == LM_DATASET_OK);
+    TEST_ASSERT(reserved_report.reserved_token_count == 7U);
+    TEST_ASSERT(reserved_report.end_of_document_token == reserved_report.tokenizer_vocabulary_size);
+    TEST_ASSERT(reserved_report.model_vocabulary_size ==
+                reserved_report.tokenizer_vocabulary_size + 1U + 7U);
+
+    char reserved_train[512] = {0};
+    TEST_ASSERT(
+        snprintf(reserved_train, sizeof(reserved_train), "%s.train.llmdat", reserved_prefix) > 0);
+    lm_dataset *reserved_dataset = NULL;
+    TEST_ASSERT(lm_dataset_open(reserved_train, &reserved_dataset) == LM_DATASET_OK);
+    TEST_ASSERT(lm_dataset_model_vocabulary_size(reserved_dataset) ==
+                reserved_report.model_vocabulary_size);
+    TEST_ASSERT(lm_dataset_end_of_document_token(reserved_dataset) ==
+                reserved_report.end_of_document_token);
+    lm_dataset_close(reserved_dataset);
+    cleanup_outputs(reserved_prefix);
+
     (void)remove(model_path);
     (void)remove(corrupt_path);
     cleanup_outputs(output_prefix);

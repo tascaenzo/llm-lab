@@ -31,6 +31,7 @@ typedef struct lm_dataset_prepare_report {
     uint64_t token_counts[3];
     uint32_t tokenizer_vocabulary_size;
     uint32_t model_vocabulary_size;
+    uint32_t reserved_token_count;
     token_id end_of_document_token;
 } lm_dataset_prepare_report;
 
@@ -77,6 +78,22 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
     const char *tokenizer_path, const char *documents_jsonl_path, const char *output_prefix,
     lm_dataset_progress_callback progress_callback, void *progress_context,
     lm_dataset_prepare_report *out_report);
+
+/**
+ * Like lm_dataset_prepare_jsonl_with_progress, reserving extra identifiers above
+ * <EOD> in the model vocabulary.
+ *
+ * The reserved identifiers never appear in the data. They exist so a later
+ * stage, supervised fine-tuning in particular, can introduce role tokens
+ * without resizing the embedding and the output head, which would invalidate
+ * every checkpoint trained before them. Reserving zero reproduces the previous
+ * artifacts byte for byte.
+ */
+lm_dataset_status
+lm_dataset_prepare_jsonl_reserved(const char *tokenizer_path, const char *documents_jsonl_path,
+                                  const char *output_prefix, uint32_t reserved_token_count,
+                                  lm_dataset_progress_callback progress_callback,
+                                  void *progress_context, lm_dataset_prepare_report *out_report);
 
 /** Opens and fully validates an .llmdat artifact. */
 lm_dataset_status lm_dataset_open(const char *path, lm_dataset **out_dataset);
