@@ -285,7 +285,8 @@ class ProgressReporter:
         self.bytes_read = 0
         self.started_at = time.monotonic()
         self.last_update_at = 0.0
-        self.enabled = sys.stderr.isatty()
+        self.enabled = True
+        self.interactive = sys.stderr.isatty() and os.environ.get("LLM_LAB_PROGRESS_LOG") != "1"
 
     def update(
         self,
@@ -299,7 +300,8 @@ class ProgressReporter:
         if not self.enabled:
             return
         now = time.monotonic()
-        if not force and now - self.last_update_at < 0.5:
+        interval = 0.5 if self.interactive else 5.0
+        if not force and now - self.last_update_at < interval:
             return
 
         elapsed = now - self.started_at
@@ -310,19 +312,18 @@ class ProgressReporter:
         speed = self.bytes_read / elapsed if elapsed else 0.0
         remaining = (self.total_bytes - self.bytes_read) / speed if speed else 0.0
         eta = format_duration(remaining) if speed else "--:--"
-        print(
-            f"\rEstrazione [{bar}] {fraction * 100:5.1f}% "
+        message = (
+            f"Estrazione [{bar}] {fraction * 100:5.1f}% "
             f"{format_bytes(self.bytes_read)}/{format_bytes(self.total_bytes)} "
             f"{format_bytes(speed)}/s ETA {eta} | "
-            f"pagine {pages_seen:,}, documenti {documents_written:,}",
-            end="",
-            file=sys.stderr,
-            flush=True,
+            f"pagine {pages_seen:,}, documenti {documents_written:,}"
         )
+        print(f"\r{message}" if self.interactive and not force else message,
+              end="\r" if self.interactive and not force else "\n", file=sys.stderr, flush=True)
         self.last_update_at = now
 
     def finish(self) -> None:
-        if self.enabled:
+        if self.enabled and self.interactive:
             print(file=sys.stderr)
 
 

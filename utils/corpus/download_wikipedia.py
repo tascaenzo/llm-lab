@@ -13,6 +13,11 @@ from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 
 DEFAULT_BASE_URL = "https://dumps.wikimedia.org/itwiki/latest"
 DEFAULT_FILENAME = "itwiki-latest-pages-articles.xml.bz2"
@@ -48,10 +53,7 @@ def download(url: str, destination: Path) -> tuple[str, str]:
 
     with read_url(url) as response, temporary.open("wb") as output:
         total = response.headers.get("Content-Length")
-        if total is not None:
-            print(f"Download: {int(total):,} byte")
-        else:
-            print("Download: dimensione non dichiarata")
+        progress = ProgressBar("Download Wikipedia", int(total) if total is not None else None, "bytes")
 
         downloaded = 0
         while chunk := response.read(CHUNK_SIZE):
@@ -59,9 +61,9 @@ def download(url: str, destination: Path) -> tuple[str, str]:
             md5.update(chunk)
             sha256.update(chunk)
             downloaded += len(chunk)
-            print(f"\rScaricati: {downloaded:,} byte", end="", flush=True)
+            progress.update(downloaded)
 
-    print()
+    progress.finish(downloaded, "download completato")
     return md5.hexdigest(), sha256.hexdigest()
 
 

@@ -16,6 +16,11 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -33,12 +38,15 @@ def main() -> int:
 
     handles: dict[str, object] = {}
     counts: dict[str, int] = {}
+    progress = ProgressBar("Separazione per fonte", args.input.stat().st_size, "bytes")
+    bytes_read = 0
     try:
         with args.input.open("r", encoding="utf-8") as source:
             for line_number, line in enumerate(source, start=1):
                 line = line.strip()
                 if not line:
                     continue
+                bytes_read += len(line.encode("utf-8")) + 1
                 document = json.loads(line)
                 name = document.get("source")
                 if not isinstance(name, str) or not name:
@@ -51,9 +59,12 @@ def main() -> int:
                     counts[name] = 0
                 handles[name].write(line + "\n")
                 counts[name] += 1
+                progress.update(bytes_read, f"documenti {sum(counts.values()):,}")
     finally:
         for handle in handles.values():
             handle.close()
+
+    progress.finish(bytes_read, f"documenti {sum(counts.values()):,}")
 
     for name, count in sorted(counts.items()):
         print(f"  {name}: {count} documenti -> {args.output_dir / f'{name}.jsonl'}", file=sys.stderr)

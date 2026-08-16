@@ -52,10 +52,10 @@ C non cambia.
 
 | Fonte | Quota | Licenza | Registro che aggiunge |
 |---|---:|---|---|
-| FineWeb-2, sottoinsieme `ita_Latn` | 60% | ODC-By 1.0 | web generale, lingua contemporanea, registri informali |
+| FineWeb-2, sottoinsieme `ita_Latn` | 55% | ODC-By 1.0 | web generale, lingua contemporanea, registri informali |
 | Wikipedia italiano | 25% | CC BY-SA | enciclopedico, nucleo pulito |
 | Wikisource IT | 15% | licenza per pagina da registrare | **narrativo**: testi trascritti e revisionati |
-| Gutenberg IT | opzionale | allowlist con verifica per l'Italia | romanzi e saggi integrali, solo dopo verifica dei diritti |
+| Gutenberg IT | 5% | allowlist con verifica per l'Italia | romanzi e saggi integrali, solo dopo verifica dei diritti |
 
 Indirizzi, verificati il 16 agosto 2026:
 
@@ -100,7 +100,7 @@ Le due fonti narrative implementate hanno vincoli diversi da FineWeb-2:
 URL e namespace sono dichiarati nel manifesto: questo evita collisioni e rende
 ispezionabile la scelta dei frammenti narrativi.
 
-**Gutenberg** non entra nel default: si scarica un libro alla volta dai mirror ufficiali
+**Gutenberg** entra nel default solo attraverso l'allowlist: si scarica un libro alla volta dai mirror ufficiali
 (`gutenberg.pglaf.org`, `aleph.gutenberg.org`), perche' `www.gutenberg.org`
 limita il download automatico; il catalogo italiano arriva da gutendex.com e
 conta circa 1.100 titoli. Ogni file contiene una licenza in inglese di alcune
@@ -252,6 +252,12 @@ quote, mostra il piano con lo spazio libero e chiede conferma prima di iniziare.
 Ogni stadio dichiara i propri output: se esistono viene saltato, quindi dopo un
 download interrotto basta rilanciare. La disponibilita' di pyarrow e' verificata
 prima del download, non dopo.
+
+I download indipendenti di Wikipedia, Wikisource e FineWeb-2 partono in
+parallelo, con un massimo di tre processi. Gutenberg resta seriale al proprio
+interno per non sovraccaricare i mirror; puo' comunque avanzare in parallelo con
+gli altri download. Un file `.part` non viene mai considerato uno stadio
+completato.
 
 ## Budget di spazio
 

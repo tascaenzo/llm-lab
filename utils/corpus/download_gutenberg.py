@@ -25,6 +25,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
+
 CATALOG_URL = "https://gutendex.com/books?languages=it"
 MIRRORS = [
     "https://gutenberg.pglaf.org/cache/epub/{identifier}/pg{identifier}.txt",
@@ -74,6 +79,7 @@ def load_catalog(limit: int, allowlist: dict[int, dict]) -> list[dict]:
     """Percorre le pagine di gutendex fino al numero di libri richiesto."""
     books: list[dict] = []
     url = CATALOG_URL
+    progress = ProgressBar("Catalogo Gutenberg", unit="libri")
     while url and len(books) < limit:
         payload = json.loads(fetch(url))
         for book in payload["results"]:
@@ -95,8 +101,8 @@ def load_catalog(limit: int, allowlist: dict[int, dict]) -> list[dict]:
             if len(books) >= limit:
                 break
         url = payload.get("next")
-        print(f"  catalogo: {len(books)} libri", end="\r", file=sys.stderr)
-    print(file=sys.stderr)
+        progress.update(len(books), "titoli verificati trovati")
+    progress.finish(len(books), "ricerca completata")
     return books
 
 
@@ -157,14 +163,17 @@ def main() -> int:
         }
 
     downloaded, skipped, failed = 0, 0, 0
+    progress = ProgressBar("Download Gutenberg", len(books), "libri")
     for index, book in enumerate(books, 1):
         target = texts / f"{book['id']}.txt"
         if target.is_file() and book["id"] in known:
             skipped += 1
+            progress.update(index, f"scaricati {downloaded}, gia' presenti {skipped}, falliti {failed}")
             continue
         result = download_book(book["id"])
         if result is None:
             failed += 1
+            progress.update(index, f"scaricati {downloaded}, gia' presenti {skipped}, falliti {failed}")
             continue
         payload, url = result
         target.write_bytes(payload)
@@ -172,14 +181,10 @@ def main() -> int:
         book["bytes"] = len(payload)
         known[book["id"]] = book
         downloaded += 1
-        print(
-            f"  {index}/{len(books)} scaricati {downloaded}, saltati {skipped}, falliti {failed}",
-            end="\r",
-            file=sys.stderr,
-        )
+        progress.update(index, f"scaricati {downloaded}, gia' presenti {skipped}, falliti {failed}")
         # Il mirror e' un servizio gratuito offerto da volontari: si aspetta.
         time.sleep(args.delay)
-    print(file=sys.stderr)
+    progress.finish(len(books), f"scaricati {downloaded}, gia' presenti {skipped}, falliti {failed}")
 
     catalog_path.write_text(
         json.dumps(

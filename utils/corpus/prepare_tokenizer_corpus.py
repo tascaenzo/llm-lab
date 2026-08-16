@@ -6,8 +6,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    from progress import ProgressBar
+except ModuleNotFoundError:
+    from utils.corpus.progress import ProgressBar
 
 
 MEBIBYTE = 1024 * 1024
@@ -118,9 +124,12 @@ def prepare(corpus_manifest_path: Path, output_dir: Path, output_manifest_path: 
     writer = PartWriter(output_dir, part_size_bytes)
     split_counts = {"train": 0, "validation": 0, "test": 0}
     train_bytes = 0
+    progress = ProgressBar("Preparazione corpus tokenizer", documents_path.stat().st_size, "bytes")
+    bytes_read = 0
     try:
         with documents_path.open("r", encoding="utf-8") as documents:
             for line_number, line in enumerate(documents, start=1):
+                bytes_read += len(line.encode("utf-8"))
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError as error:
@@ -134,8 +143,10 @@ def prepare(corpus_manifest_path: Path, output_dir: Path, output_manifest_path: 
                 if split == "train":
                     writer.write(text)
                     train_bytes += len(text.encode("utf-8"))
+                progress.update(bytes_read, f"documenti {line_number:,}; train {split_counts['train']:,}")
     finally:
         writer.close()
+    progress.finish(bytes_read, f"documenti train {split_counts['train']:,}")
     if not writer.paths:
         raise RuntimeError("nessun documento train disponibile")
 
@@ -202,7 +213,7 @@ def main() -> int:
         print(f"Parti: {manifest['statistics']['parts']}")
         return 0
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
-        print(f"Errore: {error}", file=__import__("sys").stderr)
+        print(f"Errore: {error}", file=sys.stderr)
         return 1
 
 

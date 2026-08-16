@@ -38,7 +38,7 @@ per ogni sorgente del corpus.
 
 FineWeb-2 non elimina l'obbligo di audit: viene incluso per evitare un modello
 che parli solo in registro enciclopedico, ma il manifesto conserva URL, filtri,
-checksum e quote effettive. Gutenberg resta opzionale fino a una allowlist dei
+checksum e quote effettive. Gutenberg entra solo attraverso una allowlist dei
 diritti verificata per l'Italia.
 
 Riferimenti:
