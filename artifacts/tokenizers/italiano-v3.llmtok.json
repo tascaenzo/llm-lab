@@ -1,0 +1,170 @@
+{
+  "schema": "llm-lab-tokenizer-artifact-v2",
+  "created_at": "2026-08-16T16:02:30.752965+00:00",
+  "tokenizer": {
+    "file": "artifacts/tokenizers/italiano-v3.llmtok",
+    "sha256": "0c19bb610eb53af384c6aeb8f732703015a7a17358b96656a5319b21b5a3a97e",
+    "format": {
+      "kind": "binary",
+      "version": 1,
+      "byte_order": "little-endian",
+      "payload_checksum": "sha256"
+    },
+    "target_vocabulary_size": 32000,
+    "actual_vocabulary_size": 32000,
+    "merge_count": 31744
+  },
+  "trainer": {
+    "file": "build/release/llm-lab",
+    "sha256": "196242bd55ff9f1fe3f3975e176b06ee31b137e2d3f2c20c4689074c50679a4b",
+    "git_commit": "0886a72108484202539e587c9a0e937ada1fb7c7",
+    "git_worktree_dirty": true,
+    "build_configuration": "release"
+  },
+  "execution": {
+    "training_seconds": 82.20593162500154,
+    "training_peak_memory_kib": 5652976
+  },
+  "evaluation": {
+    "schema": "llm-lab-tokenizer-evaluation-v1",
+    "bytes": 1048576,
+    "tokens": 392920,
+    "bytes_per_token": 2.668676,
+    "seconds": 0.0402,
+    "mebibytes_per_second": 24.875622,
+    "round_trip": true
+  },
+  "corpus": {
+    "manifest": "data/derived/italiano-v3/tokenizer-train-input.manifest.json",
+    "manifest_sha256": "86817df44f61f0ca748b043a73dea65330f9e13a699cc4037e928c1b38bdab4c",
+    "tokenizer_input": [
+      "data/derived/italiano-v3/tokenizer-train-input/part-000.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-001.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-002.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-003.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-004.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-005.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-006.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-007.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-008.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-009.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-010.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-011.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-012.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-013.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-014.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-015.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-016.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-017.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-018.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-019.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-020.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-021.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-022.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-023.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-024.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-025.txt",
+      "data/derived/italiano-v3/tokenizer-train-input/part-026.txt"
+    ],
+    "tokenizer_input_split": "train",
+    "snapshot": {
+      "schema": "llm-lab-tokenizer-corpus-v1",
+      "name": "italiano-v3-train-only",
+      "created_at": "2026-08-16T16:01:08.482129+00:00",
+      "source_manifest": "data/clean/italiano-v3/manifest.json",
+      "source_manifest_sha256": "cd8dee61bc787bd0253e0badd6f92db5ec3992b427c0463f42dd184822fb94a4",
+      "split": {
+        "algorithm": "fnv1a-64-mod-10000",
+        "selected": "train",
+        "train_buckets": [
+          0,
+          8999
+        ],
+        "validation_buckets": [
+          9000,
+          9499
+        ],
+        "test_buckets": [
+          9500,
+          9999
+        ]
+      },
+      "outputs": {
+        "documents": "data/clean/italiano-v3/documents.jsonl",
+        "tokenizer_input": [
+          "data/derived/italiano-v3/tokenizer-train-input/part-000.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-001.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-002.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-003.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-004.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-005.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-006.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-007.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-008.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-009.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-010.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-011.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-012.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-013.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-014.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-015.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-016.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-017.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-018.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-019.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-020.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-021.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-022.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-023.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-024.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-025.txt",
+          "data/derived/italiano-v3/tokenizer-train-input/part-026.txt"
+        ],
+        "tokenizer_input_split": "train"
+      },
+      "statistics": {
+        "documents": {
+          "train": 2504097,
+          "validation": 139603,
+          "test": 139403
+        },
+        "train_text_bytes": 6996109301,
+        "parts": 27
+      }
+    }
+  },
+  "command": [
+    "build/release/llm-lab",
+    "tokenizer",
+    "train",
+    "artifacts/tokenizers/italiano-v3.llmtok",
+    "32000",
+    "data/derived/italiano-v3/tokenizer-train-input/part-000.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-001.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-002.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-003.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-004.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-005.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-006.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-007.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-008.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-009.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-010.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-011.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-012.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-013.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-014.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-015.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-016.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-017.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-018.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-019.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-020.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-021.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-022.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-023.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-024.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-025.txt",
+    "data/derived/italiano-v3/tokenizer-train-input/part-026.txt"
+  ]
+}
