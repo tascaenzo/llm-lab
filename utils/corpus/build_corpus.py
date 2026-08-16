@@ -93,11 +93,18 @@ def stage_command(stage: Stage, python: str) -> list[str]:
     return [str(part) for part in ([python] + stage.command if stage.interpreter == "python" else stage.command)]
 
 
+def ensure_output_directories(stage: Stage) -> None:
+    """Creates parent directories required by a stage's declared outputs."""
+    for output in stage.outputs:
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+
 def run(stage: Stage, python: str) -> bool:
     command = stage_command(stage, python)
     print(f"\n\033[1m▶ {stage.title}\033[0m")
     print(f"  $ {' '.join(str(part) for part in command)}")
     started = time.monotonic()
+    ensure_output_directories(stage)
     result = subprocess.run(command, cwd=ROOT)
     elapsed = time.monotonic() - started
     if result.returncode != 0:
@@ -132,6 +139,7 @@ def run_parallel(stages: list[Stage], python: str) -> bool:
             command = stage_command(stage, python)
             print(f"\n\033[1m▶ {stage.title}\033[0m (parallelo)")
             print(f"  $ {' '.join(command)}")
+            ensure_output_directories(stage)
             environment = os.environ.copy()
             environment["LLM_LAB_PROGRESS_LOG"] = "1"
             active.append((stage, subprocess.Popen(command, cwd=ROOT, env=environment), time.monotonic()))
