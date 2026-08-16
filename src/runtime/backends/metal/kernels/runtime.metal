@@ -66,6 +66,10 @@ constant uint llm_simd_width = 32;
 
 inline float llm_threadgroup_sum(float value, threadgroup float *partial, uint thread_index,
                                  uint lane, uint simdgroup, uint threads_per_group) {
+    /* A single SIMD group reduces in one hardware instruction, with no barrier. */
+    if (threads_per_group <= llm_simd_width) {
+        return simd_sum(value);
+    }
     const float simd_value = simd_sum(value);
     if (lane == 0) {
         partial[simdgroup] = simd_value;
@@ -88,6 +92,10 @@ inline float llm_threadgroup_sum(float value, threadgroup float *partial, uint t
 
 inline float llm_threadgroup_max(float value, threadgroup float *partial, uint thread_index,
                                  uint lane, uint simdgroup, uint threads_per_group) {
+    /* A single SIMD group reduces in one hardware instruction, with no barrier. */
+    if (threads_per_group <= llm_simd_width) {
+        return simd_max(value);
+    }
     const float simd_value = simd_max(value);
     if (lane == 0) {
         partial[simdgroup] = simd_value;
@@ -356,21 +364,31 @@ kernel void llm_attention_forward_f32(device const float *query [[buffer(0)]],
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (thread_index == 0) {
-        float maximum = -INFINITY;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            maximum = max(maximum, probabilities[key_position]);
-        }
-        float denominator = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            const float probability = exp(probabilities[key_position] - maximum);
-            probabilities[key_position] = probability;
-            denominator += probability;
-        }
-        const float inverse_denominator = 1.0f / denominator;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            probabilities[key_position] *= inverse_denominator;
-        }
+    /*
+     * The softmax runs across the whole threadgroup instead of on thread zero.
+     * Each thread owns the key positions congruent to its index, so the three
+     * passes never share an element, and both reductions broadcast their result.
+     */
+    float maximum = -INFINITY;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        maximum = max(maximum, probabilities[key_position]);
+    }
+    maximum =
+        llm_threadgroup_max(maximum, partial, thread_index, lane, simdgroup, threads_per_group);
+    float denominator = 0.0f;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        const float probability = exp(probabilities[key_position] - maximum);
+        probabilities[key_position] = probability;
+        denominator += probability;
+    }
+    denominator =
+        llm_threadgroup_sum(denominator, partial, thread_index, lane, simdgroup, threads_per_group);
+    const float inverse_denominator = 1.0f / denominator;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        probabilities[key_position] *= inverse_denominator;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint dimension = thread_index; dimension < parameters.head_dimension;
@@ -411,7 +429,6 @@ kernel void llm_attention_backward_f32(
     threadgroup float partial[32];
     threadgroup float *probabilities = scratch;
     threadgroup float *probability_gradients = scratch + parameters.sequence_length;
-    threadgroup float *weighted_probability_gradient = scratch + 2 * parameters.sequence_length;
     for (uint key_position = 0; key_position <= query_position; ++key_position) {
         const uint key_index =
             llm_attention_offset(batch, key_position, key_value_head, parameters.sequence_length,
@@ -427,21 +444,31 @@ kernel void llm_attention_backward_f32(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (thread_index == 0) {
-        float maximum = -INFINITY;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            maximum = max(maximum, probabilities[key_position]);
-        }
-        float denominator = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            const float probability = exp(probabilities[key_position] - maximum);
-            probabilities[key_position] = probability;
-            denominator += probability;
-        }
-        const float inverse_denominator = 1.0f / denominator;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            probabilities[key_position] *= inverse_denominator;
-        }
+    /*
+     * The softmax runs across the whole threadgroup instead of on thread zero.
+     * Each thread owns the key positions congruent to its index, so the three
+     * passes never share an element, and both reductions broadcast their result.
+     */
+    float maximum = -INFINITY;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        maximum = max(maximum, probabilities[key_position]);
+    }
+    maximum =
+        llm_threadgroup_max(maximum, partial, thread_index, lane, simdgroup, threads_per_group);
+    float denominator = 0.0f;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        const float probability = exp(probabilities[key_position] - maximum);
+        probabilities[key_position] = probability;
+        denominator += probability;
+    }
+    denominator =
+        llm_threadgroup_sum(denominator, partial, thread_index, lane, simdgroup, threads_per_group);
+    const float inverse_denominator = 1.0f / denominator;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        probabilities[key_position] *= inverse_denominator;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
     for (uint key_position = 0; key_position <= query_position; ++key_position) {
@@ -460,14 +487,14 @@ kernel void llm_attention_backward_f32(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (thread_index == 0) {
-        *weighted_probability_gradient = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            *weighted_probability_gradient +=
-                probabilities[key_position] * probability_gradients[key_position];
-        }
+    float weighted_probability_gradient = 0.0f;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        weighted_probability_gradient +=
+            probabilities[key_position] * probability_gradients[key_position];
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    weighted_probability_gradient = llm_threadgroup_sum(
+        weighted_probability_gradient, partial, thread_index, lane, simdgroup, threads_per_group);
     for (uint dimension = thread_index; dimension < parameters.head_dimension;
          dimension += threads_per_group) {
         float query_value_gradient = 0.0f;
@@ -477,7 +504,7 @@ kernel void llm_attention_backward_f32(
                 parameters.key_value_head_count, parameters.head_dimension);
             const float score_gradient =
                 probabilities[key_position] *
-                (probability_gradients[key_position] - *weighted_probability_gradient);
+                (probability_gradients[key_position] - weighted_probability_gradient);
             query_value_gradient += parameters.scale * score_gradient * key[key_index + dimension];
             llm_atomic_add_float(key_gradient + key_index + dimension,
                                  parameters.scale * score_gradient * query_row_values[dimension]);

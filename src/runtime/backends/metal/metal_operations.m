@@ -164,9 +164,18 @@ static llm_status metal_dispatch_attention_groups(llm_metal_context *context,
     const NSUInteger maximum = [state maxTotalThreadsPerThreadgroup];
     const NSUInteger limit =
         maximum < LLM_METAL_MAX_THREADS_1D ? maximum : LLM_METAL_MAX_THREADS_1D;
+    /*
+     * The forward pass reduces once per key position and does little else, so
+     * staying inside one SIMD group pays: each reduction becomes a single
+     * hardware instruction with no threadgroup barrier. The backward pass ends
+     * with a loop parallel over the head dimension, which wants the wider
+     * threadgroup instead.
+     */
     NSUInteger threads = width;
-    while (threads < head_dimension && threads <= limit / 2U) {
-        threads *= 2U;
+    if (pipeline != LLM_METAL_PIPELINE_ATTENTION_FORWARD) {
+        while (threads < head_dimension && threads <= limit / 2U) {
+            threads *= 2U;
+        }
     }
     if (threads == 0U || group_count > NSUIntegerMax ||
         scratch_float_count > SIZE_MAX / sizeof(float) ||
