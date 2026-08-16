@@ -500,20 +500,25 @@ static double generation_uniform(uint64_t *state) {
     return (double)(generation_next_random(state) >> 11U) * (1.0 / 9007199254740992.0);
 }
 
-static token_id sample_generation_token(const float *logits, uint32_t vocabulary_size,
+static token_id sample_generation_token(const float *logits, uint32_t tokenizer_vocabulary_size,
                                         const token_id *tokens, size_t token_count,
                                         size_t context_length, cli_generation_candidate *candidates,
                                         unsigned char *recent_tokens,
                                         cli_generation_options *options) {
-    const size_t candidate_count = (size_t)vocabulary_size - 2U;
-    (void)memset(recent_tokens, 0, vocabulary_size * sizeof(*recent_tokens));
+    /*
+     * The dataset vocabulary appends <EOD> and, optionally, reserved IDs after
+     * the tokenizer vocabulary.  The latter have no textual representation
+     * during base-model generation, so sampling them would make decode fail.
+     */
+    const size_t candidate_count = (size_t)tokenizer_vocabulary_size - 1U;
+    (void)memset(recent_tokens, 0, tokenizer_vocabulary_size * sizeof(*recent_tokens));
     const size_t recent_start = token_count > context_length ? token_count - context_length : 0U;
     for (size_t index = recent_start; index < token_count; ++index) {
-        if (tokens[index] < vocabulary_size) {
+        if (tokens[index] < tokenizer_vocabulary_size) {
             recent_tokens[tokens[index]] = 1U;
         }
     }
-    for (uint32_t token = 1U; token + 1U < vocabulary_size; ++token) {
+    for (uint32_t token = 1U; token < tokenizer_vocabulary_size; ++token) {
         float adjusted = logits[token];
         if (recent_tokens[token] != 0U) {
             adjusted = adjusted >= 0.0F ? adjusted / options->repetition_penalty
@@ -1402,7 +1407,9 @@ static int run_model_generate(int argc, char **argv) {
     if (status == LLM_OK) {
         status = lm_model_get_config(model, &config);
     }
-    if (status != LLM_OK || tokenizer_vocabulary_size(tokenizer) + 1U != config.vocabulary_size) {
+    const uint32_t tokenizer_size = tokenizer_vocabulary_size(tokenizer);
+    if (status != LLM_OK || tokenizer_size == UINT32_MAX ||
+        config.vocabulary_size < tokenizer_size + 1U) {
         fprintf(stderr, "Loading checkpoint failed: %s\n",
                 status == LLM_OK ? "tokenizer vocabulary does not match checkpoint"
                                  : llm_status_string(status));
@@ -1430,9 +1437,9 @@ static int run_model_generate(int argc, char **argv) {
     }
     cli_generation_candidate *candidates = NULL;
     unsigned char *recent_tokens = NULL;
-    if (status == LLM_OK && config.vocabulary_size > 2U) {
-        candidates = malloc(((size_t)config.vocabulary_size - 2U) * sizeof(*candidates));
-        recent_tokens = calloc(config.vocabulary_size, sizeof(*recent_tokens));
+    if (status == LLM_OK && tokenizer_size > 1U) {
+        candidates = malloc(((size_t)tokenizer_size - 1U) * sizeof(*candidates));
+        recent_tokens = calloc(tokenizer_size, sizeof(*recent_tokens));
         status = candidates == NULL || recent_tokens == NULL ? LLM_ALLOCATION_FAILED : LLM_OK;
     } else if (status == LLM_OK) {
         status = LLM_INVALID_SHAPE;
@@ -1446,7 +1453,7 @@ static int run_model_generate(int argc, char **argv) {
             context[position] = sequence.ids[first + position];
         }
         for (size_t position = used; position < config.context_length; ++position) {
-            context[position] = config.vocabulary_size - 1U;
+            context[position] = tokenizer_size;
         }
         status = llm_tensor_write(backend, &input_ids, context, sizeof(context));
         if (status == LLM_OK) {
@@ -1459,7 +1466,7 @@ static int run_model_generate(int argc, char **argv) {
         if (status == LLM_OK) {
             const float *row = host_logits + (used - 1U) * config.vocabulary_size;
             sequence.ids[available] =
-                sample_generation_token(row, config.vocabulary_size, sequence.ids, available,
+                sample_generation_token(row, tokenizer_size, sequence.ids, available,
                                         config.context_length, candidates, recent_tokens, &options);
         }
     }

@@ -326,7 +326,9 @@ class ProgressReporter:
             print(file=sys.stderr)
 
 
-def iter_raw_pages(input_path: Path, statistics: dict, reporter: ProgressReporter) -> Iterator[RawPage]:
+def iter_raw_pages(
+    input_path: Path, statistics: dict, reporter: ProgressReporter, namespace_to_extract: int
+) -> Iterator[RawPage]:
     with input_path.open("rb") as input_file:
         counting_reader = CountingReader(input_file)
         with bz2.BZ2File(counting_reader, "rb") as dump_file:
@@ -358,9 +360,9 @@ def iter_raw_pages(input_path: Path, statistics: dict, reporter: ProgressReporte
                 if root is not None:
                     root.clear()
 
-                if namespace != "0":
+                if namespace != str(namespace_to_extract):
                     continue
-                statistics["pages_main_namespace"] += 1
+                statistics["pages_selected_namespace"] += 1
                 if is_redirect:
                     statistics["redirects_skipped"] += 1
                     continue
@@ -450,6 +452,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clean-root", type=Path, default=project_root / "data" / "clean")
     parser.add_argument("--derived-root", type=Path, default=project_root / "data" / "derived")
     parser.add_argument("--min-characters", type=int, default=200)
+    parser.add_argument(
+        "--namespace",
+        type=int,
+        default=0,
+        help="namespace MediaWiki da estrarre (0 per Wikipedia, 108 per Pagina: di Wikisource)",
+    )
     parser.add_argument("--part-size-mib", type=int, default=256)
     parser.add_argument("--workers", type=int, default=default_workers)
     return parser.parse_args()
@@ -462,6 +470,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--part-size-mib deve essere positivo")
     if args.workers < 1:
         raise ValueError("--workers deve essere positivo")
+    if args.namespace < 0:
+        raise ValueError("--namespace deve essere non negativo")
 
 
 def output_is_empty(path: Path) -> bool:
@@ -508,7 +518,7 @@ def main() -> int:
         part_writer = PartWriter(derived_dir, args.part_size_mib * MEBIBYTE)
         statistics = {
             "pages_seen": 0,
-            "pages_main_namespace": 0,
+            "pages_selected_namespace": 0,
             "redirects_skipped": 0,
             "too_short_skipped": 0,
             "duplicates_skipped": 0,
@@ -527,7 +537,7 @@ def main() -> int:
             "w", encoding="utf-8", buffering=WRITE_BUFFER_BYTES
         ) as documents_file:
             for page_id, title, text in iter_clean_pages(
-                iter_raw_pages(input_path, statistics, reporter), args.workers
+                iter_raw_pages(input_path, statistics, reporter, args.namespace), args.workers
             ):
                 if len(text) < args.min_characters:
                     statistics["too_short_skipped"] += 1
@@ -584,7 +594,7 @@ def main() -> int:
                 "input": relative_to_project(input_path, project_root),
                 "provenance": load_source_provenance(input_path),
             },
-            "selection": {"namespace": 0, "skip_redirects": True, "min_characters": args.min_characters, "deduplicate": True},
+            "selection": {"namespace": args.namespace, "skip_redirects": True, "min_characters": args.min_characters, "deduplicate": True},
             "cleaning": {
                 "version": "wikitext-basic-v2",
                 "description": "rimuove markup, media, tabelle e conserva testo visibile",

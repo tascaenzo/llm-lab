@@ -88,7 +88,7 @@ tokenizer `.llmtok`, invece, occupa circa 248 KiB e viene conservato in
 | `data/clean/italiano-wikipedia-v1/manifest.json` | estrattore | Configurazione, filtri, statistiche e percorsi | trainer del tokenizer e audit | Rende riproducibile la selezione del corpus |
 | `data/derived/italiano-wikipedia-v1/tokenizer-train-input/part-*.txt` | derivatore train-only | Solo testo dello split train | trainer BPE | Validation e test non influenzano il vocabolario |
 | `artifacts/tokenizers/italiano-wikipedia-v2.llmtok` | trainer BPE | 256 byte token e 31.744 merge | preparatore dataset, generazione futura | Converte testo in ID e ID testuali in byte |
-| `artifacts/tokenizers/<corpus>.llmtok` | trainer BPE | Vocabolario del corpus multi-sorgente | preparatore dataset | Il vocabolario del modello aggiunge `<EOD>` e sette slot riservati |
+| `artifacts/tokenizers/<corpus>.llmtok` | trainer BPE | Vocabolario del corpus multi-sorgente | preparatore dataset | Il modello aggiunge `<EOD>` e sette ID riservati, esclusi dalla generazione base |
 | `artifacts/tokenizers/italiano-wikipedia-v2.llmtok.json` | wrapper del trainer | Checksum, split train, comando, commit e metriche | audit e riproduzione | Impedisce di confondere tokenizer con provenienze diverse |
 | `*.train.llmdat` | `dataset prepare` | Stream dei token di training | batcher del trainer futuro | Produce esempi che aggiornano i pesi |
 | `*.validation.llmdat` | `dataset prepare` | Stream dei token di validation | ciclo di valutazione futuro | Misura la loss senza modificare i pesi |

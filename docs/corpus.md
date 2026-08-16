@@ -18,14 +18,17 @@ Questa fase serve per il tokenizer. Quando addestreremo un language model,
 serviranno inoltre una selezione del corpus piu' ampia e split separati di training,
 validazione e test.
 
-## Corpus Wikipedia
+## Corpus multi-sorgente
 
-Partiamo da due fonti con provenienza chiara:
+Il primo baseline era Wikipedia; il corpus da usare per il pretraining del 75M
+e' ora una miscela tracciabile di fonti con registri diversi:
 
 1. **Wikipedia in italiano**: testo enciclopedico contemporaneo. Usiamo il dump
    ufficiale `pages-articles`, non lo scraping delle pagine web.
-2. **Wikisource in italiano**: testi letterari e storici. Lo aggiungeremo dopo
-   avere completato e verificato la pipeline su Wikipedia.
+2. **Wikisource in italiano**: testi letterari e storici, estratti dal namespace
+   `Pagina:` e controllati a campione.
+3. **FineWeb-2 italiano**: italiano contemporaneo e registri informali, con
+   provenienza per URL, filtri e deduplicazione incrociata.
 
 Wikipedia rende disponibile il dump aggiornato in un URL stabile. Al momento della
 scrittura, il file completo compresso e' circa 4 GiB: non e' un download da avviare
@@ -33,8 +36,10 @@ per caso. Wikisource ammette testi di pubblico dominio o con licenza libera
 compatibile con CC BY-SA; la licenza effettiva resta comunque un dato da registrare
 per ogni sorgente del corpus.
 
-Non includiamo inizialmente raccolte web aggregate: rendono meno semplice sapere
-da quale sito provenga ogni testo e con quale licenza possa essere riutilizzato.
+FineWeb-2 non elimina l'obbligo di audit: viene incluso per evitare un modello
+che parli solo in registro enciclopedico, ma il manifesto conserva URL, filtri,
+checksum e quote effettive. Gutenberg resta opzionale fino a una allowlist dei
+diritti verificata per l'Italia.
 
 Riferimenti:
 
@@ -91,9 +96,8 @@ riscrivono arbitrariamente l'italiano.
 Il corpus corrente si chiama `italiano-wikipedia-v1`: identifica una configurazione
 precisa, non “l'ultima Wikipedia disponibile”.
 
-Questo documento descrive la sola fonte Wikipedia, che resta il nucleo pulito del
-corpus e il normalizzatore di riferimento. La composizione multi-sorgente che la
-estende — fonti, quote, deduplicazione incrociata e slot riservati nel
+Wikipedia resta il normalizzatore di riferimento. La composizione multi-sorgente
+del corpus 75M — fonti, quote, deduplicazione incrociata e slot riservati nel
 vocabolario — e' specificata in [corpus-multi-sorgente.md](corpus-multi-sorgente.md).
 Da li' passa anche l'esecuzione dell'intera catena.
 

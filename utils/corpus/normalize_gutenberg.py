@@ -131,9 +131,10 @@ def main() -> int:
                         {
                             "id": f"gutenberg:{identifier}-{index:04d}",
                             "source": "gutenberg-ita",
-                            "license": license_name,
+                            "license": book.get("rights", license_name),
                             "url": book.get("url", ""),
                             "title": book.get("title", ""),
+                            "rights_evidence": book.get("rights_evidence", ""),
                             "text": section,
                         },
                         ensure_ascii=False,

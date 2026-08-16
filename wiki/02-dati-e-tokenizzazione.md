@@ -164,8 +164,10 @@ vocabolario e' l'unica dimensione del modello che non si puo' cambiare dopo
 l'addestramento: le tabelle di embedding e di uscita hanno una riga per ogni
 identificatore, quindi aggiungerne uno significa cambiare forma a quelle matrici
 e buttare via i pesi. Se in futuro si vorra' insegnare al modello a conversare
-serviranno marcatori come `<|user|>` e `<|assistant|>`: riservarli adesso costa
-un migliaio di parametri, aggiungerli dopo costerebbe l'intero addestramento.
+serviranno marcatori come `<|user|>` e `<|assistant|>`: riservare gli ID adesso
+costa un migliaio di parametri, aggiungerli dopo costerebbe l'intero
+addestramento. Gli ID non hanno ancora una forma testuale e la generazione base
+li esclude finche' SFT non ne definisca encoding e decoding.
 
 Uno slot riservato non compare mai nei dati. Riceve gradiente solo perche'
 partecipa al denominatore della softmax, che ne tiene bassa la probabilita': il

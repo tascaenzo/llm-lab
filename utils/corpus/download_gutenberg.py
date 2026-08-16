@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Scarica i libri italiani di Project Gutenberg in testo semplice.
 
-E' la fonte che porta la prosa lunga: romanzi, saggi e poesia di pubblico
-dominio, cioe' l'unico registro narrativo che ne' Wikipedia ne' il web
-forniscono.
+E' una fonte opzionale di prosa lunga: romanzi, saggi e poesia da usare solo
+dopo una verifica dei diritti per l'Italia, documentata in un'allowlist.
 
 Il catalogo arriva da gutendex.com, un indice pubblico di Gutenberg che risponde
 in JSON. I testi arrivano dai mirror ufficiali: `www.gutenberg.org` limita il
@@ -32,25 +31,65 @@ MIRRORS = [
     "http://aleph.gutenberg.org/cache/epub/{identifier}/pg{identifier}.txt",
 ]
 USER_AGENT = "llm-lab-corpus/1"
-LICENSE = "Public domain (Project Gutenberg)"
+LICENSE = "Public domain (curated allowlist; verify jurisdiction)"
 
 
 def fetch(url: str, timeout: int = 60) -> bytes:
     return urlopen(Request(url, headers={"User-Agent": USER_AGENT}), timeout=timeout).read()
 
 
-def load_catalog(limit: int) -> list[dict]:
+def load_allowlist(path: Path) -> dict[int, dict]:
+    """Loads reviewed Italian rights records keyed by Project Gutenberg ID.
+
+    Project Gutenberg's catalogue is useful discovery metadata, not a rights
+    clearance for an Italian training corpus.  Keeping the evidence alongside
+    each selected title makes the provenance auditable and prevents a broad,
+    incorrect "all Gutenberg is public domain" claim.
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"allowlist non leggibile: {path} ({error})") from error
+    if (
+        payload.get("schema") != "llm-lab-gutenberg-allowlist-v1"
+        or payload.get("jurisdiction") != "IT"
+    ):
+        raise ValueError("l'allowlist deve dichiarare schema v1 e jurisdiction 'IT'")
+    entries = payload.get("books")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("l'allowlist non contiene alcun libro verificato")
+    result: dict[int, dict] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("id"), int):
+            raise ValueError("ogni record dell'allowlist deve avere un id intero")
+        if entry.get("rights") != "public-domain-it" or not isinstance(entry.get("evidence"), str):
+            raise ValueError("ogni record deve dichiarare public-domain-it e una evidenza")
+        if entry["id"] in result:
+            raise ValueError(f"id Gutenberg duplicato nell'allowlist: {entry['id']}")
+        result[entry["id"]] = entry
+    return result
+
+
+def load_catalog(limit: int, allowlist: dict[int, dict]) -> list[dict]:
     """Percorre le pagine di gutendex fino al numero di libri richiesto."""
     books: list[dict] = []
     url = CATALOG_URL
     while url and len(books) < limit:
         payload = json.loads(fetch(url))
         for book in payload["results"]:
+            identifier = book.get("id")
+            # Gutendex exposes the Project Gutenberg copyright marker as well;
+            # require both that metadata and the repository's IT review.
+            if identifier not in allowlist or book.get("copyright") is not False:
+                continue
             books.append(
                 {
-                    "id": book["id"],
+                    "id": identifier,
                     "title": book.get("title", ""),
                     "authors": [author.get("name", "") for author in book.get("authors", [])],
+                    "rights": allowlist[identifier]["rights"],
+                    "rights_evidence": allowlist[identifier]["evidence"],
+                    "rights_verified_at": allowlist[identifier].get("verified_at", ""),
                 }
             )
             if len(books) >= limit:
@@ -86,6 +125,12 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="pausa fra un download e l'altro, per non gravare sul mirror",
     )
+    parser.add_argument(
+        "--allowlist",
+        type=Path,
+        required=True,
+        help="JSON di titoli verificati per il pubblico dominio in Italia",
+    )
     return parser.parse_args()
 
 
@@ -96,8 +141,9 @@ def main() -> int:
     texts.mkdir(exist_ok=True)
 
     try:
-        books = load_catalog(args.limit)
-    except (urllib.error.HTTPError, urllib.error.URLError) as error:
+        allowlist = load_allowlist(args.allowlist)
+        books = load_catalog(args.limit, allowlist)
+    except (urllib.error.HTTPError, urllib.error.URLError, ValueError) as error:
         print(f"Catalogo non raggiungibile: {error}", file=sys.stderr)
         return 1
     print(f"Catalogo italiano: {len(books)} libri", file=sys.stderr)
@@ -142,6 +188,8 @@ def main() -> int:
                 "source": "gutenberg-ita",
                 "license": LICENSE,
                 "catalog": CATALOG_URL,
+                "allowlist": str(args.allowlist),
+                "jurisdiction": "IT",
                 "downloaded_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "books": sorted(known.values(), key=lambda entry: entry["id"]),
             },
