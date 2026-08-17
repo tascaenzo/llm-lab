@@ -49,16 +49,22 @@ static void gradient_row_split(const llm_tensor *gradient, size_t *out_rows, siz
     *out_rows = gradient->element_count / width;
 }
 
-static llm_status begin_metal_batch(llm_backend *backend, int use_metal_batch) {
-    return use_metal_batch != 0 ? llm_backend_metal_begin_batch(backend) : LLM_OK;
+/** Reports whether the backend is an accelerator, where batching a step pays off. */
+static int backend_uses_batches(const llm_backend *backend) {
+    const llm_device_type device = llm_backend_device(backend);
+    return device == LLM_DEVICE_METAL || device == LLM_DEVICE_CUDA;
 }
 
-/** Ends a Metal batch, keeping the first failure between the batch and the work. */
-static llm_status end_metal_batch(llm_backend *backend, int use_metal_batch, llm_status status) {
-    if (use_metal_batch == 0) {
+static llm_status begin_device_batch(llm_backend *backend, int use_device_batch) {
+    return use_device_batch != 0 ? llm_backend_begin_batch(backend) : LLM_OK;
+}
+
+/** Ends a device batch, keeping the first failure between the batch and the work. */
+static llm_status end_device_batch(llm_backend *backend, int use_device_batch, llm_status status) {
+    if (use_device_batch == 0) {
         return status;
     }
-    const llm_status batch_status = llm_backend_metal_end_batch(backend);
+    const llm_status batch_status = llm_backend_end_batch(backend);
     return status == LLM_OK ? batch_status : status;
 }
 
@@ -205,13 +211,13 @@ llm_status lm_trainer_get_config(const lm_trainer *trainer, lm_trainer_config *o
     return LLM_OK;
 }
 
-static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_metal_batch, float *out_norm) {
+static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_device_batch, float *out_norm) {
     llm_backend *backend = lm_model_backend(trainer->model);
     const size_t parameter_count = lm_model_parameter_count(trainer->model);
     if (parameter_count != trainer->gradient_partial_count) {
         return LLM_INVALID_ARGUMENT;
     }
-    llm_status status = begin_metal_batch(backend, use_metal_batch);
+    llm_status status = begin_device_batch(backend, use_device_batch);
     if (status == LLM_OK) {
         status = llm_tensor_fill_f32(backend, &trainer->gradient_norm_square, 0.0F);
     }
@@ -245,7 +251,7 @@ static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_metal_batch
                                     &trainer->gradient_norm_square);
         }
     }
-    status = end_metal_batch(backend, use_metal_batch, status);
+    status = end_device_batch(backend, use_device_batch, status);
     float sum_square = 0.0F;
     if (status == LLM_OK) {
         status = llm_tensor_read(backend, &trainer->gradient_norm_square, &sum_square,
@@ -264,12 +270,12 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     }
     const size_t token_count = trainer->config.batch_size * trainer->config.context_length;
     llm_backend *backend = lm_model_backend(trainer->model);
-    const int use_metal_batch = llm_backend_device(backend) == LLM_DEVICE_METAL;
-    llm_status status = begin_metal_batch(backend, use_metal_batch);
+    const int use_device_batch = backend_uses_batches(backend);
+    llm_status status = begin_device_batch(backend, use_device_batch);
     if (status == LLM_OK) {
         status = lm_model_zero_grad(trainer->model);
     }
-    status = end_metal_batch(backend, use_metal_batch, status);
+    status = end_device_batch(backend, use_device_batch, status);
     float accumulated_loss = 0.0F;
     for (size_t micro_step = 0U;
          status == LLM_OK && micro_step < trainer->config.gradient_accumulation_steps;
@@ -279,7 +285,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
             status = LLM_BACKEND_ERROR;
             break;
         }
-        status = begin_metal_batch(backend, use_metal_batch);
+        status = begin_device_batch(backend, use_device_batch);
         if (status == LLM_OK) {
             status = llm_tensor_write(backend, &trainer->input_ids, trainer->host_inputs,
                                       token_count * sizeof(*trainer->host_inputs));
@@ -303,7 +309,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
             status =
                 lm_model_backward(trainer->model, &trainer->input_ids, &trainer->logits_gradient);
         }
-        status = end_metal_batch(backend, use_metal_batch, status);
+        status = end_device_batch(backend, use_device_batch, status);
         float micro_loss = 0.0F;
         if (status == LLM_OK) {
             status = llm_tensor_read(backend, &trainer->loss, &micro_loss, sizeof(micro_loss));
@@ -320,7 +326,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     float gradient_norm = 0.0F;
     float clipping_scale = 1.0F;
     if (status == LLM_OK && trainer->config.gradient_clip_norm > 0.0F) {
-        status = trainer_gradient_norm(trainer, use_metal_batch, &gradient_norm);
+        status = trainer_gradient_norm(trainer, use_device_batch, &gradient_norm);
         if (status == LLM_OK && gradient_norm > trainer->config.gradient_clip_norm) {
             clipping_scale = trainer->config.gradient_clip_norm / gradient_norm;
         }
@@ -334,11 +340,11 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
         .gradient_scale = clipping_scale / (float)trainer->config.gradient_accumulation_steps,
         .step = trainer->step + 1U};
     if (status == LLM_OK) {
-        status = begin_metal_batch(backend, use_metal_batch);
+        status = begin_device_batch(backend, use_device_batch);
         if (status == LLM_OK) {
             status = lm_model_apply_adamw(trainer->model, &options);
         }
-        status = end_metal_batch(backend, use_metal_batch, status);
+        status = end_device_batch(backend, use_device_batch, status);
     }
     if (status != LLM_OK) {
         return status;
@@ -407,13 +413,13 @@ llm_status lm_model_evaluate_validation(lm_model *model, lm_dataset *dataset, si
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &loss);
 
     double loss_sum = 0.0;
-    const int use_metal_batch = llm_backend_device(backend) == LLM_DEVICE_METAL;
+    const int use_device_batch = backend_uses_batches(backend);
     for (size_t index = 0U; status == LLM_OK && index < batch_count; ++index) {
         if (lm_batcher_next(batcher, host_inputs, host_targets) != LM_DATASET_OK) {
             status = LLM_BACKEND_ERROR;
             break;
         }
-        status = begin_metal_batch(backend, use_metal_batch);
+        status = begin_device_batch(backend, use_device_batch);
         if (status == LLM_OK)
             status =
                 llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
@@ -424,7 +430,7 @@ llm_status lm_model_evaluate_validation(lm_model *model, lm_dataset *dataset, si
             status = lm_model_forward(model, &inputs, &logits);
         if (status == LLM_OK)
             status = llm_cross_entropy_forward(backend, &logits, &targets, &loss);
-        status = end_metal_batch(backend, use_metal_batch, status);
+        status = end_device_batch(backend, use_device_batch, status);
         float batch_loss = 0.0F;
         if (status == LLM_OK)
             status = llm_tensor_read(backend, &loss, &batch_loss, sizeof(batch_loss));
