@@ -432,13 +432,13 @@ static void print_usage(const char *program) {
             " [--warmup-steps N] [--total-steps N] [--min-learning-rate LR] [--seed N]"
             " [--beta1 B] [--beta2 B] [--epsilon E] [--weight-decay W]"
             " [--sampling shuffled|random] [--gradient-clip N]"
-            " [--backend cpu|metal]"
+            " [--backend cpu|metal|cuda]"
             " [--checkpoint FILE] [--checkpoint-every N] [--resume FILE]"
             " [--validation FILE] [--validation-every N] [--validation-batches N]"
             " [--best-checkpoint FILE] [--log FILE]\n"
             "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT"
             " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]"
-            " [--backend cpu|metal]\n"
+            " [--backend cpu|metal|cuda]\n"
             "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt STEPS"
             " [--batch-size B] [--seed N]\n",
             program, program, program, program, program, program);
@@ -760,6 +760,73 @@ static const char *model_sampling_name(lm_batcher_sampling sampling) {
     return "random";
 }
 
+typedef enum cli_backend_choice {
+    CLI_BACKEND_CPU = 0,
+    CLI_BACKEND_METAL,
+    CLI_BACKEND_CUDA
+} cli_backend_choice;
+
+/** Maps a --backend value to a choice. Returns 0 when the name is unknown. */
+static int parse_backend_choice(const char *value, cli_backend_choice *out_choice) {
+    if (strcmp(value, "cpu") == 0) {
+        *out_choice = CLI_BACKEND_CPU;
+        return 1;
+    }
+    if (strcmp(value, "metal") == 0) {
+        *out_choice = CLI_BACKEND_METAL;
+        return 1;
+    }
+    if (strcmp(value, "cuda") == 0) {
+        *out_choice = CLI_BACKEND_CUDA;
+        return 1;
+    }
+    return 0;
+}
+
+static const char *backend_choice_name(cli_backend_choice choice) {
+    if (choice == CLI_BACKEND_METAL)
+        return "metal";
+    if (choice == CLI_BACKEND_CUDA)
+        return "cuda";
+    return "cpu";
+}
+
+static llm_status create_backend_choice(cli_backend_choice choice, llm_backend **out_backend) {
+    if (choice == CLI_BACKEND_METAL)
+        return llm_backend_metal_create(out_backend);
+    if (choice == CLI_BACKEND_CUDA)
+        return llm_backend_cuda_create(out_backend);
+    return llm_backend_cpu_create(out_backend);
+}
+
+/**
+ * Reads the buffer and timing counters of whichever accelerator is in use. The
+ * JSONL keys keep their original names for schema compatibility; they now carry
+ * the active device, not Metal specifically.
+ */
+static void read_accelerator_metrics(cli_backend_choice choice, const llm_backend *backend,
+                                     size_t *out_active_bytes, size_t *out_peak_bytes,
+                                     double *out_gpu_seconds) {
+    *out_active_bytes = 0U;
+    *out_peak_bytes = 0U;
+    *out_gpu_seconds = 0.0;
+    if (choice == CLI_BACKEND_METAL) {
+        llm_metal_backend_metrics metrics = {0};
+        if (llm_backend_metal_get_metrics(backend, &metrics) == LLM_OK) {
+            *out_active_bytes = metrics.active_buffer_bytes;
+            *out_peak_bytes = metrics.peak_active_buffer_bytes;
+            *out_gpu_seconds = metrics.total_gpu_seconds;
+        }
+    } else if (choice == CLI_BACKEND_CUDA) {
+        llm_cuda_backend_metrics metrics = {0};
+        if (llm_backend_cuda_get_metrics(backend, &metrics) == LLM_OK) {
+            *out_active_bytes = metrics.active_buffer_bytes;
+            *out_peak_bytes = metrics.peak_active_buffer_bytes;
+            *out_gpu_seconds = metrics.total_gpu_seconds;
+        }
+    }
+}
+
 static char *path_with_suffix(const char *path, const char *suffix) {
     if (path == NULL || suffix == NULL)
         return NULL;
@@ -873,7 +940,7 @@ static int run_model_train(int argc, char **argv) {
     size_t checkpoint_every = 0U;
     size_t validation_every = 0U;
     size_t validation_batches = 100U;
-    int use_metal = 0;
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
     int has_model_options = 0;
     if (parse_positive_size(argv[4], &steps) == 0) {
         fprintf(stderr, "STEPS must be a positive integer supported by this system.\n");
@@ -948,12 +1015,7 @@ static int run_model_train(int argc, char **argv) {
             parsed = parse_seed(value, &trainer_config.seed);
             has_model_options = 1;
         } else if (strcmp(option, "--backend") == 0) {
-            if (strcmp(value, "cpu") == 0) {
-                parsed = 1;
-            } else if (strcmp(value, "metal") == 0) {
-                use_metal = 1;
-                parsed = 1;
-            }
+            parsed = parse_backend_choice(value, &backend_choice);
         } else if (strcmp(option, "--checkpoint") == 0 && checkpoint_path == NULL) {
             checkpoint_path = value;
             parsed = value[0] != '\0';
@@ -1049,7 +1111,7 @@ static int run_model_train(int argc, char **argv) {
     lm_model *model = NULL;
     lm_trainer *trainer = NULL;
     llm_status status =
-        use_metal != 0 ? llm_backend_metal_create(&backend) : llm_backend_cpu_create(&backend);
+        create_backend_choice(backend_choice, &backend);
     lm_model_config model_config = {.vocabulary_size = lm_dataset_model_vocabulary_size(dataset),
                                     .context_length = trainer_config.context_length,
                                     .hidden_size = hidden_size,
@@ -1131,7 +1193,7 @@ static int run_model_train(int argc, char **argv) {
                 "\"context_length\":%zu,\"gradient_accumulation\":%zu,"
                 "\"validation_every\":%zu,\"validation_batches\":%zu}\n",
                 lm_trainer_step_count(trainer), steps, parameter_value_count,
-                use_metal != 0 ? "metal" : "cpu", model_sampling_name(trainer_config.sampling),
+                backend_choice_name(backend_choice), model_sampling_name(trainer_config.sampling),
                 trainer_config.batch_size, trainer_config.context_length,
                 trainer_config.gradient_accumulation_steps, validation_every, validation_batches);
     }
@@ -1186,9 +1248,11 @@ static int run_model_train(int argc, char **argv) {
         const unsigned long long global_step = lm_trainer_step_count(trainer);
         const double tokens_per_second =
             step_seconds > 0.0 ? (double)tokens_per_update / step_seconds : 0.0;
-        llm_metal_backend_metrics metal_metrics = {0};
-        if (use_metal != 0)
-            (void)llm_backend_metal_get_metrics(backend, &metal_metrics);
+        size_t device_active_bytes = 0U;
+        size_t device_peak_bytes = 0U;
+        double device_gpu_seconds = 0.0;
+        read_accelerator_metrics(backend_choice, backend, &device_active_bytes, &device_peak_bytes,
+                                 &device_gpu_seconds);
         const uint64_t tokens_seen = global_step <= UINT64_MAX / (uint64_t)tokens_per_update
                                          ? (uint64_t)global_step * (uint64_t)tokens_per_update
                                          : UINT64_MAX;
@@ -1204,8 +1268,7 @@ static int run_model_train(int argc, char **argv) {
                     global_step, tokens_seen, loss, lm_trainer_learning_rate(trainer),
                     lm_trainer_gradient_norm(trainer), step_seconds,
                     step_seconds > 0.0 ? 1.0 / step_seconds : 0.0, tokens_per_second,
-                    metal_metrics.active_buffer_bytes, metal_metrics.peak_active_buffer_bytes,
-                    metal_metrics.total_gpu_seconds);
+                    device_active_bytes, device_peak_bytes, device_gpu_seconds);
         }
         const int final_requested_step = index + 1U == steps || model_training_interrupted != 0;
         const int should_validate =
@@ -1328,7 +1391,7 @@ static int run_model_train(int argc, char **argv) {
            model_config.head_count, model_config.feed_forward_size, parameter_value_count,
            trainer_config.gradient_accumulation_steps, lm_trainer_learning_rate(trainer),
            lm_trainer_gradient_norm(trainer), model_sampling_name(trainer_config.sampling),
-           use_metal != 0 ? "metal" : "cpu");
+           backend_choice_name(backend_choice));
     if (has_validation_result != 0)
         printf("%.8f,\"validation_perplexity\":%.8f,", latest_validation_loss,
                exp(latest_validation_loss));
@@ -1408,7 +1471,7 @@ static int run_model_generate(int argc, char **argv) {
     }
     cli_generation_options options = {
         .temperature = 0.8F, .repetition_penalty = 1.1F, .top_k = 40U, .random_state = UINT64_C(1)};
-    int use_metal = 0;
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
     for (int index = 7; index < argc; index += 2) {
         if (index + 1 >= argc) {
             fprintf(stderr, "Model generation options require a value.\n");
@@ -1427,12 +1490,7 @@ static int run_model_generate(int argc, char **argv) {
         } else if (strcmp(option, "--seed") == 0) {
             parsed = parse_seed(value, &options.random_state);
         } else if (strcmp(option, "--backend") == 0) {
-            if (strcmp(value, "cpu") == 0) {
-                parsed = 1;
-            } else if (strcmp(value, "metal") == 0) {
-                use_metal = 1;
-                parsed = 1;
-            }
+            parsed = parse_backend_choice(value, &backend_choice);
         }
         if (parsed == 0) {
             fprintf(stderr, "Invalid model generation option: %s %s\n", option, value);
@@ -1443,7 +1501,7 @@ static int run_model_generate(int argc, char **argv) {
         options.random_state = UINT64_C(0x9e3779b97f4a7c15);
     }
     fprintf(stderr, "Generazione: carico tokenizer e checkpoint su %s...\n",
-            use_metal != 0 ? "Metal" : "CPU");
+            backend_choice_name(backend_choice));
     tokenizer *tokenizer = NULL;
     tokenizer_status tokenizer_result = tokenizer_load(argv[4], &tokenizer);
     if (tokenizer_result != TOKENIZER_OK) {
@@ -1474,7 +1532,7 @@ static int run_model_generate(int argc, char **argv) {
     llm_backend *backend = NULL;
     lm_model *model = NULL;
     llm_status status =
-        use_metal != 0 ? llm_backend_metal_create(&backend) : llm_backend_cpu_create(&backend);
+        create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, argv[3], &model, NULL);
     }
