@@ -50,8 +50,8 @@ static llm_status cuda_report(cudaError_t error, const char *stage) {
 /* Reads and clears the sticky flags. The caller must already have synchronized. */
 static llm_status cuda_consume_flags(llm_cuda_context *context) {
     const cudaError_t copy_error =
-        cudaMemcpy(context->host_flags, context->device_flags,
-                   LLM_CUDA_FLAG_COUNT * sizeof(int), cudaMemcpyDeviceToHost);
+        cudaMemcpy(context->host_flags, context->device_flags, LLM_CUDA_FLAG_COUNT * sizeof(int),
+                   cudaMemcpyDeviceToHost);
     if (copy_error != cudaSuccess) {
         return cuda_report(copy_error, "flag readback");
     }
@@ -236,8 +236,7 @@ llm_status llm_cuda_zero(void *opaque_context, void *memory, size_t byte_count) 
     if (buffer->byte_count != byte_count) {
         return LLM_INVALID_ARGUMENT;
     }
-    const cudaError_t error =
-        cudaMemsetAsync(buffer->pointer, 0, byte_count, context->stream);
+    const cudaError_t error = cudaMemsetAsync(buffer->pointer, 0, byte_count, context->stream);
     if (error != cudaSuccess) {
         return cuda_report(error, "device memset");
     }
@@ -283,9 +282,9 @@ llm_status llm_cuda_copy(void *opaque_context, const void *source, void *destina
         if (source_buffer->byte_count < byte_count) {
             return LLM_INVALID_ARGUMENT;
         }
-        return cuda_report(cudaMemcpy(destination, source_buffer->pointer, byte_count,
-                                      cudaMemcpyDeviceToHost),
-                           "device to host copy");
+        return cuda_report(
+            cudaMemcpy(destination, source_buffer->pointer, byte_count, cudaMemcpyDeviceToHost),
+            "device to host copy");
     }
 
     llm_cuda_buffer *destination_buffer = static_cast<llm_cuda_buffer *>(destination);

@@ -124,9 +124,8 @@ llm_status llm_cuda_rope_f32(void *context, const float *input, const float *cos
                              size_t head_count, size_t head_dimension, float *output);
 llm_status llm_cuda_rope_backward_f32(void *context, const float *output_gradient,
                                       const float *cos_table, const float *sin_table,
-                                      size_t batch_count, size_t sequence_length,
-                                      size_t head_count, size_t head_dimension,
-                                      float *input_gradient);
+                                      size_t batch_count, size_t sequence_length, size_t head_count,
+                                      size_t head_dimension, float *input_gradient);
 llm_status llm_cuda_attention_forward_f32(void *context, const float *query, const float *key,
                                           const float *value, float scale, size_t batch_count,
                                           size_t sequence_length, size_t query_head_count,
@@ -191,9 +190,8 @@ void llm_cuda_launch_rope(cudaStream_t stream, const float *input, const float *
                           size_t sequence_length, size_t pairs_per_head, size_t head_count);
 void llm_cuda_launch_rope_backward(cudaStream_t stream, const float *output_gradient,
                                    const float *cos_table, const float *sin_table,
-                                   float *input_gradient, size_t pair_count,
-                                   size_t sequence_length, size_t pairs_per_head,
-                                   size_t head_count);
+                                   float *input_gradient, size_t pair_count, size_t sequence_length,
+                                   size_t pairs_per_head, size_t head_count);
 void llm_cuda_launch_attention_forward(cudaStream_t stream, const float *query, const float *key,
                                        const float *value, float *output, float scale,
                                        size_t query_rows, size_t sequence_length,

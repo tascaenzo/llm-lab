@@ -1110,8 +1110,7 @@ static int run_model_train(int argc, char **argv) {
     llm_backend *backend = NULL;
     lm_model *model = NULL;
     lm_trainer *trainer = NULL;
-    llm_status status =
-        create_backend_choice(backend_choice, &backend);
+    llm_status status = create_backend_choice(backend_choice, &backend);
     lm_model_config model_config = {.vocabulary_size = lm_dataset_model_vocabulary_size(dataset),
                                     .context_length = trainer_config.context_length,
                                     .hidden_size = hidden_size,
@@ -1531,8 +1530,7 @@ static int run_model_generate(int argc, char **argv) {
 
     llm_backend *backend = NULL;
     lm_model *model = NULL;
-    llm_status status =
-        create_backend_choice(backend_choice, &backend);
+    llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, argv[3], &model, NULL);
     }

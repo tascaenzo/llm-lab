@@ -52,8 +52,7 @@ static int compare_backend_tensors(llm_backend *cpu_backend, const llm_tensor *c
             maximum_index = index;
         }
     }
-    const int matches =
-        isfinite(cuda_values[maximum_index]) != 0 && maximum_error <= tolerance;
+    const int matches = isfinite(cuda_values[maximum_index]) != 0 && maximum_error <= tolerance;
     if (matches == 0) {
         fprintf(stderr, "%s parity mismatch: max_abs=%g at %zu (cpu=%g cuda=%g), tolerance=%g\n",
                 stage, (double)maximum_error, maximum_index, (double)cpu_values[maximum_index],
@@ -294,11 +293,10 @@ static int test_model_forward_parity(llm_backend *cuda_backend) {
         char stage[128] = {0};
         (void)snprintf(stage, sizeof(stage), "initial parameter %s",
                        lm_model_parameter_name(cpu_model, parameter));
-        TEST_ASSERT(compare_backend_tensors(cpu_backend, lm_model_parameter_value(cpu_model,
-                                                                                  parameter),
-                                            cuda_backend,
-                                            lm_model_parameter_value(cuda_model, parameter), stage,
-                                            0.0F) == EXIT_SUCCESS);
+        TEST_ASSERT(
+            compare_backend_tensors(cpu_backend, lm_model_parameter_value(cpu_model, parameter),
+                                    cuda_backend, lm_model_parameter_value(cuda_model, parameter),
+                                    stage, 0.0F) == EXIT_SUCCESS);
     }
 
     const size_t input_shape[] = {2U, 16U};
