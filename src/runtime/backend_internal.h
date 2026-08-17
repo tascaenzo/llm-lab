@@ -6,6 +6,10 @@
 
 #include "runtime/backend.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Hardware contract used by the validated runtime facade. */
 typedef struct llm_backend_ops {
     void (*destroy)(void *context);
@@ -91,5 +95,9 @@ struct llm_backend {
 
 size_t llm_dtype_size(llm_dtype dtype);
 int llm_backend_supports_dtype(const llm_backend *backend, llm_dtype dtype);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
