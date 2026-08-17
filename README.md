@@ -23,6 +23,9 @@ Il backend CPU parallelo e' spiegato nella
 Il primo backend GPU Metal e' introdotto nella
 [wiki](wiki/12-backend-metal.md) e specificato in
 [docs/backend-metal.md](docs/backend-metal.md).
+Il backend CUDA, usato per proseguire il training su GPU in cloud partendo da un
+checkpoint prodotto sul Mac, e' specificato in
+[docs/backend-cuda.md](docs/backend-cuda.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 

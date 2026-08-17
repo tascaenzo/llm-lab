@@ -20,7 +20,8 @@ prima la pagina wiki e poi la specifica corrispondente.
 9. [Italiano-Base-75M: primo decoder utilizzabile](italiano-base-75m.md)
 10. [Backend CPU](backend-cpu.md)
 11. [Backend Metal](backend-metal.md)
-12. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
+12. [Backend CUDA](backend-cuda.md)
+13. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.
