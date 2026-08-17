@@ -197,6 +197,7 @@ inline float llm_sigmoid(float value) {
 }
 
 inline void llm_atomic_add_float(device atomic_uint *destination, float value);
+inline void llm_atomic_add_float(device atomic_float *destination, float value);
 
 kernel void llm_silu_f32(device const float *input [[buffer(0)]],
                          device float *output [[buffer(1)]],
@@ -407,8 +408,8 @@ kernel void llm_attention_forward_f32(device const float *query [[buffer(0)]],
 kernel void llm_attention_backward_f32(
     device const float *query [[buffer(0)]], device const float *key [[buffer(1)]],
     device const float *value [[buffer(2)]], device const float *output_gradient [[buffer(3)]],
-    device float *query_gradient [[buffer(4)]], device atomic_uint *key_gradient [[buffer(5)]],
-    device atomic_uint *value_gradient [[buffer(6)]],
+    device float *query_gradient [[buffer(4)]], device atomic_float *key_gradient [[buffer(5)]],
+    device atomic_float *value_gradient [[buffer(6)]],
     constant AttentionParameters &parameters [[buffer(7)]],
     threadgroup float *scratch [[threadgroup(0)]], uint query_row [[threadgroup_position_in_grid]],
     uint thread_index [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
@@ -545,6 +546,13 @@ inline void llm_atomic_add_float(device atomic_uint *destination, float value) {
         desired = as_type<uint>(as_type<float>(expected) + value);
     } while (!atomic_compare_exchange_weak_explicit(destination, &expected, desired,
                                                     memory_order_relaxed, memory_order_relaxed));
+}
+
+/* Apple GPUs support native floating-point atomics. Attention updates K/V from
+ * many causal query rows, so using the hardware operation avoids the heavily
+ * contended compare-and-swap retry loop used by the generic fallback above. */
+inline void llm_atomic_add_float(device atomic_float *destination, float value) {
+    atomic_fetch_add_explicit(destination, value, memory_order_relaxed);
 }
 
 kernel void llm_reduce_sum_last_f32(device const float *input [[buffer(0)]],

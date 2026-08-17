@@ -1,9 +1,9 @@
 # Backend Metal
 
-**Stato (2026-08-13):** il codice Metal copre il contratto training v1,
-inclusi RMSNorm, RoPE, attention causale GQA e AdamW. Una sessione del Modello
-Minimal di 2.000.000 step su Apple Silicon ha prodotto un checkpoint riproducibile; la
-parita' contrattuale completa e il profiling per forma restano i gate aperti.
+**Stato (2026-08-17):** il codice Metal copre il contratto training v1,
+inclusi RMSNorm, RoPE, attention causale GQA e AdamW. La suite contrattuale e
+la parita' CPU/Metal restano gate obbligatori per ogni modifica; il profiling
+per forma guida le ottimizzazioni, non la correttezza.
 **Piattaforma:** macOS su Apple Silicon. Nessun fallback CPU.
 
 ## Confine
@@ -32,10 +32,11 @@ inoltrata alla CPU.
 
 ## Primitive presenti
 
-Attualmente Metal copre lifecycle/memoria, batch asincroni, elementwise di
-base, `accumulate`, riduzioni, gather/scatter-add, softmax, cross-entropy,
-SiLU forward/backward e GEMM F32. `matmul_ex` usa internamente
-`MPSMatrixMultiplication` per le trasposizioni; l'API pubblica resta invariata.
+Metal copre lifecycle/memoria, batch asincroni, elementwise di base,
+`accumulate`, riduzioni, gather/scatter-add, softmax, cross-entropy, SiLU,
+RMSNorm, RoPE, attention causale GQA e AdamW, inclusi i backward richiesti dal
+contratto. `matmul_ex` usa internamente `MPSMatrixMultiplication` per le
+trasposizioni; l'API pubblica resta invariata.
 
 La build Release e i test Metal sono stati eseguiti fuori dal sandbox su Apple
 M4 reale: il test MPS `matmul_ex` seguito da un kernel Metal nello stesso batch
@@ -49,8 +50,7 @@ restano verificabili.
 
 ## Gate di parita' e ottimizzazione
 
-Il codice copre le primitive che seguono; prima di dichiarare Metal un backend
-di training completo occorre ancora ottenere l'evidenza esecutiva su hardware:
+Ogni modifica Metal deve mantenere l'evidenza esecutiva su hardware:
 
 1. esecuzione completa della suite contrattuale condivisa su Metal;
 2. confronto esplicito CPU/Metal per output e gradienti del blocco minimal;
@@ -163,5 +163,5 @@ Metal e' pronto per il training solo quando:
 - sanitizer/CTest host e validazione Metal sono verdi;
 - il benchmark misura solo F32/U32 e non riapre scope futuri.
 
-Fino a quel punto e' corretto iniziare lo sviluppo Metal, ma non dichiarare il
-runtime Metal completo.
+Il runtime Metal e' parte del percorso di training v1; una modifica che non
+supera questi gate non e' pronta per un run lungo.

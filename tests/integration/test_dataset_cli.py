@@ -109,6 +109,16 @@ def main():
             raise AssertionError(training_report)
         if "Verifica dataset:" not in trained.stderr or "Training modello:" not in trained.stderr:
             raise AssertionError(f"avanzamento model assente:\n{trained.stderr}")
+        corrupted_checkpoint = root / "generation-corrupted.llmckpt"
+        corrupted_bytes = bytearray(generation_checkpoint.read_bytes())
+        corrupted_bytes[-1] ^= 1
+        corrupted_checkpoint.write_bytes(corrupted_bytes)
+        corrupted = run(
+            [str(cli), "model", "generate", str(corrupted_checkpoint), str(model), "1", "ciao"],
+            expected_returncode=1,
+        )
+        if "Loading checkpoint failed" not in corrupted.stderr:
+            raise AssertionError(f"checkpoint corrotto accettato:\n{corrupted.stderr}")
         scalable_checkpoint = root / "scalable.llmckpt"
         scalable_best_checkpoint = root / "scalable-best.llmckpt"
         scalable_log = root / "scalable.jsonl"
@@ -287,6 +297,8 @@ def main():
             "1.1",
             "--seed",
             "73",
+            "--backend",
+            "cpu",
         ]
         sampled_first = run(sampled_command)
         sampled_second = run(sampled_command)

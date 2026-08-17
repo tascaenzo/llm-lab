@@ -200,8 +200,11 @@ solo 3.511 token. Il primo piano sperimentale e':
 
 Il numero di token, non soltanto il numero di step, e' la metrica primaria del
 run. Il log JSONL persistente include loss train, learning rate, norma del
-gradiente, token/s, durata dello step e memoria Metal attiva/picco. Gli eventi
-periodici aggiungono loss/PPL validation e registrano i nuovi checkpoint best.
+gradiente, token/s, durata dello step e memoria Metal attiva/picco. I checkpoint
+v5 sono scritti tramite file temporaneo, `fsync` e rename atomico e includono
+uno SHA-256 dell'header e del payload; i checkpoint v1--v4 restano leggibili per
+riprendere gli esperimenti esistenti. Gli eventi periodici aggiungono loss/PPL
+validation e registrano i nuovi checkpoint best.
 
 ## Dati e allineamento conversazionale
 
