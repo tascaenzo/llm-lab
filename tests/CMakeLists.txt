@@ -53,6 +53,17 @@ target_include_directories(runtime_metal_backend_test PRIVATE
 llm_lab_set_warnings(runtime_metal_backend_test)
 add_test(NAME runtime.metal_backend COMMAND runtime_metal_backend_test)
 
+add_executable(runtime_cuda_backend_test
+    runtime/backend_contract_suite.c
+    runtime/test_cuda_backend.c)
+target_compile_features(runtime_cuda_backend_test PRIVATE c_std_23)
+target_link_libraries(runtime_cuda_backend_test PRIVATE model runtime)
+target_include_directories(runtime_cuda_backend_test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/runtime
+    ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+llm_lab_set_warnings(runtime_cuda_backend_test)
+add_test(NAME runtime.cuda_backend COMMAND runtime_cuda_backend_test)
+
 function(llm_lab_add_tokenizer_test test_name source)
     add_executable(${test_name} ${source})
     target_compile_features(${test_name} PRIVATE c_std_23)
