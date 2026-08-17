@@ -123,11 +123,58 @@ else()
     target_sources(runtime PRIVATE src/runtime/backends/metal/metal_backend_stub.c)
 endif()
 
+# The CUDA backend is built whenever a CUDA toolchain is present, which is the
+# case on the cloud GPU hosts and never on the Apple Silicon workstation. Set
+# LLM_LAB_ENABLE_CUDA=OFF to skip it, or ON to fail loudly when it is missing.
+include(CheckLanguage)
+check_language(CUDA)
+if(NOT DEFINED LLM_LAB_ENABLE_CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        set(LLM_LAB_ENABLE_CUDA ON)
+    else()
+        set(LLM_LAB_ENABLE_CUDA OFF)
+    endif()
+endif()
+set(LLM_LAB_ENABLE_CUDA ${LLM_LAB_ENABLE_CUDA} CACHE BOOL "Build the CUDA backend")
+
+if(LLM_LAB_ENABLE_CUDA)
+    if(NOT CMAKE_CUDA_COMPILER)
+        message(FATAL_ERROR
+            "LLM_LAB_ENABLE_CUDA is ON but no CUDA compiler was found. "
+            "Install the CUDA toolkit or configure with -DLLM_LAB_ENABLE_CUDA=OFF.")
+    endif()
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    set(CMAKE_CUDA_STANDARD 17)
+    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+    # Not "native": detecting the local GPU fails on a build machine that has
+    # none, which is exactly the case for a compile-only CI runner and for a
+    # build host separate from the training host. The default covers the cloud
+    # GPUs this project targets; override it to cut compile time to one.
+    #   70 = V100, 80 = A100, 89 = L4 / RTX 4090, 90 = H100
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES "70;80;89;90")
+    endif()
+    target_sources(runtime PRIVATE
+        src/runtime/backends/cuda/cuda_backend.cu
+        src/runtime/backends/cuda/cuda_kernels.cu
+        src/runtime/backends/cuda/cuda_memory.cu
+        src/runtime/backends/cuda/cuda_operations.cu)
+    set_target_properties(runtime PROPERTIES
+        CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+    target_link_libraries(runtime PUBLIC CUDA::cudart CUDA::cublas)
+    message(STATUS "CUDA backend: enabled for architectures ${CMAKE_CUDA_ARCHITECTURES}")
+else()
+    target_sources(runtime PRIVATE src/runtime/backends/cuda/cuda_backend_stub.c)
+    message(STATUS "CUDA backend: disabled")
+endif()
+
 target_include_directories(runtime
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/backends/cpu
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/backends/cuda
         ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/backends/metal)
 target_compile_features(runtime PUBLIC c_std_23)
 target_link_libraries(runtime PUBLIC Threads::Threads)
