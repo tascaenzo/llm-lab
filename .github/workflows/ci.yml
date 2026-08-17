@@ -24,7 +24,7 @@ jobs:
         run: >
           clang-format --dry-run --Werror
           $(find apps src include tests utils -type f
-          \( -name '*.c' -o -name '*.h' -o -name '*.m' -o -name '*.metal' \))
+          \( -name '*.c' -o -name '*.h' -o -name '*.m' -o -name '*.cu' -o -name '*.metal' \))
 
   unit-tests:
     name: ${{ matrix.os }} / Debug
@@ -51,6 +51,36 @@ jobs:
       - name: Run all tests
         run: ctest --test-dir build/debug --output-on-failure
 
+  cuda-build:
+    name: Ubuntu / CUDA build
+    runs-on: ubuntu-latest
+    # The official devel image already carries nvcc, cudart and cuBLAS headers.
+    # It needs no GPU: nvcc compiles for a target architecture, it does not run
+    # the result. This job is therefore a compile gate only, and the numerical
+    # verification of runtime.cuda_backend still has to happen on real hardware.
+    container: nvidia/cuda:12.6.2-devel-ubuntu24.04
+
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake ninja-build git python3
+
+      - uses: actions/checkout@v4
+
+      # One architecture keeps the job short; the default list exists for real
+      # builds where the training host is not known in advance.
+      - name: Configure with the CUDA backend
+        run: >
+          cmake -S . -B build/cuda -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DLLM_LAB_ENABLE_CUDA=ON
+          -DCMAKE_CUDA_ARCHITECTURES=80
+          -DLLM_LAB_WARNINGS_AS_ERRORS=ON
+
+      - name: Build all targets
+        run: cmake --build build/cuda --parallel
+
   runtime-sanitizers:
     name: Ubuntu / Sanitizers
     runs-on: ubuntu-latest
@@ -70,7 +100,7 @@ jobs:
           cmake --build build/sanitizers --parallel --target
           runtime_test runtime_operations_test runtime_language_operations_test
           runtime_cpu_backend_test runtime_cpu_transformer_test
-          runtime_metal_backend_test model_test dataset_test
+          runtime_metal_backend_test runtime_cuda_backend_test model_test dataset_test
           encode_decode model_io pretokenizer training
 
       # The C unit suites all run instrumented: the model and dataset code owns
