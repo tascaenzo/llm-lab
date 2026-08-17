@@ -46,6 +46,14 @@ typedef struct cli_model_training_progress {
     int has_output;
 } cli_model_training_progress;
 
+typedef struct cli_model_generation_progress {
+    double started_at;
+    double last_update_at;
+    size_t next_log_token;
+    int interactive;
+    int has_output;
+} cli_model_generation_progress;
+
 typedef struct cli_generation_candidate {
     token_id token;
     float logit;
@@ -356,6 +364,61 @@ static void finish_model_training_progress(const cli_model_training_progress *pr
     }
 }
 
+static void show_model_generation_progress(size_t completed, size_t total, void *context) {
+    cli_model_generation_progress *progress = context;
+    const double now = current_time_seconds();
+    const int is_complete = completed >= total;
+    const double fraction = total == 0U ? 1.0 : (double)completed / (double)total;
+    const double elapsed = now - progress->started_at;
+    const double tokens_per_second = elapsed > 0.0 ? (double)completed / elapsed : 0.0;
+    const double remaining_seconds = tokens_per_second > 0.0 && is_complete == 0
+                                         ? (double)(total - completed) / tokens_per_second
+                                         : 0.0;
+    if (progress->interactive == 0) {
+        const size_t interval = total < 20U ? 1U : total / 20U;
+        if (completed != 0U && is_complete == 0 && completed < progress->next_log_token) {
+            return;
+        }
+        progress->next_log_token =
+            completed > SIZE_MAX - interval ? SIZE_MAX : completed + interval;
+    } else if (is_complete == 0 && completed != 0U && now - progress->last_update_at < 0.5) {
+        return;
+    }
+
+    char eta[32] = "--:--";
+    if (remaining_seconds > 0.0) {
+        format_duration(remaining_seconds, eta, sizeof(eta));
+    }
+    if (progress->interactive != 0) {
+        const size_t bar_width = 26U;
+        const size_t filled = (size_t)(fraction * (double)bar_width);
+        fprintf(stderr, "\rGenerazione [");
+        for (size_t index = 0U; index < bar_width; ++index) {
+            fputc(index < filled ? '#' : '-', stderr);
+        }
+        if (completed == 0U) {
+            fprintf(stderr, "] %5.1f%% token 0/%zu | preparazione...", fraction * 100.0, total);
+        } else {
+            fprintf(stderr, "] %5.1f%% token %zu/%zu | %.2f token/s | ETA %s", fraction * 100.0,
+                    completed, total, tokens_per_second, eta);
+        }
+        fflush(stderr);
+    } else if (completed == 0U) {
+        fprintf(stderr, "Generazione: preparazione di %zu token...\n", total);
+    } else {
+        fprintf(stderr, "Generazione: %5.1f%% token %zu/%zu, %.2f token/s, ETA %s\n",
+                fraction * 100.0, completed, total, tokens_per_second, eta);
+    }
+    progress->last_update_at = now;
+    progress->has_output = 1;
+}
+
+static void finish_model_generation_progress(const cli_model_generation_progress *progress) {
+    if (progress->interactive != 0 && progress->has_output != 0) {
+        fputc('\n', stderr);
+    }
+}
+
 static void print_usage(const char *program) {
     fprintf(stderr,
             "Usage:\n"
@@ -374,7 +437,8 @@ static void print_usage(const char *program) {
             " [--validation FILE] [--validation-every N] [--validation-batches N]"
             " [--best-checkpoint FILE] [--log FILE]\n"
             "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT"
-            " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]\n"
+            " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]"
+            " [--backend cpu|metal]\n"
             "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt STEPS"
             " [--batch-size B] [--seed N]\n",
             program, program, program, program, program, program);
@@ -1344,6 +1408,7 @@ static int run_model_generate(int argc, char **argv) {
     }
     cli_generation_options options = {
         .temperature = 0.8F, .repetition_penalty = 1.1F, .top_k = 40U, .random_state = UINT64_C(1)};
+    int use_metal = 0;
     for (int index = 7; index < argc; index += 2) {
         if (index + 1 >= argc) {
             fprintf(stderr, "Model generation options require a value.\n");
@@ -1361,6 +1426,13 @@ static int run_model_generate(int argc, char **argv) {
                      options.repetition_penalty >= 1.0F;
         } else if (strcmp(option, "--seed") == 0) {
             parsed = parse_seed(value, &options.random_state);
+        } else if (strcmp(option, "--backend") == 0) {
+            if (strcmp(value, "cpu") == 0) {
+                parsed = 1;
+            } else if (strcmp(value, "metal") == 0) {
+                use_metal = 1;
+                parsed = 1;
+            }
         }
         if (parsed == 0) {
             fprintf(stderr, "Invalid model generation option: %s %s\n", option, value);
@@ -1370,6 +1442,8 @@ static int run_model_generate(int argc, char **argv) {
     if (options.random_state == 0U) {
         options.random_state = UINT64_C(0x9e3779b97f4a7c15);
     }
+    fprintf(stderr, "Generazione: carico tokenizer e checkpoint su %s...\n",
+            use_metal != 0 ? "Metal" : "CPU");
     tokenizer *tokenizer = NULL;
     tokenizer_status tokenizer_result = tokenizer_load(argv[4], &tokenizer);
     if (tokenizer_result != TOKENIZER_OK) {
@@ -1399,7 +1473,8 @@ static int run_model_generate(int argc, char **argv) {
 
     llm_backend *backend = NULL;
     lm_model *model = NULL;
-    llm_status status = llm_backend_cpu_create(&backend);
+    llm_status status =
+        use_metal != 0 ? llm_backend_metal_create(&backend) : llm_backend_cpu_create(&backend);
     if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, argv[3], &model, NULL);
     }
@@ -1444,6 +1519,9 @@ static int run_model_generate(int argc, char **argv) {
     } else if (status == LLM_OK) {
         status = LLM_INVALID_SHAPE;
     }
+    cli_model_generation_progress generation_progress = {
+        .started_at = current_time_seconds(), .interactive = standard_error_is_terminal()};
+    show_model_generation_progress(0U, generated_count, &generation_progress);
     for (size_t generated = 0U; status == LLM_OK && generated < generated_count; ++generated) {
         token_id context[LLM_TENSOR_MAX_RANK == 4U ? config.context_length : 1U];
         const size_t available = sequence.length + generated;
@@ -1469,7 +1547,11 @@ static int run_model_generate(int argc, char **argv) {
                 sample_generation_token(row, tokenizer_size, sequence.ids, available,
                                         config.context_length, candidates, recent_tokens, &options);
         }
+        if (status == LLM_OK) {
+            show_model_generation_progress(generated + 1U, generated_count, &generation_progress);
+        }
     }
+    finish_model_generation_progress(&generation_progress);
     if (status == LLM_OK) {
         sequence.length += generated_count;
         unsigned char *output = NULL;
