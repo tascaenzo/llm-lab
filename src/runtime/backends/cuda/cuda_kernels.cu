@@ -397,9 +397,9 @@ __global__ void attention_forward_kernel(const float *query, const float *key, c
     const float *query_row_values = query + query_index;
 
     for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-        const size_t key_index = attention_offset(batch, key_position, key_value_head,
-                                                  sequence_length, key_value_head_count,
-                                                  head_dimension);
+        const size_t key_index =
+            attention_offset(batch, key_position, key_value_head, sequence_length,
+                             key_value_head_count, head_dimension);
         float dot = 0.0f;
         for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             dot += query_row_values[dimension] * key[key_index + dimension];
@@ -435,9 +435,9 @@ __global__ void attention_forward_kernel(const float *query, const float *key, c
     for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
         float result = 0.0f;
         for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-            const size_t key_index = attention_offset(batch, key_position, key_value_head,
-                                                      sequence_length, key_value_head_count,
-                                                      head_dimension);
+            const size_t key_index =
+                attention_offset(batch, key_position, key_value_head, sequence_length,
+                                 key_value_head_count, head_dimension);
             result += probabilities[key_position] * value[key_index + dimension];
         }
         output[query_index + dimension] = result;
@@ -472,9 +472,9 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
     const float *output_gradient_row = output_gradient + query_index;
 
     for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-        const size_t key_index = attention_offset(batch, key_position, key_value_head,
-                                                  sequence_length, key_value_head_count,
-                                                  head_dimension);
+        const size_t key_index =
+            attention_offset(batch, key_position, key_value_head, sequence_length,
+                             key_value_head_count, head_dimension);
         float dot = 0.0f;
         for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             dot += query_row_values[dimension] * key[key_index + dimension];
@@ -508,9 +508,9 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
     __syncthreads();
 
     for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-        const size_t key_index = attention_offset(batch, key_position, key_value_head,
-                                                  sequence_length, key_value_head_count,
-                                                  head_dimension);
+        const size_t key_index =
+            attention_offset(batch, key_position, key_value_head, sequence_length,
+                             key_value_head_count, head_dimension);
         float probability_gradient = 0.0f;
         for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             probability_gradient += output_gradient_row[dimension] * value[key_index + dimension];
@@ -533,9 +533,9 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
     for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
         float query_value_gradient = 0.0f;
         for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-            const size_t key_index = attention_offset(batch, key_position, key_value_head,
-                                                      sequence_length, key_value_head_count,
-                                                      head_dimension);
+            const size_t key_index =
+                attention_offset(batch, key_position, key_value_head, sequence_length,
+                                 key_value_head_count, head_dimension);
             const float score_gradient =
                 probabilities[key_position] *
                 (probability_gradients[key_position] - weighted_probability_gradient);
@@ -789,16 +789,15 @@ void llm_cuda_launch_rope(cudaStream_t stream, const float *input, const float *
                           const float *sin_table, float *output, size_t pair_count,
                           size_t sequence_length, size_t pairs_per_head, size_t head_count) {
     rope_kernel<<<elementwise_blocks(pair_count, LLM_CUDA_ELEMENTWISE_BLOCK),
-                  LLM_CUDA_ELEMENTWISE_BLOCK, 0, stream>>>(
-        input, cos_table, sin_table, output, pair_count, sequence_length, pairs_per_head,
-        head_count);
+                  LLM_CUDA_ELEMENTWISE_BLOCK, 0, stream>>>(input, cos_table, sin_table, output,
+                                                           pair_count, sequence_length,
+                                                           pairs_per_head, head_count);
 }
 
 void llm_cuda_launch_rope_backward(cudaStream_t stream, const float *output_gradient,
                                    const float *cos_table, const float *sin_table,
-                                   float *input_gradient, size_t pair_count,
-                                   size_t sequence_length, size_t pairs_per_head,
-                                   size_t head_count) {
+                                   float *input_gradient, size_t pair_count, size_t sequence_length,
+                                   size_t pairs_per_head, size_t head_count) {
     rope_backward_kernel<<<elementwise_blocks(pair_count, LLM_CUDA_ELEMENTWISE_BLOCK),
                            LLM_CUDA_ELEMENTWISE_BLOCK, 0, stream>>>(
         output_gradient, cos_table, sin_table, input_gradient, pair_count, sequence_length,

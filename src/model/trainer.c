@@ -211,7 +211,8 @@ llm_status lm_trainer_get_config(const lm_trainer *trainer, lm_trainer_config *o
     return LLM_OK;
 }
 
-static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_device_batch, float *out_norm) {
+static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_device_batch,
+                                        float *out_norm) {
     llm_backend *backend = lm_model_backend(trainer->model);
     const size_t parameter_count = lm_model_parameter_count(trainer->model);
     if (parameter_count != trainer->gradient_partial_count) {

@@ -72,9 +72,8 @@ int cuda_supports_dtype(const void *opaque_context, llm_dtype dtype) {
 }
 
 llm_status cuda_synchronize(void *opaque_context) {
-    return opaque_context == NULL
-               ? LLM_INVALID_ARGUMENT
-               : llm_cuda_flush(static_cast<llm_cuda_context *>(opaque_context));
+    return opaque_context == NULL ? LLM_INVALID_ARGUMENT
+                                  : llm_cuda_flush(static_cast<llm_cuda_context *>(opaque_context));
 }
 
 const llm_backend_ops *cuda_backend_ops() {

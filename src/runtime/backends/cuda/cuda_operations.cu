@@ -235,11 +235,11 @@ llm_status llm_cuda_matmul_ex_f32(void *opaque_context, const float *left, const
     const float beta = 0.0F;
     const cublasOperation_t operation_left = transpose_left != 0 ? CUBLAS_OP_T : CUBLAS_OP_N;
     const cublasOperation_t operation_right = transpose_right != 0 ? CUBLAS_OP_T : CUBLAS_OP_N;
-    const cublasStatus_t status = cublasSgemm(
-        context->blas, operation_right, operation_left, (int)result_columns, (int)result_rows,
-        (int)interior, &alpha, device_const_float(right), (int)right_columns,
-        device_const_float(left), (int)left_columns, &beta, device_float(output),
-        (int)result_columns);
+    const cublasStatus_t status =
+        cublasSgemm(context->blas, operation_right, operation_left, (int)result_columns,
+                    (int)result_rows, (int)interior, &alpha, device_const_float(right),
+                    (int)right_columns, device_const_float(left), (int)left_columns, &beta,
+                    device_float(output), (int)result_columns);
     if (status != CUBLAS_STATUS_SUCCESS) {
         return blas_report(status, "sgemm");
     }
@@ -335,11 +335,10 @@ llm_status llm_cuda_rms_norm_backward_f32(void *opaque_context, const float *inp
     if (clear != LLM_OK) {
         return clear;
     }
-    llm_cuda_launch_rms_norm_backward(context->stream, device_const_float(input),
-                                      device_const_float(weight),
-                                      device_const_float(output_gradient), epsilon,
-                                      device_float(input_gradient), device_float(weight_gradient),
-                                      outer_count, row_width);
+    llm_cuda_launch_rms_norm_backward(
+        context->stream, device_const_float(input), device_const_float(weight),
+        device_const_float(output_gradient), epsilon, device_float(input_gradient),
+        device_float(weight_gradient), outer_count, row_width);
     ++context->metrics.kernel_launches;
     const llm_status check = llm_cuda_check_finite(context, weight_gradient, row_width);
     if (check != LLM_OK) {
@@ -389,9 +388,8 @@ llm_status llm_cuda_rope_f32(void *context, const float *input, const float *cos
 
 llm_status llm_cuda_rope_backward_f32(void *context, const float *output_gradient,
                                       const float *cos_table, const float *sin_table,
-                                      size_t batch_count, size_t sequence_length,
-                                      size_t head_count, size_t head_dimension,
-                                      float *input_gradient) {
+                                      size_t batch_count, size_t sequence_length, size_t head_count,
+                                      size_t head_dimension, float *input_gradient) {
     return cuda_rope_dispatch(context, output_gradient, cos_table, sin_table, batch_count,
                               sequence_length, head_count, head_dimension, input_gradient, 1);
 }
@@ -433,8 +431,7 @@ llm_status llm_cuda_attention_forward_f32(void *opaque_context, const float *que
                                           size_t batch_count, size_t sequence_length,
                                           size_t query_head_count, size_t key_value_head_count,
                                           size_t head_dimension, float *output) {
-    if (opaque_context == NULL || query == NULL || key == NULL || value == NULL ||
-        output == NULL) {
+    if (opaque_context == NULL || query == NULL || key == NULL || value == NULL || output == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
     size_t query_rows = 0U, query_values = 0U, key_value_values = 0U;
