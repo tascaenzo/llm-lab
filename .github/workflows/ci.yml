@@ -70,13 +70,17 @@ jobs:
 
       # One architecture keeps the job short; the default list exists for real
       # builds where the training host is not known in advance.
+      #
+      # No LLM_LAB_WARNINGS_AS_ERRORS: llm_lab_set_warnings excludes the CUDA
+      # language because nvcc rejects those C dialect flags, so -Werror would
+      # never reach a .cu file. All it did here was turn on a retroactive lint
+      # of the C sources under GCC, which no other job does.
       - name: Configure with the CUDA backend
         run: >
           cmake -S . -B build/cuda -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DLLM_LAB_ENABLE_CUDA=ON
           -DCMAKE_CUDA_ARCHITECTURES=80
-          -DLLM_LAB_WARNINGS_AS_ERRORS=ON
 
       - name: Build all targets
         run: cmake --build build/cuda --parallel
