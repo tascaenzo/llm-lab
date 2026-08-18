@@ -407,41 +407,40 @@ def main():
             raise AssertionError((continuous, resumed))
 
         scheduled_checkpoint = root / "scheduled.llmckpt"
-        scheduled = json.loads(
-            run(
-                [
-                    str(cli),
-                    "model",
-                    "train",
-                    str(overfit_dataset),
-                    "3",
-                    "--batch-size",
-                    "1",
-                    "--context",
-                    "1",
-                    "--hidden",
-                    "4",
-                    "--learning-rate",
-                    "0.05",
-                    "--min-learning-rate",
-                    "0.01",
-                    "--gradient-accumulation",
-                    "2",
-                    "--warmup-steps",
-                    "2",
-                    "--total-steps",
-                    "4",
-                    "--gradient-clip",
-                    "1",
-                    "--seed",
-                    "19",
-                    "--checkpoint",
-                    str(scheduled_checkpoint),
-                    "--checkpoint-every",
-                    "1",
-                ]
-            ).stdout
+        scheduled_result = run(
+            [
+                str(cli),
+                "model",
+                "train",
+                str(overfit_dataset),
+                "3",
+                "--batch-size",
+                "1",
+                "--context",
+                "1",
+                "--hidden",
+                "4",
+                "--learning-rate",
+                "0.05",
+                "--min-learning-rate",
+                "0.01",
+                "--gradient-accumulation",
+                "2",
+                "--warmup-steps",
+                "2",
+                "--total-steps",
+                "4",
+                "--gradient-clip",
+                "1",
+                "--seed",
+                "19",
+                "--checkpoint",
+                str(scheduled_checkpoint),
+                "--checkpoint-every",
+                "1",
+            ]
         )
+        scheduled = json.loads(scheduled_result.stdout)
         if (
             scheduled["gradient_accumulation_steps"] != 2
             or not math.isclose(scheduled["learning_rate"], 0.03, rel_tol=0.0, abs_tol=1e-7)
@@ -451,6 +450,8 @@ def main():
             or not scheduled_checkpoint.is_file()
         ):
             raise AssertionError(scheduled)
+        if 'totale 75.00% (step 3/4)' not in scheduled_result.stderr:
+            raise AssertionError(f"avanzamento totale assente:\n{scheduled_result.stderr}")
         scheduled_resumed = json.loads(
             run(
                 [
