@@ -8,7 +8,9 @@ RUN apt-get update \
         cmake \
         git \
         ninja-build \
+        openssh-server \
         python3 \
+        rsync \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/llm-lab
@@ -27,3 +29,5 @@ COPY deploy/runpod/entrypoint.sh /usr/local/bin/llm-lab-runpod-train
 RUN chmod 0755 /usr/local/bin/llm-lab-runpod-train
 
 ENTRYPOINT ["/usr/local/bin/llm-lab-runpod-train"]
+
+EXPOSE 22

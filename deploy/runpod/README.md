@@ -29,7 +29,9 @@ bash deploy/runpod/create_pod.sh
 
 La chiave non viene scritta nel repository. Cambia `RUNPOD_GPU_ID` solo con una
 GPU la cui CUDA architecture sia supportata dall'immagine; il default RTX 4090
-usa architecture `89`.
+usa architecture `89`. Prima di creare il Pod, aggiungi la tua chiave pubblica
+SSH all'account RunPod (`runpodctl doctor` lo configura): il container espone
+TCP 22 e usa quella chiave per i trasferimenti `rsync`.
 
 ## 3. Caricare lo stato locale una sola volta
 
