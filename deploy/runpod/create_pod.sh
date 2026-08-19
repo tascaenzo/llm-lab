@@ -26,4 +26,6 @@ runpodctl pod create \
     --container-disk-in-gb 30 \
     --volume-in-gb "${volume_gb}" \
     --volume-mount-path /workspace \
+    --ports "22/tcp" \
+    --ssh \
     --env "{\"LLM_LAB_TRAIN_STEPS\":\"${train_steps}\",\"LLM_LAB_CHECKPOINT_EVERY\":\"${checkpoint_every}\",\"LLM_LAB_VALIDATION_EVERY\":\"${validation_every}\",\"LLM_LAB_VALIDATION_BATCHES\":\"${validation_batches}\"}"

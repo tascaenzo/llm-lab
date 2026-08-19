@@ -22,11 +22,24 @@ require_file() {
     fi
 }
 
+start_ssh() {
+    mkdir -p /run/sshd /root/.ssh
+    chmod 0700 /root/.ssh
+    if [[ -n "${PUBLIC_KEY:-}" ]]; then
+        printf '%s\n' "${PUBLIC_KEY}" > /root/.ssh/authorized_keys
+        chmod 0600 /root/.ssh/authorized_keys
+    else
+        printf 'RunPod pipeline: PUBLIC_KEY is empty; SSH file transfer is unavailable.\n' >&2
+    fi
+    /usr/sbin/sshd
+}
+
 if ! [[ "${train_steps}" =~ ^[1-9][0-9]*$ ]]; then
     printf 'RunPod pipeline: LLM_LAB_TRAIN_STEPS must be a positive integer.\n' >&2
     exit 2
 fi
 
+start_ssh
 nvidia-smi
 if [[ ! -f "${ready_marker}" ]]; then
     printf 'RunPod pipeline: waiting for input upload marker %s\n' "${ready_marker}" >&2
