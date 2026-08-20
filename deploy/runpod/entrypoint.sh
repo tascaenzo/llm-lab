@@ -5,8 +5,8 @@ readonly project_dir=/opt/llm-lab
 readonly backend="${LLM_LAB_BACKEND:-cuda}"
 readonly workspace_dir="${LLM_LAB_WORKSPACE:-/workspace/llm-lab}"
 readonly train_steps="${LLM_LAB_TRAIN_STEPS:?Set LLM_LAB_TRAIN_STEPS before starting the Pod}"
-readonly checkpoint_every="${LLM_LAB_CHECKPOINT_EVERY:-1000}"
-readonly validation_every="${LLM_LAB_VALIDATION_EVERY:-1000}"
+readonly checkpoint_every="${LLM_LAB_CHECKPOINT_EVERY:-5000}"
+readonly validation_every="${LLM_LAB_VALIDATION_EVERY:-5000}"
 readonly validation_batches="${LLM_LAB_VALIDATION_BATCHES:-100}"
 readonly profile_cuda="${LLM_LAB_PROFILE_CUDA:-0}"
 readonly dataset="${workspace_dir}/data/derived/italiano-v3/lm/italiano-v3.train.llmdat"
@@ -146,7 +146,7 @@ if [[ "${profile_cuda}" == "1" ]]; then
     fi
 fi
 
-exec "${cli}" model train \
+"${cli}" model train \
     "${dataset}" \
     "${train_steps}" \
     --resume "${checkpoint}" \
@@ -157,3 +157,6 @@ exec "${cli}" model train \
     --validation-batches "${validation_batches}" \
     --best-checkpoint "${best_checkpoint}" \
     --log "${training_log}"
+
+printf 'RunPod pipeline: training session completed; container is idle. Stop the Pod to stop GPU charges.\n' >&2
+exec sleep infinity
