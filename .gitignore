@@ -20,6 +20,11 @@ Testing/
 .DS_Store
 Thumbs.db
 
+# Configurazione locale e segreti: versione documentata ma senza valori reali.
+.env
+.env.*
+!.env.example
+
 # Cache e bytecode Python generati dalle utility locali.
 __pycache__/
 *.py[cod]
