@@ -556,6 +556,10 @@ __global__ void cross_entropy_forward_kernel(const float *logits, const uint32_t
     if (row >= row_count) {
         return;
     }
+    const uint32_t target = targets[row];
+    if (target >= vocabulary_size) {
+        return;
+    }
     __shared__ float partial[32];
     const size_t offset = row * vocabulary_size;
     float maximum = -INFINITY;
@@ -582,7 +586,7 @@ __global__ void cross_entropy_forward_kernel(const float *logits, const uint32_t
     }
     sum = block_sum(sum, partial);
     if (threadIdx.x == 0U) {
-        const float row_loss = maximum + logf(sum) - logits[offset + targets[row]];
+        const float row_loss = maximum + logf(sum) - logits[offset + target];
         atomicAdd(loss, row_loss / static_cast<float>(row_count));
     }
 }
@@ -592,6 +596,10 @@ __global__ void cross_entropy_backward_kernel(const float *logits, const uint32_
                                               size_t vocabulary_size) {
     const size_t row = blockIdx.x;
     if (row >= row_count) {
+        return;
+    }
+    const uint32_t target = targets[row];
+    if (target >= vocabulary_size) {
         return;
     }
     __shared__ float partial[32];
@@ -620,7 +628,6 @@ __global__ void cross_entropy_backward_kernel(const float *logits, const uint32_
     }
     sum = block_sum(sum, partial);
     const float scale = 1.0f / (sum * static_cast<float>(row_count));
-    const uint32_t target = targets[row];
     for (size_t column = threadIdx.x; column < vocabulary_size; column += blockDim.x) {
         float value = expf(logits[offset + column] - maximum) * scale;
         if (column == target) {

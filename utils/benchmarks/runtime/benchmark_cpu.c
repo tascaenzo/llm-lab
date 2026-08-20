@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "benchmark_suite.h"
+#include "project_environment.h"
 #include "runtime/runtime.h"
 
 #define CPU_BENCHMARK_MAX_THREAD_CONFIGS 64U
@@ -17,16 +18,18 @@ typedef enum benchmark_output_format {
 typedef struct benchmark_cli_config {
     cpu_benchmark_config workload;
     int selected_operations[CPU_BENCHMARK_OPERATION_COUNT];
-    int selected_backends[2];
+    int selected_backends[RUNTIME_BENCHMARK_BACKEND_COUNT];
     size_t requested_threads[CPU_BENCHMARK_MAX_THREAD_CONFIGS];
     size_t thread_config_count;
     benchmark_output_format output_format;
+    int backend_was_explicit;
+    int allow_unavailable_backends;
 } benchmark_cli_config;
 
 static void print_usage(const char *program) {
     printf("Usage: %s [options]\n\n", program);
     printf("Options:\n");
-    printf("  --backend NAME      cpu (default), metal, or all\n");
+    printf("  --backend NAME      cpu, metal, cuda, or all; overrides LLM_LAB_BACKEND\n");
     printf("  --operations LIST   all or comma-separated kernel names\n");
     printf("                      memory: zero,fill,copy\n");
     printf("                      math: add,multiply,scale,accumulate,reduce_*,matmul*\n");
@@ -44,6 +47,7 @@ static void print_usage(const char *program) {
     printf("  --warmup N          warm-up iterations (default: 2)\n");
     printf("  --iterations N      measured iterations (default: 10)\n");
     printf("  --sample-ms N       minimum duration per timing sample (default: 10)\n");
+    printf("  --batched            batch accelerator repetitions before synchronizing\n");
     printf("  --format FORMAT     human (default) or jsonl for automation\n");
     printf("  --help              show this help\n\n");
     printf("Legacy matmul syntax remains accepted: %s rows inner columns iterations\n", program);
@@ -138,6 +142,34 @@ static int parse_threads(const char *text, benchmark_cli_config *config) {
     return config->thread_config_count > 0U;
 }
 
+static int select_backends(const char *value, benchmark_cli_config *config) {
+    config->allow_unavailable_backends = strcmp(value, "all") == 0;
+    config->selected_backends[RUNTIME_BENCHMARK_CPU] =
+        strcmp(value, "cpu") == 0 || strcmp(value, "all") == 0;
+    config->selected_backends[RUNTIME_BENCHMARK_METAL] =
+        strcmp(value, "metal") == 0 || strcmp(value, "all") == 0;
+    config->selected_backends[RUNTIME_BENCHMARK_CUDA] =
+        strcmp(value, "cuda") == 0 || strcmp(value, "all") == 0;
+    return config->selected_backends[RUNTIME_BENCHMARK_CPU] != 0 ||
+           config->selected_backends[RUNTIME_BENCHMARK_METAL] != 0 ||
+           config->selected_backends[RUNTIME_BENCHMARK_CUDA] != 0;
+}
+
+static int select_environment_backend(benchmark_cli_config *config) {
+    const char *value = getenv("LLM_LAB_BACKEND");
+    if (value == NULL || value[0] == '\0') {
+        value = "cpu";
+    }
+    if (select_backends(value, config) != 0) {
+        return 1;
+    }
+    fprintf(stderr,
+            "invalid LLM_LAB_BACKEND: %s (expected cpu, metal, cuda, or all); "
+            "override it with --backend\n",
+            value);
+    return 0;
+}
+
 static int parse_legacy_arguments(int argc, char **argv, benchmark_cli_config *config) {
     if (argc != 5 || argv[1][0] == '-') {
         return 0;
@@ -166,21 +198,21 @@ static int parse_arguments(int argc, char **argv, benchmark_cli_config *config) 
             print_usage(argv[0]);
             return 2;
         }
+        if (strcmp(option, "--batched") == 0) {
+            config->workload.batch_accelerator_operations = 1;
+            continue;
+        }
         if (index + 1 >= argc) {
             fprintf(stderr, "missing value for %s\n", option);
             return 0;
         }
         const char *value = argv[++index];
         if (strcmp(option, "--backend") == 0) {
-            config->selected_backends[RUNTIME_BENCHMARK_CPU] =
-                strcmp(value, "cpu") == 0 || strcmp(value, "all") == 0;
-            config->selected_backends[RUNTIME_BENCHMARK_METAL] =
-                strcmp(value, "metal") == 0 || strcmp(value, "all") == 0;
-            if (config->selected_backends[RUNTIME_BENCHMARK_CPU] == 0 &&
-                config->selected_backends[RUNTIME_BENCHMARK_METAL] == 0) {
-                fprintf(stderr, "invalid backend: %s (expected cpu, metal, or all)\n", value);
+            if (select_backends(value, config) == 0) {
+                fprintf(stderr, "invalid backend: %s (expected cpu, metal, cuda, or all)\n", value);
                 return 0;
             }
+            config->backend_was_explicit = 1;
         } else if (strcmp(option, "--operations") == 0) {
             if (parse_operations(value, config) == 0) {
                 fprintf(stderr, "invalid operation list: %s\n", value);
@@ -309,13 +341,15 @@ static size_t detect_hardware_threads(void) {
 static void print_jsonl_metadata(const benchmark_cli_config *config) {
     printf("{\"type\":\"metadata\",\"schema_version\":1,\"os\":\"%s\","
            "\"architecture\":\"%s\",\"compiler\":\"%s\",\"build\":\"%s\","
-           "\"detected_hardware_threads\":%zu,\"metal_available\":%s,"
+           "\"detected_hardware_threads\":%zu,\"metal_available\":%s,\"cuda_available\":%s,"
            "\"warmup_iterations\":%zu,\"measured_iterations\":%zu,"
-           "\"minimum_sample_seconds\":%.6f}\n",
+           "\"minimum_sample_seconds\":%.6f,\"accelerator_batched\":%s}\n",
            operating_system_name(), architecture_name(), compiler_name(), build_type_name(),
            detect_hardware_threads(), llm_backend_metal_is_available() != 0 ? "true" : "false",
+           llm_backend_cuda_is_available() != 0 ? "true" : "false",
            config->workload.warmup_iterations, config->workload.measured_iterations,
-           config->workload.minimum_sample_seconds);
+           config->workload.minimum_sample_seconds,
+           config->workload.batch_accelerator_operations != 0 ? "true" : "false");
     (void)fflush(stdout);
 }
 
@@ -394,7 +428,10 @@ static void print_human_metadata(const benchmark_cli_config *config) {
     printf("Samples: %zu warm-up, %zu measured, minimum %.1f ms each\n",
            config->workload.warmup_iterations, config->workload.measured_iterations,
            config->workload.minimum_sample_seconds * 1000.0);
+    printf("Accelerator repetitions: %s\n",
+           config->workload.batch_accelerator_operations != 0 ? "batched" : "synchronized");
     printf("Metal: %s\n", llm_backend_metal_is_available() != 0 ? "available" : "unavailable");
+    printf("CUDA: %s\n", llm_backend_cuda_is_available() != 0 ? "available" : "unavailable");
 }
 
 static void print_human_operation_title(cpu_benchmark_operation operation,
@@ -436,8 +473,9 @@ static void print_human_result(const cpu_benchmark_result *result, double baseli
            efficiency);
 }
 
-static void print_human_metal_header(const cpu_benchmark_result *result) {
-    printf("Metal device: %s | dtype: %s | pipeline startup: %.3f ms\n", result->device_name,
+static void print_human_accelerator_header(const cpu_benchmark_result *result) {
+    printf("%s device: %s | dtype: %s | pipeline startup: %.3f ms\n",
+           runtime_benchmark_backend_name(result->backend), result->device_name,
            runtime_benchmark_dtype_name(result->dtype),
            result->pipeline_compilation_seconds * 1000.0);
     printf("%-10s %12s %12s %12s %20s\n", "Backend", "Median", "P95", "GPU median", "Throughput");
@@ -445,18 +483,22 @@ static void print_human_metal_header(const cpu_benchmark_result *result) {
            "------------", "--------------------");
 }
 
-static void print_human_metal_result(const cpu_benchmark_result *result) {
+static void print_human_accelerator_result(const cpu_benchmark_result *result) {
     char throughput[64];
     const int written = snprintf(throughput, sizeof(throughput), "%.3f %s", result->throughput,
                                  result->throughput_unit);
     if (written < 0 || (size_t)written >= sizeof(throughput)) {
         (void)snprintf(throughput, sizeof(throughput), "unavailable");
     }
-    printf("%-10s %9.3f ms %9.3f ms %9.3f ms %20s\n", "metal", result->median_seconds * 1000.0,
+    printf("%-10s %9.3f ms %9.3f ms %9.3f ms %20s\n",
+           runtime_benchmark_backend_name(result->backend), result->median_seconds * 1000.0,
            result->p95_seconds * 1000.0, result->gpu_median_seconds * 1000.0, throughput);
 }
 
 int main(int argc, char **argv) {
+    if (llm_project_environment_load() == 0) {
+        return EXIT_FAILURE;
+    }
     benchmark_cli_config config = {
         .workload =
             {
@@ -488,6 +530,21 @@ int main(int argc, char **argv) {
     }
     if (parse_status == 0) {
         print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+    if (config.backend_was_explicit == 0 && select_environment_backend(&config) == 0) {
+        return EXIT_FAILURE;
+    }
+    if (config.allow_unavailable_backends == 0 &&
+        config.selected_backends[RUNTIME_BENCHMARK_METAL] != 0 &&
+        llm_backend_metal_is_available() == 0) {
+        fprintf(stderr, "configured Metal backend is unavailable\n");
+        return EXIT_FAILURE;
+    }
+    if (config.allow_unavailable_backends == 0 &&
+        config.selected_backends[RUNTIME_BENCHMARK_CUDA] != 0 &&
+        llm_backend_cuda_is_available() == 0) {
+        fprintf(stderr, "configured CUDA backend is unavailable\n");
         return EXIT_FAILURE;
     }
 
@@ -551,8 +608,35 @@ int main(int argc, char **argv) {
             if (config.output_format == BENCHMARK_OUTPUT_JSONL) {
                 print_jsonl_result(&result, &config.workload, result.median_seconds, 0U);
             } else {
-                print_human_metal_header(&result);
-                print_human_metal_result(&result);
+                print_human_accelerator_header(&result);
+                print_human_accelerator_result(&result);
+            }
+        }
+        if (config.selected_backends[RUNTIME_BENCHMARK_CUDA] != 0) {
+            if (runtime_benchmark_operation_supported(
+                    RUNTIME_BENCHMARK_CUDA, (cpu_benchmark_operation)operation_index) == 0) {
+                if (config.output_format == BENCHMARK_OUTPUT_HUMAN) {
+                    printf("CUDA: operation not implemented, skipped\n");
+                }
+                continue;
+            }
+            if (llm_backend_cuda_is_available() == 0) {
+                if (config.output_format == BENCHMARK_OUTPUT_HUMAN) {
+                    printf("CUDA unavailable: operation skipped\n");
+                }
+                continue;
+            }
+            cpu_benchmark_result result = {0};
+            if (runtime_benchmark_run(RUNTIME_BENCHMARK_CUDA,
+                                      (cpu_benchmark_operation)operation_index, 0U,
+                                      &config.workload, &result) == 0) {
+                return EXIT_FAILURE;
+            }
+            if (config.output_format == BENCHMARK_OUTPUT_JSONL) {
+                print_jsonl_result(&result, &config.workload, result.median_seconds, 0U);
+            } else {
+                print_human_accelerator_header(&result);
+                print_human_accelerator_result(&result);
             }
         }
     }

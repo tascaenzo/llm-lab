@@ -451,8 +451,8 @@ static void print_usage(const char *program) {
             "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT"
             " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]"
             " [--backend cpu|metal|cuda]\n"
-            "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt STEPS"
-            " [--batch-size B] [--seed N]\n",
+            "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt BATCHES"
+            " [--batch-size B] [--seed N] [--backend cpu|metal|cuda]\n",
             program, program, program, program, program, program);
 }
 
@@ -795,6 +795,24 @@ static int parse_backend_choice(const char *value, cli_backend_choice *out_choic
     return 0;
 }
 
+/** Resolves the default backend after options were parsed, so --backend can
+ * deliberately override even an invalid environment setting. */
+static int resolve_environment_backend(cli_backend_choice *out_choice) {
+    const char *value = getenv("LLM_LAB_BACKEND");
+    if (value == NULL || value[0] == '\0') {
+        *out_choice = CLI_BACKEND_CPU;
+        return 1;
+    }
+    if (parse_backend_choice(value, out_choice) != 0) {
+        return 1;
+    }
+    fprintf(stderr,
+            "Invalid LLM_LAB_BACKEND: %s (expected cpu, metal, or cuda); "
+            "override it with --backend.\n",
+            value);
+    return 0;
+}
+
 static const char *backend_choice_name(cli_backend_choice choice) {
     if (choice == CLI_BACKEND_METAL)
         return "metal";
@@ -811,30 +829,68 @@ static llm_status create_backend_choice(cli_backend_choice choice, llm_backend *
     return llm_backend_cpu_create(out_backend);
 }
 
-/**
- * Reads the buffer and timing counters of whichever accelerator is in use. The
- * JSONL keys keep their original names for schema compatibility; they now carry
- * the active device, not Metal specifically.
- */
+static const char *backend_choice_device_name(cli_backend_choice choice,
+                                              const llm_backend *backend) {
+    if (choice == CLI_BACKEND_METAL) {
+        const char *name = llm_backend_metal_device_name(backend);
+        return name != NULL ? name : "Metal";
+    }
+    if (choice == CLI_BACKEND_CUDA) {
+        const char *name = llm_backend_cuda_device_name(backend);
+        return name != NULL ? name : "CUDA";
+    }
+    return "CPU";
+}
+
+/** Portable accelerator counters written to each training JSONL event. */
+typedef struct cli_accelerator_metrics {
+    size_t active_buffer_count;
+    size_t active_buffer_bytes;
+    size_t peak_active_buffer_bytes;
+    size_t cached_buffer_count;
+    size_t cached_buffer_bytes;
+    unsigned long long dispatches;
+    unsigned long long synchronizations;
+    unsigned long long reused_buffer_allocations;
+    double total_gpu_seconds;
+    double last_gpu_seconds;
+} cli_accelerator_metrics;
+
+/** Reads the buffer-pool, synchronization and timing counters of an accelerator. */
 static void read_accelerator_metrics(cli_backend_choice choice, const llm_backend *backend,
-                                     size_t *out_active_bytes, size_t *out_peak_bytes,
-                                     double *out_gpu_seconds) {
-    *out_active_bytes = 0U;
-    *out_peak_bytes = 0U;
-    *out_gpu_seconds = 0.0;
+                                     cli_accelerator_metrics *out_metrics) {
+    *out_metrics = (cli_accelerator_metrics){0};
     if (choice == CLI_BACKEND_METAL) {
         llm_metal_backend_metrics metrics = {0};
         if (llm_backend_metal_get_metrics(backend, &metrics) == LLM_OK) {
-            *out_active_bytes = metrics.active_buffer_bytes;
-            *out_peak_bytes = metrics.peak_active_buffer_bytes;
-            *out_gpu_seconds = metrics.total_gpu_seconds;
+            *out_metrics = (cli_accelerator_metrics){
+                .active_buffer_count = metrics.active_buffer_count,
+                .active_buffer_bytes = metrics.active_buffer_bytes,
+                .peak_active_buffer_bytes = metrics.peak_active_buffer_bytes,
+                .cached_buffer_count = metrics.cached_buffer_count,
+                .cached_buffer_bytes = metrics.cached_buffer_bytes,
+                .dispatches = metrics.kernel_dispatches,
+                .synchronizations = metrics.submitted_command_buffers,
+                .reused_buffer_allocations = metrics.reused_buffer_allocations,
+                .total_gpu_seconds = metrics.total_gpu_seconds,
+                .last_gpu_seconds = metrics.last_gpu_seconds,
+            };
         }
     } else if (choice == CLI_BACKEND_CUDA) {
         llm_cuda_backend_metrics metrics = {0};
         if (llm_backend_cuda_get_metrics(backend, &metrics) == LLM_OK) {
-            *out_active_bytes = metrics.active_buffer_bytes;
-            *out_peak_bytes = metrics.peak_active_buffer_bytes;
-            *out_gpu_seconds = metrics.total_gpu_seconds;
+            *out_metrics = (cli_accelerator_metrics){
+                .active_buffer_count = metrics.active_buffer_count,
+                .active_buffer_bytes = metrics.active_buffer_bytes,
+                .peak_active_buffer_bytes = metrics.peak_active_buffer_bytes,
+                .cached_buffer_count = metrics.cached_buffer_count,
+                .cached_buffer_bytes = metrics.cached_buffer_bytes,
+                .dispatches = metrics.kernel_launches,
+                .synchronizations = metrics.synchronizations,
+                .reused_buffer_allocations = metrics.reused_buffer_allocations,
+                .total_gpu_seconds = metrics.total_gpu_seconds,
+                .last_gpu_seconds = metrics.last_gpu_seconds,
+            };
         }
     }
 }
@@ -953,6 +1009,7 @@ static int run_model_train(int argc, char **argv) {
     size_t validation_every = 0U;
     size_t validation_batches = 100U;
     cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
     int has_model_options = 0;
     if (parse_positive_size(argv[4], &steps) == 0) {
         fprintf(stderr, "STEPS must be a positive integer supported by this system.\n");
@@ -1028,6 +1085,7 @@ static int run_model_train(int argc, char **argv) {
             has_model_options = 1;
         } else if (strcmp(option, "--backend") == 0) {
             parsed = parse_backend_choice(value, &backend_choice);
+            backend_was_explicit = parsed;
         } else if (strcmp(option, "--checkpoint") == 0 && checkpoint_path == NULL) {
             checkpoint_path = value;
             parsed = value[0] != '\0';
@@ -1054,6 +1112,9 @@ static int run_model_train(int argc, char **argv) {
             fprintf(stderr, "Invalid model training option: %s %s\n", option, value);
             return 1;
         }
+    }
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
+        return 1;
     }
     if (resume_path != NULL && has_model_options != 0) {
         fprintf(stderr,
@@ -1260,27 +1321,47 @@ static int run_model_train(int argc, char **argv) {
         const unsigned long long global_step = lm_trainer_step_count(trainer);
         const double tokens_per_second =
             step_seconds > 0.0 ? (double)tokens_per_update / step_seconds : 0.0;
-        size_t device_active_bytes = 0U;
-        size_t device_peak_bytes = 0U;
-        double device_gpu_seconds = 0.0;
-        read_accelerator_metrics(backend_choice, backend, &device_active_bytes, &device_peak_bytes,
-                                 &device_gpu_seconds);
+        cli_accelerator_metrics accelerator_metrics = {0};
+        read_accelerator_metrics(backend_choice, backend, &accelerator_metrics);
         const uint64_t tokens_seen = global_step <= UINT64_MAX / (uint64_t)tokens_per_update
                                          ? (uint64_t)global_step * (uint64_t)tokens_per_update
                                          : UINT64_MAX;
         if (log_file != NULL) {
-            fprintf(log_file,
-                    "{\"schema\":\"llm-lab-training-event-v1\",\"event\":\"train\","
-                    "\"step\":%llu,\"tokens\":%" PRIu64 ",\"loss\":%.9g,"
-                    "\"learning_rate\":%.9g,\"gradient_norm\":%.9g,"
-                    "\"step_seconds\":%.9g,\"steps_per_second\":%.9g,"
-                    "\"tokens_per_second\":%.9g,"
-                    "\"metal_active_bytes\":%zu,\"metal_peak_active_bytes\":%zu,"
-                    "\"metal_total_gpu_seconds\":%.9g}\n",
-                    global_step, tokens_seen, loss, lm_trainer_learning_rate(trainer),
-                    lm_trainer_gradient_norm(trainer), step_seconds,
-                    step_seconds > 0.0 ? 1.0 / step_seconds : 0.0, tokens_per_second,
-                    device_active_bytes, device_peak_bytes, device_gpu_seconds);
+            fprintf(
+                log_file,
+                "{\"schema\":\"llm-lab-training-event-v1\",\"event\":\"train\","
+                "\"step\":%llu,\"tokens\":%" PRIu64 ",\"loss\":%.9g,"
+                "\"learning_rate\":%.9g,\"gradient_norm\":%.9g,"
+                "\"step_seconds\":%.9g,\"steps_per_second\":%.9g,"
+                "\"tokens_per_second\":%.9g,"
+                "\"accelerator_backend\":\"%s\","
+                "\"accelerator_device\":\"%s\","
+                "\"accelerator_active_buffer_count\":%zu,"
+                "\"accelerator_active_bytes\":%zu,"
+                "\"accelerator_peak_active_bytes\":%zu,"
+                "\"accelerator_cached_buffer_count\":%zu,"
+                "\"accelerator_cached_bytes\":%zu,"
+                "\"accelerator_dispatches\":%llu,"
+                "\"accelerator_synchronizations\":%llu,"
+                "\"accelerator_reused_buffer_allocations\":%llu,"
+                "\"accelerator_total_gpu_seconds\":%.9g,"
+                "\"accelerator_last_gpu_seconds\":%.9g,"
+                "\"metal_active_bytes\":%zu,\"metal_peak_active_bytes\":%zu,"
+                "\"metal_total_gpu_seconds\":%.9g}\n",
+                global_step, tokens_seen, loss, lm_trainer_learning_rate(trainer),
+                lm_trainer_gradient_norm(trainer), step_seconds,
+                step_seconds > 0.0 ? 1.0 / step_seconds : 0.0, tokens_per_second,
+                backend_choice_name(backend_choice),
+                backend_choice_device_name(backend_choice, backend),
+                accelerator_metrics.active_buffer_count, accelerator_metrics.active_buffer_bytes,
+                accelerator_metrics.peak_active_buffer_bytes,
+                accelerator_metrics.cached_buffer_count, accelerator_metrics.cached_buffer_bytes,
+                accelerator_metrics.dispatches, accelerator_metrics.synchronizations,
+                accelerator_metrics.reused_buffer_allocations,
+                accelerator_metrics.total_gpu_seconds, accelerator_metrics.last_gpu_seconds,
+                accelerator_metrics.active_buffer_bytes,
+                accelerator_metrics.peak_active_buffer_bytes,
+                accelerator_metrics.total_gpu_seconds);
         }
         const int final_requested_step = index + 1U == steps || model_training_interrupted != 0;
         const int should_validate =
@@ -1485,6 +1566,7 @@ static int run_model_generate(int argc, char **argv) {
     cli_generation_options options = {
         .temperature = 0.8F, .repetition_penalty = 1.1F, .top_k = 40U, .random_state = UINT64_C(1)};
     cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
     for (int index = 7; index < argc; index += 2) {
         if (index + 1 >= argc) {
             fprintf(stderr, "Model generation options require a value.\n");
@@ -1504,11 +1586,15 @@ static int run_model_generate(int argc, char **argv) {
             parsed = parse_seed(value, &options.random_state);
         } else if (strcmp(option, "--backend") == 0) {
             parsed = parse_backend_choice(value, &backend_choice);
+            backend_was_explicit = parsed;
         }
         if (parsed == 0) {
             fprintf(stderr, "Invalid model generation option: %s %s\n", option, value);
             return 1;
         }
+    }
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
+        return 1;
     }
     if (options.random_state == 0U) {
         options.random_state = UINT64_C(0x9e3779b97f4a7c15);
@@ -1654,8 +1740,10 @@ static int run_model_evaluate(int argc, char **argv) {
     size_t steps = 0U;
     size_t batch_size = 2U;
     uint64_t seed = UINT64_C(1);
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
     if (parse_positive_size(argv[5], &steps) == 0) {
-        fprintf(stderr, "STEPS must be a positive integer supported by this system.\n");
+        fprintf(stderr, "BATCHES must be a positive integer supported by this system.\n");
         return 1;
     }
     for (int index = 6; index < argc; index += 2) {
@@ -1668,12 +1756,18 @@ static int run_model_evaluate(int argc, char **argv) {
             parsed = parse_positive_size(argv[index + 1], &batch_size);
         } else if (strcmp(argv[index], "--seed") == 0) {
             parsed = parse_seed(argv[index + 1], &seed);
+        } else if (strcmp(argv[index], "--backend") == 0) {
+            parsed = parse_backend_choice(argv[index + 1], &backend_choice);
+            backend_was_explicit = parsed;
         }
         if (parsed == 0) {
             fprintf(stderr, "Invalid model evaluation option: %s %s\n", argv[index],
                     argv[index + 1]);
             return 1;
         }
+    }
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
+        return 1;
     }
     cli_model_dataset_open_progress dataset_progress = {
         .started_at = current_time_seconds(),
@@ -1690,7 +1784,7 @@ static int run_model_evaluate(int argc, char **argv) {
     }
     llm_backend *backend = NULL;
     lm_model *model = NULL;
-    llm_status status = llm_backend_cpu_create(&backend);
+    llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, argv[4], &model, NULL);
     }
@@ -1701,85 +1795,27 @@ static int run_model_evaluate(int argc, char **argv) {
     if (status == LLM_OK && config.vocabulary_size != lm_dataset_model_vocabulary_size(dataset)) {
         status = LLM_INVALID_SHAPE;
     }
-    if (status != LLM_OK || batch_size > SIZE_MAX / config.context_length) {
+    if (status != LLM_OK) {
         fprintf(stderr, "Loading evaluation model failed: %s\n", llm_status_string(status));
         lm_model_destroy(model);
         llm_backend_destroy(backend);
         lm_dataset_close(dataset);
         return 1;
     }
-    const size_t token_count = batch_size * config.context_length;
-    token_id *host_inputs = malloc(token_count * sizeof(*host_inputs));
-    token_id *host_targets = malloc(token_count * sizeof(*host_targets));
-    const size_t input_shape[] = {batch_size, config.context_length};
-    const size_t target_shape[] = {token_count};
-    const size_t logits_shape[] = {token_count, config.vocabulary_size};
-    llm_tensor inputs = {0};
-    llm_tensor targets = {0};
-    llm_tensor logits = {0};
-    llm_tensor loss = {0};
-    lm_batcher *batcher = NULL;
-    if (host_inputs == NULL || host_targets == NULL) {
-        status = LLM_ALLOCATION_FAILED;
-    }
-    if (status == LLM_OK && lm_batcher_create(dataset, batch_size, config.context_length, seed,
-                                              &batcher) != LM_DATASET_OK) {
-        status = LLM_BACKEND_ERROR;
-    }
+    fprintf(stderr, "Valutazione modello su %s: %zu batch...\n",
+            backend_choice_name(backend_choice), steps);
+    float mean_loss = 0.0F;
+    status = lm_model_evaluate_validation(model, dataset, batch_size, steps, seed, &mean_loss);
     if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &inputs);
-    }
-    if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_U32, 1U, target_shape, &targets);
-    }
-    if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits);
-    }
-    if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &loss);
-    }
-    double loss_sum = 0.0;
-    fprintf(stderr, "Valutazione modello: %zu batch...\n", steps);
-    for (size_t index = 0U; status == LLM_OK && index < steps; ++index) {
-        if (lm_batcher_next(batcher, host_inputs, host_targets) != LM_DATASET_OK) {
-            status = LLM_BACKEND_ERROR;
-            break;
-        }
-        status =
-            llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
-        if (status == LLM_OK) {
-            status = llm_tensor_write(backend, &targets, host_targets,
-                                      token_count * sizeof(*host_targets));
-        }
-        if (status == LLM_OK) {
-            status = lm_model_forward(model, &inputs, &logits);
-        }
-        if (status == LLM_OK) {
-            status = llm_cross_entropy_forward(backend, &logits, &targets, &loss);
-        }
-        float batch_loss = 0.0F;
-        if (status == LLM_OK) {
-            status = llm_tensor_read(backend, &loss, &batch_loss, sizeof(batch_loss));
-        }
-        if (status == LLM_OK) {
-            loss_sum += batch_loss;
-        }
-    }
-    if (status == LLM_OK) {
-        const double mean_loss = loss_sum / (double)steps;
         printf("{\"schema\":\"llm-lab-model-evaluation-v1\",\"batches\":%zu,"
-               "\"loss\":%.8f,\"perplexity\":%.8f,\"layer_count\":%zu}\n",
-               steps, mean_loss, exp(mean_loss), config.layer_count);
+               "\"loss\":%.8f,\"perplexity\":%.8f,\"layer_count\":%zu,"
+               "\"backend\":\"%s\",\"device\":\"%s\"}\n",
+               steps, (double)mean_loss, exp((double)mean_loss), config.layer_count,
+               backend_choice_name(backend_choice),
+               backend_choice_device_name(backend_choice, backend));
     } else {
         fprintf(stderr, "Model evaluation failed: %s\n", llm_status_string(status));
     }
-    lm_batcher_destroy(batcher);
-    llm_tensor_destroy(&loss);
-    llm_tensor_destroy(&logits);
-    llm_tensor_destroy(&targets);
-    llm_tensor_destroy(&inputs);
-    free(host_targets);
-    free(host_inputs);
     lm_model_destroy(model);
     llm_backend_destroy(backend);
     lm_dataset_close(dataset);

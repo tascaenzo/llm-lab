@@ -3,6 +3,7 @@
 import json
 import hashlib
 import math
+import os
 import struct
 import subprocess
 import sys
@@ -10,8 +11,29 @@ import tempfile
 from pathlib import Path
 
 
-def run(command, expected_returncode=0):
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
+def run(
+    command,
+    expected_returncode=0,
+    *,
+    cwd=None,
+    environment=None,
+    use_default_backend=True,
+):
+    active_environment = os.environ.copy()
+    if use_default_backend:
+        active_environment["LLM_LAB_BACKEND"] = "cpu"
+    else:
+        active_environment.pop("LLM_LAB_BACKEND", None)
+    if environment is not None:
+        active_environment.update(environment)
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        env=active_environment,
+    )
     if result.returncode != expected_returncode:
         raise AssertionError(
             f"comando {command!r}: atteso {expected_returncode}, ottenuto {result.returncode}\n"
@@ -331,6 +353,61 @@ def main():
             evaluated["loss"]
         ):
             raise AssertionError(evaluated)
+        if evaluated["backend"] != "cpu" or not evaluated["device"]:
+            raise AssertionError(evaluated)
+
+        environment_root = root / "environment"
+        environment_root.mkdir()
+        environment_file = environment_root / ".env"
+        environment_file.write_text("LLM_LAB_BACKEND=cpu\n", encoding="utf-8")
+        evaluation_command = [
+            str(cli),
+            "model",
+            "evaluate",
+            f"{prefix}.validation.llmdat",
+            str(generation_checkpoint),
+            "1",
+            "--batch-size",
+            "1",
+        ]
+        from_dotenv = json.loads(
+            run(
+                evaluation_command,
+                cwd=environment_root,
+                use_default_backend=False,
+            ).stdout
+        )
+        if from_dotenv["backend"] != "cpu":
+            raise AssertionError(from_dotenv)
+
+        environment_file.write_text("LLM_LAB_BACKEND=invalid\n", encoding="utf-8")
+        invalid_environment = run(
+            evaluation_command,
+            expected_returncode=1,
+            cwd=environment_root,
+            use_default_backend=False,
+        )
+        if "Invalid LLM_LAB_BACKEND" not in invalid_environment.stderr:
+            raise AssertionError(invalid_environment.stderr)
+        forced_cpu = json.loads(
+            run(
+                [*evaluation_command, "--backend", "cpu"],
+                cwd=environment_root,
+                use_default_backend=False,
+            ).stdout
+        )
+        if forced_cpu["backend"] != "cpu":
+            raise AssertionError(forced_cpu)
+        exported_cpu = json.loads(
+            run(
+                evaluation_command,
+                cwd=environment_root,
+                environment={"LLM_LAB_BACKEND": "cpu"},
+                use_default_backend=False,
+            ).stdout
+        )
+        if exported_cpu["backend"] != "cpu":
+            raise AssertionError(exported_cpu)
 
         overfit_dataset = root / "overfit.train.llmdat"
         write_tiny_training_dataset(overfit_dataset)
@@ -407,6 +484,7 @@ def main():
             raise AssertionError((continuous, resumed))
 
         scheduled_checkpoint = root / "scheduled.llmckpt"
+        scheduled_log = root / "scheduled-training.jsonl"
         scheduled_result = run(
             [
                 str(cli),
@@ -438,6 +516,8 @@ def main():
                 str(scheduled_checkpoint),
                 "--checkpoint-every",
                 "1",
+                "--log",
+                str(scheduled_log),
             ]
         )
         scheduled = json.loads(scheduled_result.stdout)
@@ -452,6 +532,33 @@ def main():
             raise AssertionError(scheduled)
         if 'totale 75.00% (step 3/4)' not in scheduled_result.stderr:
             raise AssertionError(f"avanzamento totale assente:\n{scheduled_result.stderr}")
+        train_events = [
+            json.loads(line)
+            for line in scheduled_log.read_text(encoding="utf-8").splitlines()
+            if json.loads(line).get("event") == "train"
+        ]
+        if len(train_events) != 3:
+            raise AssertionError(f"eventi di training mancanti: {train_events}")
+        telemetry = train_events[-1]
+        required_telemetry = {
+            "accelerator_backend",
+            "accelerator_device",
+            "accelerator_active_buffer_count",
+            "accelerator_active_bytes",
+            "accelerator_peak_active_bytes",
+            "accelerator_cached_buffer_count",
+            "accelerator_cached_bytes",
+            "accelerator_dispatches",
+            "accelerator_synchronizations",
+            "accelerator_reused_buffer_allocations",
+            "accelerator_total_gpu_seconds",
+            "accelerator_last_gpu_seconds",
+            "metal_active_bytes",
+            "metal_peak_active_bytes",
+            "metal_total_gpu_seconds",
+        }
+        if telemetry.get("accelerator_backend") != "cpu" or not required_telemetry <= telemetry.keys():
+            raise AssertionError(f"telemetria acceleratore incompleta: {telemetry}")
         scheduled_resumed = json.loads(
             run(
                 [

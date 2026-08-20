@@ -69,24 +69,38 @@ static llm_status cuda_consume_flags(llm_cuda_context *context) {
 }
 
 static llm_status cuda_synchronize_stream(llm_cuda_context *context) {
-    if (context->events_enabled != 0) {
-        (void)cudaEventRecord(context->stop_event, context->stream);
+    const int measure_interval = context->events_enabled != 0 && context->timing_active != 0;
+    if (measure_interval != 0 &&
+        cudaEventRecord(context->stop_event, context->stream) != cudaSuccess) {
+        context->events_enabled = 0;
+        context->timing_active = 0;
     }
     const cudaError_t error = cudaStreamSynchronize(context->stream);
     ++context->metrics.synchronizations;
     if (error != cudaSuccess) {
         return cuda_report(error, "stream synchronize");
     }
-    if (context->events_enabled != 0) {
+    if (measure_interval != 0 && context->events_enabled != 0) {
         float milliseconds = 0.0F;
         if (cudaEventElapsedTime(&milliseconds, context->start_event, context->stop_event) ==
             cudaSuccess) {
             context->metrics.last_gpu_seconds = (double)milliseconds / 1000.0;
             context->metrics.total_gpu_seconds += context->metrics.last_gpu_seconds;
         }
-        (void)cudaEventRecord(context->start_event, context->stream);
     }
+    context->timing_active = 0;
     return LLM_OK;
+}
+
+void llm_cuda_start_timing(llm_cuda_context *context) {
+    if (context == NULL || context->events_enabled == 0 || context->timing_active != 0) {
+        return;
+    }
+    if (cudaEventRecord(context->start_event, context->stream) == cudaSuccess) {
+        context->timing_active = 1;
+    } else {
+        context->events_enabled = 0;
+    }
 }
 
 llm_status llm_cuda_finish(llm_cuda_context *context) {
@@ -282,16 +296,24 @@ llm_status llm_cuda_copy(void *opaque_context, const void *source, void *destina
         if (source_buffer->byte_count < byte_count) {
             return LLM_INVALID_ARGUMENT;
         }
-        return cuda_report(
+        const llm_status status = cuda_report(
             cudaMemcpy(destination, source_buffer->pointer, byte_count, cudaMemcpyDeviceToHost),
             "device to host copy");
+        if (status == LLM_OK && context->batch_active != 0) {
+            llm_cuda_start_timing(context);
+        }
+        return status;
     }
 
     llm_cuda_buffer *destination_buffer = static_cast<llm_cuda_buffer *>(destination);
     if (destination_buffer->byte_count < byte_count) {
         return LLM_INVALID_ARGUMENT;
     }
-    return cuda_report(
+    const llm_status status = cuda_report(
         cudaMemcpy(destination_buffer->pointer, source, byte_count, cudaMemcpyHostToDevice),
         "host to device copy");
+    if (status == LLM_OK && context->batch_active != 0) {
+        llm_cuda_start_timing(context);
+    }
+    return status;
 }

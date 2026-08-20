@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
+cd "${RUNPOD_PROJECT_ROOT}"
+
 : "${RUNPOD_SSH_HOST:?Set RUNPOD_SSH_HOST to user@host}"
 : "${RUNPOD_SSH_PORT:?Set RUNPOD_SSH_PORT to the RunPod SSH port}"
 

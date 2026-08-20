@@ -68,11 +68,12 @@ supportati con un solo comando:
 
 ```sh
 cmake --build --preset release --target runtime_benchmark_report
-./build/release/utils/benchmarks/runtime_benchmark_report
+./build/release/utils/benchmarks/runtime_benchmark_report --backend all
 ```
 
 Sono disponibili anche `--quick` per un controllo breve e `--full` per misure
-piu' lunghe e stabili.
+piu' lunghe e stabili. Senza `--backend`, benchmark e report usano il backend
+predefinito del progetto descritto sotto.
 
 La suite rappresentativa per validare le prestazioni dopo una modifica dura
 indicativamente 40–70 secondi, mostra l'avanzamento di ogni test e termina con
@@ -114,6 +115,37 @@ make run
 make test
 make check-format
 ```
+
+## Configurazione locale e backend
+
+Copia il file di esempio nella root e scegli il backend della macchina:
+
+```sh
+cp .env.example .env
+# Nel file: metal su Apple Silicon, cuda su NVIDIA, cpu senza acceleratore.
+```
+
+`llm-lab`, i benchmark e le utility di profiling caricano automaticamente il
+`.env`. Per usare un file diverso imposta `LLM_LAB_ENV_FILE=/percorso/file`.
+La precedenza e' intenzionalmente unica in tutti i flussi:
+
+```text
+--backend nel comando > variabile esportata > .env > cpu
+```
+
+I valori validi per `LLM_LAB_BACKEND` sono `cpu`, `metal` e `cuda`; i benchmark
+accettano anche `all`. Un backend configurato ma non disponibile produce un
+errore, senza fallback silenzioso sulla CPU. Per forzare una singola esecuzione:
+
+```sh
+./build/release/llm-lab model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt 100 \
+  --backend cpu
+```
+
+Il `.env` e' ignorato da Git; `.env.example` resta invece versionato e senza
+segreti. Iperparametri e percorsi dell'esperimento rimangono nel comando o nel
+checkpoint, mentre il backend e le credenziali dipendenti dalla macchina stanno
+nel `.env`.
 
 ## Addestrare un tokenizer
 
