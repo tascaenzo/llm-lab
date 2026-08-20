@@ -86,6 +86,13 @@ riprendere, riavvialo con le stesse variabili; il comando riparte dal checkpoint
 piu' recente. Le variabili configurate sul Pod sono descritte nella documentazione
 RunPod, e i file fuori da `/workspace` non sono persistenti.
 
+Al termine di una sessione riuscita il container resta inattivo per evitare che
+RunPod riavvii automaticamente altri step. Il Pod resta comunque a pagamento
+finche' e' in esecuzione: scarica i risultati e fermalo esplicitamente.
+
+La configurazione predefinita esegue 19.500 step, circa un'ora sulla RTX 4090
+misurata durante il primo test, con checkpoint e validazione ogni 5.000 step.
+
 ## Profilare prima di spendere
 
 Imposta `LLM_LAB_PROFILE_CUDA=1` quando crei un Pod diagnostico. Dopo il

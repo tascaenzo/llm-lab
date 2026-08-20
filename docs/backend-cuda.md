@@ -1,9 +1,8 @@
 # Backend CUDA — specifica
 
-**Stato:** implementato e compilabile su host con toolkit CUDA; la prima
-esecuzione di validazione su GPU reale non e' ancora stata fatta. Il backend
-riempie l'intera `llm_backend_ops` e non richiede modifiche a modello, trainer,
-dataset o checkpoint.
+**Stato:** implementato, compilabile su host con toolkit CUDA e verificato su
+una RTX 4090 reale. Il backend riempie l'intera `llm_backend_ops` e non
+richiede modifiche a modello, trainer, dataset o checkpoint.
 
 Il backend CUDA esiste per una ragione operativa precisa: l'addestramento lungo
 di [Italiano-Base-75M](italiano-base-75m.md) sui 2,5 miliardi di token dello
@@ -156,13 +155,45 @@ La parita' non e' e non puo' essere bit-exact: `scatter_add_rows` e i gradienti
 di attention usano atomiche, quindi l'ordine di riduzione varia fra esecuzioni.
 Vale gia' per Metal.
 
+## Primo training CUDA reale — 20 agosto 2026
+
+La prima sessione reale e' stata eseguita su una singola RTX 4090 RunPod. La
+suite `runtime.cuda_backend` ha completato con successo sulla GPU fisica; il
+preflight ha inoltre eseguito un update su una copia del checkpoint e ha
+verificato che il file sorgente restasse immutato. Questo conferma sia il
+contratto numerico del backend sia la ripresa sicura dei checkpoint Metal su
+CUDA.
+
+La sessione di training ha ripreso `Italiano-Base-75M` dallo step 86.044 e ha
+concluso 1.000 update allo step 87.044. Ha salvato il checkpoint latest e un
+nuovo best checkpoint, con validation loss `2.88134766` e perplexity
+`17.83829688`.
+
+| Misura | Metal, Mac mini M4 | CUDA, RTX 4090 | Confronto |
+|---|---:|---:|---|
+| Velocita' training osservata | ~0,64 step/s | ~5,72 step/s | ~8,9x piu' veloce su CUDA |
+| Ultima validation registrata | loss 2,90314; PPL 18,23129 (step 63.044) | loss 2,88135; PPL 17,83830 (step 87.044) | miglioramento coerente, ma non e' un benchmark paritario: cambiano gli step del modello |
+| Configurazione del modello | 75,01M, F32, contesto 512, accumulo 2 | identica | checkpoint e dataset sono portabili senza conversione |
+
+Il confronto di velocita' usa la stessa configurazione canonica e rappresenta
+il guadagno operativo utile per il run lungo. Le due validation non vanno invece
+lette come confronto Metal contro CUDA: la seconda proviene da un checkpoint
+addestrato per altri 24.000 update. Il suo scopo e' confermare che il passaggio
+di backend non ha interrotto il miglioramento del modello.
+
+Al termine di una sessione completata, l'entrypoint RunPod ora mantiene il
+container inattivo invece di riavviare automaticamente lo stesso training. Il
+Pod continua comunque a essere fatturato finche' non viene fermato
+esplicitamente; checkpoint, log e dataset restano nel volume `/workspace`.
+
 ## Lavoro successivo
 
 Da fare dopo la prima esecuzione su GPU reale, guidato dalla misura e non
 dall'intuizione:
 
-1. attention con GEMM batched cuBLAS piu' un kernel di softmax mascherato, al
+1. profilare una sessione lunga reale e registrare le metriche CUDA per step
+   nel log JSONL, prima di cambiare i kernel;
+2. attention con GEMM batched cuBLAS piu' un kernel di softmax mascherato, al
    posto del kernel diretto;
-2. valutazione del costo effettivo della scansione di finitezza per operazione;
-3. vettorizzazione `float4` sui kernel elementwise, che sono bandwidth-bound;
-4. metriche CUDA per step nel log JSONL di training.
+3. valutazione del costo effettivo della scansione di finitezza per operazione;
+4. vettorizzazione `float4` sui kernel elementwise, che sono bandwidth-bound.
