@@ -55,10 +55,10 @@ write_marker() {
 }
 
 require_positive_integer() {
-    local name="$1"
+    local variable_name="$1"
     local value="$2"
     if ! [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
-        printf 'RunPod pipeline: %s must be a positive integer.\n' "${name}" >&2
+        printf 'RunPod pipeline: %s must be a positive integer.\n' "${variable_name}" >&2
         exit 2
     fi
 }

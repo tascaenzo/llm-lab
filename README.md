@@ -144,8 +144,9 @@ errore, senza fallback silenzioso sulla CPU. Per forzare una singola esecuzione:
 
 Il `.env` e' ignorato da Git; `.env.example` resta invece versionato e senza
 segreti. Iperparametri e percorsi dell'esperimento rimangono nel comando o nel
-checkpoint, mentre il backend e le credenziali dipendenti dalla macchina stanno
-nel `.env`.
+checkpoint, mentre il backend dipendente dalla macchina sta nel `.env`. Le
+variabili del deploy RunPod stanno separatamente in `deploy/runpod/.env`:
+consulta `deploy/runpod/README.md` per quella pipeline.
 
 ## Addestrare un tokenizer
 

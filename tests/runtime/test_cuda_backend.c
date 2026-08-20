@@ -109,16 +109,20 @@ static int test_matmul_transposes(llm_backend *backend) {
     const size_t a_shape[] = {2U, 3U};
     const size_t b_shape[] = {3U, 2U};
     const size_t c_shape[] = {2U, 2U};
-    llm_tensor a = {0}, b = {0}, c = {0};
+    llm_tensor a = {0}, a_copy = {0}, b = {0}, b_copy = {0}, c = {0};
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, a_shape, &a) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, a_shape, &a_copy) == LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, b_shape, &b) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, b_shape, &b_copy) == LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, c_shape, &c) == LLM_OK);
 
     /* A = [[1,2,3],[4,5,6]], B = [[1,2],[3,4],[5,6]] */
     const float a_values[] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
     const float b_values[] = {1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
     TEST_ASSERT(llm_tensor_write(backend, &a, a_values, sizeof(a_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &a_copy, a_values, sizeof(a_values)) == LLM_OK);
     TEST_ASSERT(llm_tensor_write(backend, &b, b_values, sizeof(b_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &b_copy, b_values, sizeof(b_values)) == LLM_OK);
 
     float result[4] = {0};
     TEST_ASSERT(llm_matmul(backend, &a, &b, &c) == LLM_OK);
@@ -129,14 +133,14 @@ static int test_matmul_transposes(llm_backend *backend) {
 
     /* A.A^T = [[14,32],[32,77]] */
     const llm_matmul_options transpose_right = {.transpose_left = 0, .transpose_right = 1};
-    TEST_ASSERT(llm_matmul_ex(backend, &a, &a, &transpose_right, &c) == LLM_OK);
+    TEST_ASSERT(llm_matmul_ex(backend, &a, &a_copy, &transpose_right, &c) == LLM_OK);
     TEST_ASSERT(llm_tensor_read(backend, &c, result, sizeof(result)) == LLM_OK);
     TEST_ASSERT(close_enough(result[0], 14.0F) && close_enough(result[1], 32.0F));
     TEST_ASSERT(close_enough(result[2], 32.0F) && close_enough(result[3], 77.0F));
 
     /* B^T.B = [[35,44],[44,56]] */
     const llm_matmul_options transpose_left = {.transpose_left = 1, .transpose_right = 0};
-    TEST_ASSERT(llm_matmul_ex(backend, &b, &b, &transpose_left, &c) == LLM_OK);
+    TEST_ASSERT(llm_matmul_ex(backend, &b, &b_copy, &transpose_left, &c) == LLM_OK);
     TEST_ASSERT(llm_tensor_read(backend, &c, result, sizeof(result)) == LLM_OK);
     TEST_ASSERT(close_enough(result[0], 35.0F) && close_enough(result[1], 44.0F));
     TEST_ASSERT(close_enough(result[2], 44.0F) && close_enough(result[3], 56.0F));
@@ -149,7 +153,9 @@ static int test_matmul_transposes(llm_backend *backend) {
     TEST_ASSERT(close_enough(result[2], 28.0F) && close_enough(result[3], 64.0F));
 
     llm_tensor_destroy(&c);
+    llm_tensor_destroy(&b_copy);
     llm_tensor_destroy(&b);
+    llm_tensor_destroy(&a_copy);
     llm_tensor_destroy(&a);
     return EXIT_SUCCESS;
 }

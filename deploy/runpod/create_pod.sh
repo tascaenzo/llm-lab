@@ -32,7 +32,11 @@ if ! command -v runpodctl >/dev/null 2>&1; then
     exit 2
 fi
 
-runpodctl config --apiKey "${RUNPOD_API_KEY}"
+if ! runpodctl user >/dev/null; then
+    printf 'RunPod authentication failed. Run ./deploy/runpod/setup.sh once, then retry.\n' >&2
+    exit 2
+fi
+
 runpodctl pod create \
     --name "${name}" \
     --gpu-id "${gpu}" \
