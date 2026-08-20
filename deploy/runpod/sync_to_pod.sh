@@ -10,18 +10,31 @@ cd "${RUNPOD_PROJECT_ROOT}"
 readonly remote_root="${RUNPOD_REMOTE_ROOT:-/workspace/llm-lab}"
 readonly model_dir=artifacts/models/italiano-base-75m
 readonly dataset_dir=data/derived/italiano-v3/lm
+readonly ssh_identity_file="${RUNPOD_SSH_IDENTITY_FILE:-${HOME}/.runpod/ssh/runpodctl-ssh-key}"
 
-rsync --archive --compress --partial --append-verify --progress \
-    -e "ssh -p ${RUNPOD_SSH_PORT}" \
+if [[ ! -f "${ssh_identity_file}" ]]; then
+    printf 'RunPod pipeline: SSH identity file does not exist: %s\n' "${ssh_identity_file}" >&2
+    printf 'Run ./deploy/runpod/setup.sh, or set RUNPOD_SSH_IDENTITY_FILE.\n' >&2
+    exit 2
+fi
+
+readonly ssh_transport="$(printf 'ssh -i %q -o IdentitiesOnly=yes -p %q' "${ssh_identity_file}" "${RUNPOD_SSH_PORT}")"
+readonly ssh_options=(-i "${ssh_identity_file}" -o IdentitiesOnly=yes -p "${RUNPOD_SSH_PORT}")
+
+ssh "${ssh_options[@]}" "${RUNPOD_SSH_HOST}" \
+    "mkdir -p '${remote_root}/${dataset_dir}' '${remote_root}/${model_dir}'"
+
+runpod_rsync \
+    -e "${ssh_transport}" \
     "${dataset_dir}/" \
     "${RUNPOD_SSH_HOST}:${remote_root}/${dataset_dir}/"
-rsync --archive --compress --partial --append-verify --progress \
-    -e "ssh -p ${RUNPOD_SSH_PORT}" \
+runpod_rsync \
+    -e "${ssh_transport}" \
     "${model_dir}/latest.llmckpt" \
     "${model_dir}/best.llmckpt" \
     "${model_dir}/best.llmckpt.metrics.json" \
     "${model_dir}/training.jsonl" \
     "${RUNPOD_SSH_HOST}:${remote_root}/${model_dir}/"
 
-ssh -p "${RUNPOD_SSH_PORT}" "${RUNPOD_SSH_HOST}" \
+ssh "${ssh_options[@]}" "${RUNPOD_SSH_HOST}" \
     "mkdir -p '${remote_root}' && touch '${remote_root}/.llm-lab-inputs-ready'"

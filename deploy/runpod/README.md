@@ -4,10 +4,11 @@ Questa pipeline usa una RTX 4090 singola (CUDA architecture `89`), conserva
 dataset, checkpoint e log nel volume persistente `/workspace`, ed esegue sempre
 la suite `runtime.cuda_backend` prima di modificare un checkpoint.
 
-L'immagine e lo script di creazione impostano `LLM_LAB_BACKEND=cuda`. Il valore
-locale `LLM_LAB_BACKEND=metal` eventualmente presente nel `.env` del Mac non
-viene trasferito al Pod. L'entrypoint rifiuta qualsiasi backend diverso da CUDA,
-cosi' non puo' partire per errore un training cloud sulla CPU.
+L'immagine e lo script di creazione impostano `LLM_LAB_BACKEND=cuda`. La
+configurazione locale in `.env` e quella del deploy in `deploy/runpod/.env` sono
+separate: la prima non viene letta dalla pipeline cloud. L'entrypoint rifiuta
+qualsiasi backend diverso da CUDA, cosi' non puo' partire per errore un training
+cloud sulla CPU.
 
 Il checkpoint Metal e il dataset sono portabili: la pipeline riprende
 `latest.llmckpt` con il backend CUDA configurato nell'ambiente, senza conversione e senza modificare gli
@@ -16,45 +17,58 @@ iperparametri salvati nel checkpoint.
 ## 1. Pubblicare l'immagine
 
 La workflow manuale `.github/workflows/runpod-image.yml` costruisce e pubblica
-l'immagine in GHCR. Avviala dal branch `feat/cuda-backend`; il tag da usare su
-RunPod e' `ghcr.io/tascaenzo/llm-lab-cuda:latest`.
+l'immagine in GHCR. Dalla pagina Actions avvia `Build RunPod CUDA image` e
+seleziona il branch `feat/cuda-backend`; il tag da usare su RunPod e'
+`ghcr.io/tascaenzo/llm-lab-cuda:latest`.
 
 L'immagine non contiene dati, checkpoint o segreti: `.dockerignore` li esclude.
 
 ## 2. Creare il Pod
 
-Installa e configura `runpodctl`, copia `.env.example` in `.env` e compila i
-valori locali. Gli script caricano automaticamente il `.env` dalla root, anche
-se vengono lanciati da un'altra directory; variabili gia' esportate hanno
-precedenza. Quindi crea un Pod on-demand con
+Installa e configura `runpodctl`, copia `deploy/runpod/.env.example` in
+`deploy/runpod/.env` e compila i valori cloud. Gli script caricano questo file
+automaticamente, anche se vengono lanciati da un'altra directory; variabili gia'
+esportate hanno precedenza. Quindi crea un Pod on-demand con
 volume da 40 GB (gli input attuali occupano circa 14 GB prima di build e log):
 
 ```sh
-cp .env.example .env
-# Modifica .env; per il primo test imposta LLM_LAB_PROFILE_CUDA=1.
-bash deploy/runpod/create_pod.sh
+cp deploy/runpod/.env.example deploy/runpod/.env
+# Modifica deploy/runpod/.env; per il primo test imposta LLM_LAB_PROFILE_CUDA=1.
+./deploy/runpod/setup.sh
+./deploy/runpod/create_pod.sh
 ```
+
+Per un file di configurazione cloud in un'altra posizione usa
+`RUNPOD_ENV_FILE=/percorso/file`; `LLM_LAB_ENV_FILE` resta invece riservata ai
+comandi locali.
 
 La chiave non viene scritta nel repository. Cambia `RUNPOD_GPU_ID` solo con una
 GPU la cui CUDA architecture sia supportata dall'immagine; il default RTX 4090
 usa architecture `89`. Prima di creare il Pod, aggiungi la tua chiave pubblica
-SSH all'account RunPod (`runpodctl doctor` lo configura): il container espone
-TCP 22 e usa quella chiave per i trasferimenti `rsync`.
+SSH all'account RunPod: `setup.sh` esegue `runpodctl doctor`, che valida la API
+key e configura questo passaggio. Il container espone TCP 22 e usa quella
+chiave per i trasferimenti `rsync`.
 
 ## 3. Caricare lo stato locale una sola volta
 
-Dopo la creazione, recupera host e porta SSH con `runpodctl pod get POD_ID`.
-Poi usa il target SSH nello stesso formato di `ssh`, per esempio:
+Dopo la creazione, recupera host e porta SSH con `runpodctl ssh info POD_ID` e
+salvali in `deploy/runpod/.env`. Il target SSH usa lo stesso formato di `ssh`,
+per esempio. `setup.sh` crea gia' la chiave privata locale e gli script la
+usano automaticamente; imposta `RUNPOD_SSH_IDENTITY_FILE` solo se hai usato una
+chiave diversa.
 
 ```sh
-export RUNPOD_SSH_HOST='root@HOST'
-export RUNPOD_SSH_PORT='PORTA'
+# In deploy/runpod/.env:
+# RUNPOD_SSH_HOST='root@HOST'
+# RUNPOD_SSH_PORT='PORTA'
 bash deploy/runpod/sync_to_pod.sh
 ```
 
 Lo script trasferisce `italiano-v3` (train e validation) e `latest.llmckpt`,
-`best.llmckpt`, metadati e log. `--partial --append-verify` consente di
-riprendere upload interrotti. Al termine crea il marker di input completo.
+`best.llmckpt`, metadati e log. I trasferimenti interrotti sono riprendibili:
+le versioni moderne di rsync usano `--append-verify`, mentre l'rsync incluso in
+macOS usa automaticamente la modalita' compatibile `--append`. Al termine crea
+il marker di input completo.
 
 ## 4. Avvio e ripresa
 
@@ -97,8 +111,6 @@ configura le credenziali del registry in RunPod prima di creare il Pod.
 ## 5. Riportare i risultati sul Mac
 
 ```sh
-export RUNPOD_SSH_HOST='root@HOST'
-export RUNPOD_SSH_PORT='PORTA'
 bash deploy/runpod/sync_from_pod.sh
 ```
 
