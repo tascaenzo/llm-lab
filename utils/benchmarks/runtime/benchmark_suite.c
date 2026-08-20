@@ -69,6 +69,7 @@ static const char *const operation_names[CPU_BENCHMARK_OPERATION_COUNT] = {
 const char *runtime_benchmark_backend_name(runtime_benchmark_backend backend) {
     return backend == RUNTIME_BENCHMARK_CPU     ? "cpu"
            : backend == RUNTIME_BENCHMARK_METAL ? "metal"
+           : backend == RUNTIME_BENCHMARK_CUDA  ? "cuda"
                                                 : "unknown";
 }
 
@@ -104,7 +105,7 @@ int runtime_benchmark_operation_supported(runtime_benchmark_backend backend,
     if (backend == RUNTIME_BENCHMARK_CPU) {
         return 1;
     }
-    if (backend != RUNTIME_BENCHMARK_METAL) {
+    if (backend != RUNTIME_BENCHMARK_METAL && backend != RUNTIME_BENCHMARK_CUDA) {
         return 0;
     }
     switch (operation) {
@@ -164,6 +165,27 @@ static double current_seconds(void) {
     }
     return (double)time.tv_sec + (double)time.tv_nsec / 1000000000.0;
 #endif
+}
+
+static int benchmark_uses_batch(runtime_benchmark_backend backend,
+                                const cpu_benchmark_config *config) {
+    return config->batch_accelerator_operations != 0 && backend != RUNTIME_BENCHMARK_CPU;
+}
+
+static llm_status benchmark_begin_batch(cpu_benchmark_workload *workload,
+                                        const cpu_benchmark_config *config) {
+    return benchmark_uses_batch(workload->backend_kind, config) != 0
+               ? llm_backend_begin_batch(workload->backend)
+               : LLM_OK;
+}
+
+static llm_status benchmark_end_batch(cpu_benchmark_workload *workload, int batch_started,
+                                      llm_status status) {
+    if (batch_started == 0) {
+        return status;
+    }
+    const llm_status batch_status = llm_backend_end_batch(workload->backend);
+    return status == LLM_OK ? batch_status : status;
 }
 
 static int compare_double(const void *left, const void *right) {
@@ -520,6 +542,8 @@ static llm_status workload_setup(runtime_benchmark_backend backend_kind,
         status = llm_backend_cpu_create_with_config(&backend_config, &out_workload->backend);
     } else if (backend_kind == RUNTIME_BENCHMARK_METAL) {
         status = llm_backend_metal_create(&out_workload->backend);
+    } else if (backend_kind == RUNTIME_BENCHMARK_CUDA) {
+        status = llm_backend_cuda_create(&out_workload->backend);
     }
     if (status != LLM_OK) {
         return status;
@@ -852,7 +876,8 @@ static int config_is_valid(const cpu_benchmark_config *config) {
 int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_operation operation,
                           size_t requested_threads, const cpu_benchmark_config *config,
                           cpu_benchmark_result *out_result) {
-    if ((backend_kind != RUNTIME_BENCHMARK_CPU && backend_kind != RUNTIME_BENCHMARK_METAL) ||
+    if ((backend_kind != RUNTIME_BENCHMARK_CPU && backend_kind != RUNTIME_BENCHMARK_METAL &&
+         backend_kind != RUNTIME_BENCHMARK_CUDA) ||
         operation < CPU_BENCHMARK_ZERO || operation >= CPU_BENCHMARK_OPERATION_COUNT ||
         out_result == NULL || config_is_valid(config) == 0 ||
         runtime_benchmark_operation_supported(backend_kind, operation) == 0) {
@@ -881,13 +906,15 @@ int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_
     double probe_total_seconds = 0.0;
     llm_status probe_status = LLM_OK;
     while (probe_total_seconds <= 0.0 && probe_repetitions <= 1048576U) {
+        probe_status = benchmark_begin_batch(&workload, config);
+        const int probe_batch_started =
+            probe_status == LLM_OK && benchmark_uses_batch(workload.backend_kind, config) != 0;
         const double probe_start = current_seconds();
-        for (size_t repetition = 0U; repetition < probe_repetitions; ++repetition) {
+        for (size_t repetition = 0U; probe_status == LLM_OK && repetition < probe_repetitions;
+             ++repetition) {
             probe_status = workload_execute(&workload);
-            if (probe_status != LLM_OK) {
-                break;
-            }
         }
+        probe_status = benchmark_end_batch(&workload, probe_batch_started, probe_status);
         probe_total_seconds = current_seconds() - probe_start;
         if (probe_total_seconds <= 0.0 && probe_status == LLM_OK) {
             probe_repetitions *= 2U;
@@ -917,26 +944,39 @@ int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_
         workload_destroy(&workload);
         return 0;
     }
-    llm_metal_backend_metrics initial_metrics = {0};
+    double pipeline_compilation_seconds = 0.0;
     if (backend_kind == RUNTIME_BENCHMARK_METAL) {
+        llm_metal_backend_metrics initial_metrics = {0};
         (void)llm_backend_metal_get_metrics(workload.backend, &initial_metrics);
+        pipeline_compilation_seconds = initial_metrics.pipeline_compilation_seconds;
     }
     for (size_t iteration = 0U; iteration < config->measured_iterations; ++iteration) {
         if (backend_kind == RUNTIME_BENCHMARK_METAL) {
             (void)llm_backend_metal_reset_metrics(workload.backend);
+        } else if (backend_kind == RUNTIME_BENCHMARK_CUDA) {
+            (void)llm_backend_cuda_reset_metrics(workload.backend);
         }
         const double start = current_seconds();
-        llm_status status = LLM_OK;
-        for (size_t repetition = 0U; repetition < repetitions_per_sample; ++repetition) {
+        llm_status status = benchmark_begin_batch(&workload, config);
+        const int batch_started =
+            status == LLM_OK && benchmark_uses_batch(workload.backend_kind, config) != 0;
+        for (size_t repetition = 0U; status == LLM_OK && repetition < repetitions_per_sample;
+             ++repetition) {
             status = workload_execute(&workload);
-            if (status != LLM_OK) {
-                break;
-            }
         }
+        status = benchmark_end_batch(&workload, batch_started, status);
         durations[iteration] = (current_seconds() - start) / (double)repetitions_per_sample;
         if (backend_kind == RUNTIME_BENCHMARK_METAL) {
             llm_metal_backend_metrics metrics = {0};
             if (llm_backend_metal_get_metrics(workload.backend, &metrics) != LLM_OK) {
+                status = LLM_BACKEND_ERROR;
+            } else {
+                gpu_durations[iteration] =
+                    metrics.total_gpu_seconds / (double)repetitions_per_sample;
+            }
+        } else if (backend_kind == RUNTIME_BENCHMARK_CUDA) {
+            llm_cuda_backend_metrics metrics = {0};
+            if (llm_backend_cuda_get_metrics(workload.backend, &metrics) != LLM_OK) {
                 status = LLM_BACKEND_ERROR;
             } else {
                 gpu_durations[iteration] =
@@ -1003,17 +1043,21 @@ int runtime_benchmark_run(runtime_benchmark_backend backend_kind, cpu_benchmark_
         .calls_per_second = 1.0 / median,
         .guard_value = guard_value,
         .gpu_median_seconds =
-            backend_kind == RUNTIME_BENCHMARK_METAL
+            (backend_kind == RUNTIME_BENCHMARK_METAL || backend_kind == RUNTIME_BENCHMARK_CUDA)
                 ? (config->measured_iterations % 2U == 0U
                        ? (gpu_durations[median_index - 1U] + gpu_durations[median_index]) * 0.5
                        : gpu_durations[median_index])
                 : 0.0,
-        .gpu_p95_seconds = backend_kind == RUNTIME_BENCHMARK_METAL ? gpu_durations[p95_index] : 0.0,
-        .pipeline_compilation_seconds = initial_metrics.pipeline_compilation_seconds,
+        .gpu_p95_seconds =
+            (backend_kind == RUNTIME_BENCHMARK_METAL || backend_kind == RUNTIME_BENCHMARK_CUDA)
+                ? gpu_durations[p95_index]
+                : 0.0,
+        .pipeline_compilation_seconds = pipeline_compilation_seconds,
     };
-    const char *device_name = backend_kind == RUNTIME_BENCHMARK_METAL
-                                  ? llm_backend_metal_device_name(workload.backend)
-                                  : "CPU";
+    const char *device_name =
+        backend_kind == RUNTIME_BENCHMARK_METAL  ? llm_backend_metal_device_name(workload.backend)
+        : backend_kind == RUNTIME_BENCHMARK_CUDA ? llm_backend_cuda_device_name(workload.backend)
+                                                 : "CPU";
     if (device_name != NULL) {
         (void)snprintf(out_result->device_name, sizeof(out_result->device_name), "%s", device_name);
     }

@@ -52,6 +52,7 @@ typedef struct llm_cuda_context {
     llm_cuda_backend_metrics metrics;
     int batch_active;
     int events_enabled;
+    int timing_active;
 } llm_cuda_context;
 
 /** Returns the device pointer behind an opaque storage handle. */
@@ -68,6 +69,9 @@ llm_status llm_cuda_finish(llm_cuda_context *context);
 
 /** Waits for every queued command and consumes the sticky flags. */
 llm_status llm_cuda_flush(llm_cuda_context *context);
+
+/** Starts an event interval when CUDA timing is available and no interval is open. */
+void llm_cuda_start_timing(llm_cuda_context *context);
 
 /** Queues a scan that raises the non-finite flag when any value is not finite. */
 llm_status llm_cuda_check_finite(llm_cuda_context *context, const void *memory, size_t value_count);

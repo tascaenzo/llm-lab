@@ -1,6 +1,7 @@
 FROM nvidia/cuda:12.6.2-devel-ubuntu24.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ENV DEBIAN_FRONTEND=noninteractive \
+    LLM_LAB_BACKEND=cuda
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -22,6 +23,7 @@ COPY . .
 RUN cmake -S . -B build/cuda-release -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLM_LAB_ENABLE_CUDA=ON \
+        -DLLM_LAB_BUILD_BENCHMARKS=ON \
         -DCMAKE_CUDA_ARCHITECTURES=89 \
     && cmake --build build/cuda-release --parallel
 

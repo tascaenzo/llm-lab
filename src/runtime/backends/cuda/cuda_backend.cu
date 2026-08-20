@@ -200,8 +200,7 @@ extern "C" llm_status llm_backend_cuda_create(llm_backend **out_backend) {
         (void)cublasSetMathMode(context->blas, CUBLAS_PEDANTIC_MATH);
     }
     if (cudaEventCreate(&context->start_event) == cudaSuccess &&
-        cudaEventCreate(&context->stop_event) == cudaSuccess &&
-        cudaEventRecord(context->start_event, context->stream) == cudaSuccess) {
+        cudaEventCreate(&context->stop_event) == cudaSuccess) {
         context->events_enabled = 1;
     }
 
@@ -229,6 +228,7 @@ extern "C" llm_status llm_backend_cuda_begin_batch(llm_backend *backend) {
         return LLM_INVALID_ARGUMENT;
     }
     context->batch_active = 1;
+    llm_cuda_start_timing(context);
     return LLM_OK;
 }
 

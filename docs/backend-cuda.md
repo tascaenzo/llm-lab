@@ -123,6 +123,10 @@ cmake --preset release -DCMAKE_CUDA_ARCHITECTURES=80
 ```
 
 `LLM_LAB_CUDA_DEVICE` sceglie l'indice della GPU quando ce n'e' piu' di una.
+`LLM_LAB_BACKEND=cuda` nel `.env` rende CUDA il default di `model train`,
+`model generate`, `model evaluate`, benchmark e profiler. Un `--backend`
+esplicito prevale; se CUDA non e' disponibile il comando fallisce e non ripiega
+silenziosamente sulla CPU.
 
 ## Verifica
 

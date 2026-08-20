@@ -39,6 +39,8 @@ typedef enum cpu_benchmark_operation {
 typedef enum runtime_benchmark_backend {
     RUNTIME_BENCHMARK_CPU = 0,
     RUNTIME_BENCHMARK_METAL,
+    RUNTIME_BENCHMARK_CUDA,
+    RUNTIME_BENCHMARK_BACKEND_COUNT,
 } runtime_benchmark_backend;
 
 typedef struct cpu_benchmark_config {
@@ -54,6 +56,7 @@ typedef struct cpu_benchmark_config {
     size_t warmup_iterations;
     size_t measured_iterations;
     double minimum_sample_seconds;
+    int batch_accelerator_operations;
 } cpu_benchmark_config;
 
 typedef struct cpu_benchmark_result {

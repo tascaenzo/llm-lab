@@ -190,6 +190,17 @@ static int test_language_operations(llm_backend *backend) {
     TEST_ASSERT(close_enough(gradient_values[0], -0.16737952F));
     TEST_ASSERT(close_enough(gradient_values[5], -0.16737952F));
 
+    /* Validation and the consumer kernel share a stream. Invalid targets must
+       never be dereferenced while the asynchronous validation is in flight. */
+    const uint32_t invalid_targets[] = {3U, 2U};
+    TEST_ASSERT(llm_tensor_write(backend, &targets, invalid_targets, sizeof(invalid_targets)) ==
+                LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_forward(backend, &logits, &targets, &loss) == LLM_INVALID_INDEX);
+    TEST_ASSERT(llm_cross_entropy_backward(backend, &logits, &targets, &gradient) ==
+                LLM_INVALID_INDEX);
+    TEST_ASSERT(llm_tensor_write(backend, &targets, target_values, sizeof(target_values)) ==
+                LLM_OK);
+
     /* A non-finite input must surface as a status, not as a NaN in the output. */
     const float invalid_logits[] = {NAN, 0.0F, 1.0F, 1.0F, 2.0F, 3.0F};
     TEST_ASSERT(llm_tensor_write(backend, &logits, invalid_logits, sizeof(invalid_logits)) ==
