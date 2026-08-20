@@ -8,6 +8,7 @@ readonly train_steps="${LLM_LAB_TRAIN_STEPS:?Set LLM_LAB_TRAIN_STEPS before star
 readonly checkpoint_every="${LLM_LAB_CHECKPOINT_EVERY:-5000}"
 readonly validation_every="${LLM_LAB_VALIDATION_EVERY:-5000}"
 readonly validation_batches="${LLM_LAB_VALIDATION_BATCHES:-100}"
+readonly cuda_tf32="${LLM_LAB_CUDA_TF32:-0}"
 readonly profile_cuda="${LLM_LAB_PROFILE_CUDA:-0}"
 readonly dataset="${workspace_dir}/data/derived/italiano-v3/lm/italiano-v3.train.llmdat"
 readonly validation_dataset="${workspace_dir}/data/derived/italiano-v3/lm/italiano-v3.validation.llmdat"
@@ -75,9 +76,18 @@ if [[ "${profile_cuda}" != "0" && "${profile_cuda}" != "1" ]]; then
     printf 'RunPod pipeline: LLM_LAB_PROFILE_CUDA must be 0 or 1.\n' >&2
     exit 2
 fi
+if [[ "${cuda_tf32}" != "0" && "${cuda_tf32}" != "1" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_CUDA_TF32 must be 0 or 1.\n' >&2
+    exit 2
+fi
 
 start_ssh
 nvidia-smi
+if [[ "${cuda_tf32}" == "1" ]]; then
+    printf 'RunPod pipeline: CUDA TF32 Tensor Core math enabled for matrix multiplications.\n' >&2
+else
+    printf 'RunPod pipeline: strict F32 matrix math enabled.\n' >&2
+fi
 if [[ ! -f "${ready_marker}" ]]; then
     printf 'RunPod pipeline: waiting for input upload marker %s\n' "${ready_marker}" >&2
     printf 'Run deploy/runpod/sync_to_pod.sh, then stop and restart this Pod.\n' >&2
