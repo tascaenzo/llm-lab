@@ -4,11 +4,11 @@ Questa pipeline usa una RTX 4090 singola (CUDA architecture `89`), conserva
 dataset, checkpoint e log nel volume persistente `/workspace`, ed esegue sempre
 la suite `runtime.cuda_backend` prima di modificare un checkpoint.
 
-L'immagine e lo script di creazione impostano `LLM_LAB_BACKEND=cuda`. La
-configurazione locale in `.env` e quella del deploy in `deploy/runpod/.env` sono
-separate: la prima non viene letta dalla pipeline cloud. L'entrypoint rifiuta
-qualsiasi backend diverso da CUDA, cosi' non puo' partire per errore un training
-cloud sulla CPU.
+L'immagine rifiuta qualsiasi backend diverso da CUDA, cosi' non puo' partire per
+errore un training cloud sulla CPU. Esiste un solo file di configurazione locale
+ignorato da Git: `deploy/runpod/.env`. Contiene connessione, identita', Pod e
+training; gli script inoltrano al container soltanto la lista esplicita di
+chiavi `LLM_LAB_*` prevista dalla pipeline.
 
 Il checkpoint Metal e il dataset sono portabili: la pipeline riprende
 `latest.llmckpt` con il backend CUDA configurato nell'ambiente, senza conversione e senza modificare gli
@@ -25,22 +25,22 @@ L'immagine non contiene dati, checkpoint o segreti: `.dockerignore` li esclude.
 
 ## 2. Creare il Pod
 
-Installa e configura `runpodctl`, copia `deploy/runpod/.env.example` in
-`deploy/runpod/.env` e compila i valori cloud. Gli script caricano questo file
-automaticamente, anche se vengono lanciati da un'altra directory; variabili gia'
-esportate hanno precedenza. Quindi crea un Pod on-demand con
-volume da 40 GB (gli input attuali occupano circa 14 GB prima di build e log):
+Installa e configura `runpodctl`, poi crea l'unico file locale. Gli script
+caricano `.env` automaticamente anche se vengono lanciati da un'altra
+directory; variabili gia' esportate hanno precedenza. Configura qui account,
+SSH, training, checkpoint, validation, TF32 e profiling. Quindi crea un Pod
+on-demand con volume da 40 GB (gli input attuali occupano circa 14 GB prima di
+build e log):
 
 ```sh
 cp deploy/runpod/.env.example deploy/runpod/.env
-# Modifica deploy/runpod/.env; per il primo test imposta LLM_LAB_PROFILE_CUDA=1.
+# Modifica deploy/runpod/.env.
 ./deploy/runpod/setup.sh
 ./deploy/runpod/create_pod.sh
 ```
 
-Per un file di configurazione cloud in un'altra posizione usa
-`RUNPOD_ENV_FILE=/percorso/file`; `LLM_LAB_ENV_FILE` resta invece riservata ai
-comandi locali.
+Per usare un file diverso imposta `RUNPOD_ENV_FILE=/percorso/.env`;
+`LLM_LAB_ENV_FILE` resta invece riservata ai comandi locali.
 
 La chiave non viene scritta nel repository. Cambia `RUNPOD_GPU_ID` solo con una
 GPU la cui CUDA architecture sia supportata dall'immagine; il default RTX 4090
@@ -65,10 +65,12 @@ bash deploy/runpod/sync_to_pod.sh
 ```
 
 Lo script trasferisce `italiano-v3` (train e validation) e `latest.llmckpt`,
-`best.llmckpt`, metadati e log. I trasferimenti interrotti sono riprendibili:
-le versioni moderne di rsync usano `--append-verify`, mentre l'rsync incluso in
-macOS usa automaticamente la modalita' compatibile `--append`. Al termine crea
-il marker di input completo.
+`best.llmckpt`, metadati e log. I grandi file dataset, che sono immutabili,
+riprendono i trasferimenti interrotti con `--append-verify` oppure con la
+modalita' compatibile `--append` su macOS. Checkpoint e log usano invece una
+sincronizzazione normale, cosi' un checkpoint nuovo ma della stessa dimensione
+non puo' essere scambiato per quello vecchio. Al termine crea il marker di input
+completo.
 
 ## 4. Avvio e ripresa
 
@@ -92,6 +94,33 @@ finche' e' in esecuzione: scarica i risultati e fermalo esplicitamente.
 
 La configurazione predefinita esegue 19.500 step, circa un'ora sulla RTX 4090
 misurata durante il primo test, con checkpoint e validazione ogni 5.000 step.
+
+## Aggiornare un Pod esistente
+
+Inserisci il suo ID in `RUNPOD_POD_ID` nel file `.env`. A Pod fermo, modifica
+immagine o configurazione e usa un solo comando:
+
+```sh
+./deploy/runpod/update_pod.sh
+runpodctl pod start POD_ID
+```
+
+`update_pod.sh` usa la stessa configurazione di `create_pod.sh`; non occorrono
+JSON incollati a mano nella shell. Non eseguirlo durante il training: la
+modifica del Pod ricrea il container, mentre `/workspace` resta persistente.
+
+### Test TF32 prima del run lungo
+
+`LLM_LAB_CUDA_TF32=1` nel file `.env` abilita i Tensor Core per i GEMM cuBLAS. Storage dei
+parametri, gradienti, optimizer e checkpoint rimangono F32, ma i prodotti
+matrice-matrice non sono bit-exact rispetto al percorso F32 rigoroso. Il valore
+predefinito e' `0`.
+
+Per provarlo senza rischiare il run lungo, prima scarica o copia il checkpoint
+latest corrente, poi aggiorna temporaneamente il Pod con 1.000 step, TF32 e la
+stessa validation. Confronta step/s e validation loss/perplexity con l'ultimo
+run F32. Mantieni TF32 per le sessioni lunghe solo se non introduce anomalie
+nelle metriche. L'avvio stampa esplicitamente la modalita' di matematica scelta.
 
 ## Profilare prima di spendere
 

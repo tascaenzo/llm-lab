@@ -24,7 +24,7 @@ readonly ssh_options=(-i "${ssh_identity_file}" -o IdentitiesOnly=yes -p "${RUNP
 ssh "${ssh_options[@]}" "${RUNPOD_SSH_HOST}" \
     "mkdir -p '${remote_root}/${dataset_dir}' '${remote_root}/${model_dir}'"
 
-runpod_rsync \
+runpod_rsync_resume_immutable_upload \
     -e "${ssh_transport}" \
     "${dataset_dir}/" \
     "${RUNPOD_SSH_HOST}:${remote_root}/${dataset_dir}/"

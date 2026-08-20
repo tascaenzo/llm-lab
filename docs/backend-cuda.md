@@ -92,6 +92,11 @@ LLM_LAB_CUDA_TF32=1 ./build/release/llm-lab model train ...
 Senza la variabile il backend imposta `CUBLAS_PEDANTIC_MATH`. BF16 vero
 richiederebbe aprire `LLM_DTYPE_BF16` nel contratto ed e' un lavoro separato.
 
+Nella pipeline RunPod la stessa scelta passa da `LLM_LAB_CUDA_TF32=0|1` nel
+solo file `deploy/runpod/.env` e viene riportata nei log di avvio. Il valore
+resta `0` finche' un breve run di confronto non conferma che il throughput
+aggiuntivo non altera negativamente la validation del checkpoint in uso.
+
 ## Build
 
 Il backend viene compilato automaticamente quando CMake trova un toolchain CUDA,
