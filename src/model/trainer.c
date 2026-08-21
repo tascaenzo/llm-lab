@@ -38,17 +38,6 @@ static float learning_rate_for_step(const lm_trainer_config *config, unsigned lo
                    (maximum - (double)config->minimum_learning_rate) * cosine);
 }
 
-/**
- * Splits a parameter gradient into rows of its own last dimension. Reducing
- * per row and then summing the rows keeps the work parallel on both backends
- * and avoids one serial FP32 accumulation over millions of elements.
- */
-static void gradient_row_split(const llm_tensor *gradient, size_t *out_rows, size_t *out_width) {
-    const size_t width = gradient->rank == 0U ? 1U : gradient->shape[gradient->rank - 1U];
-    *out_width = width;
-    *out_rows = gradient->element_count / width;
-}
-
 /** Reports whether the backend is an accelerator, where batching a step pays off. */
 static int backend_uses_batches(const llm_backend *backend) {
     const llm_device_type device = llm_backend_device(backend);
@@ -69,20 +58,12 @@ static llm_status end_device_batch(llm_backend *backend, int use_device_batch, l
 }
 
 static void destroy_tensors(lm_trainer *trainer) {
-    for (size_t index = 0U; index < trainer->gradient_partial_count; ++index) {
-        llm_tensor_destroy(&trainer->gradient_partials[index]);
-    }
-    free(trainer->gradient_partials);
-    trainer->gradient_partials = NULL;
-    trainer->gradient_partial_count = 0U;
     llm_tensor_destroy(&trainer->logits_gradient);
     llm_tensor_destroy(&trainer->loss);
     llm_tensor_destroy(&trainer->logits);
     llm_tensor_destroy(&trainer->target_ids);
     llm_tensor_destroy(&trainer->input_ids);
     llm_tensor_destroy(&trainer->gradient_norm_square);
-    llm_tensor_destroy(&trainer->gradient_sum_square);
-    llm_tensor_destroy(&trainer->gradient_mean_square);
 }
 
 llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset, const lm_trainer_config *config,
@@ -110,6 +91,7 @@ llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset, const lm_trai
     trainer->model = model;
     trainer->config = *config;
     trainer->learning_rate = config->learning_rate;
+    trainer->gradients_are_zero = 1;
     const size_t token_count = config->batch_size * config->context_length;
     if (token_count > SIZE_MAX / sizeof(*trainer->host_inputs)) {
         free(trainer);
@@ -152,37 +134,7 @@ llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset, const lm_trai
     }
     if (status == LLM_OK) {
         status = llm_tensor_create(lm_model_backend(model), LLM_DTYPE_F32, 0U, NULL,
-                                   &trainer->gradient_mean_square);
-    }
-    if (status == LLM_OK) {
-        status = llm_tensor_create(lm_model_backend(model), LLM_DTYPE_F32, 0U, NULL,
-                                   &trainer->gradient_sum_square);
-    }
-    if (status == LLM_OK) {
-        status = llm_tensor_create(lm_model_backend(model), LLM_DTYPE_F32, 0U, NULL,
                                    &trainer->gradient_norm_square);
-    }
-    if (status == LLM_OK) {
-        const size_t parameter_count = lm_model_parameter_count(model);
-        trainer->gradient_partials = calloc(parameter_count, sizeof(*trainer->gradient_partials));
-        if (trainer->gradient_partials == NULL) {
-            status = LLM_ALLOCATION_FAILED;
-        } else {
-            trainer->gradient_partial_count = parameter_count;
-        }
-        for (size_t index = 0U; status == LLM_OK && index < parameter_count; ++index) {
-            const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
-            if (gradient == NULL) {
-                status = LLM_INVALID_ARGUMENT;
-                break;
-            }
-            size_t rows = 0U;
-            size_t width = 0U;
-            gradient_row_split(gradient, &rows, &width);
-            const size_t partial_shape[] = {rows};
-            status = llm_tensor_create(lm_model_backend(model), LLM_DTYPE_F32, 1U, partial_shape,
-                                       &trainer->gradient_partials[index]);
-        }
     }
     if (status != LLM_OK) {
         lm_trainer_destroy(trainer);
@@ -215,9 +167,6 @@ static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_device_batc
                                         float *out_norm) {
     llm_backend *backend = lm_model_backend(trainer->model);
     const size_t parameter_count = lm_model_parameter_count(trainer->model);
-    if (parameter_count != trainer->gradient_partial_count) {
-        return LLM_INVALID_ARGUMENT;
-    }
     llm_status status = begin_device_batch(backend, use_device_batch);
     if (status == LLM_OK) {
         status = llm_tensor_fill_f32(backend, &trainer->gradient_norm_square, 0.0F);
@@ -228,29 +177,8 @@ static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_device_batc
             status = LLM_INVALID_ARGUMENT;
             break;
         }
-        size_t rows = 0U;
-        size_t width = 0U;
-        gradient_row_split(gradient, &rows, &width);
-        const size_t row_shape[] = {rows, width};
-        llm_tensor gradient_rows = {0};
-        status = llm_tensor_reshape(gradient, 2U, row_shape, &gradient_rows);
-        if (status == LLM_OK) {
-            status = llm_reduce_mean_square_last(backend, &gradient_rows,
-                                                 &trainer->gradient_partials[index]);
-        }
-        llm_tensor_destroy(&gradient_rows);
-        if (status == LLM_OK) {
-            status = llm_reduce_sum_last(backend, &trainer->gradient_partials[index],
-                                         &trainer->gradient_mean_square);
-        }
-        if (status == LLM_OK) {
-            status = llm_scale(backend, &trainer->gradient_mean_square, (float)width,
-                               &trainer->gradient_sum_square);
-        }
-        if (status == LLM_OK) {
-            status = llm_accumulate(backend, &trainer->gradient_sum_square,
-                                    &trainer->gradient_norm_square);
-        }
+        status = llm_accumulate_sum_squares(backend, gradient,
+                                            &trainer->gradient_norm_square);
     }
     status = end_device_batch(backend, use_device_batch, status);
     float sum_square = 0.0F;
@@ -272,11 +200,17 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     const size_t token_count = trainer->config.batch_size * trainer->config.context_length;
     llm_backend *backend = lm_model_backend(trainer->model);
     const int use_device_batch = backend_uses_batches(backend);
-    llm_status status = begin_device_batch(backend, use_device_batch);
-    if (status == LLM_OK) {
-        status = lm_model_zero_grad(trainer->model);
+    llm_status status = LLM_OK;
+    if (trainer->gradients_are_zero == 0) {
+        status = begin_device_batch(backend, use_device_batch);
+        if (status == LLM_OK) {
+            status = lm_model_zero_grad(trainer->model);
+        }
+        status = end_device_batch(backend, use_device_batch, status);
+        if (status == LLM_OK) {
+            trainer->gradients_are_zero = 1;
+        }
     }
-    status = end_device_batch(backend, use_device_batch, status);
     float accumulated_loss = 0.0F;
     for (size_t micro_step = 0U;
          status == LLM_OK && micro_step < trainer->config.gradient_accumulation_steps;
@@ -307,6 +241,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
                                                 &trainer->logits_gradient);
         }
         if (status == LLM_OK) {
+            trainer->gradients_are_zero = 0;
             status =
                 lm_model_backward(trainer->model, &trainer->input_ids, &trainer->logits_gradient);
         }
@@ -339,7 +274,8 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
         .epsilon = trainer->config.epsilon,
         .weight_decay = trainer->config.weight_decay,
         .gradient_scale = clipping_scale / (float)trainer->config.gradient_accumulation_steps,
-        .step = trainer->step + 1U};
+        .step = trainer->step + 1U,
+        .zero_gradient = 1};
     if (status == LLM_OK) {
         status = begin_device_batch(backend, use_device_batch);
         if (status == LLM_OK) {
@@ -350,6 +286,7 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     if (status != LLM_OK) {
         return status;
     }
+    trainer->gradients_are_zero = 1;
     ++trainer->step;
     trainer->learning_rate = learning_rate;
     trainer->gradient_norm = gradient_norm;

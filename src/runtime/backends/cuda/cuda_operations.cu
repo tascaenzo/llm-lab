@@ -48,11 +48,20 @@ llm_status blas_report(cublasStatus_t status, const char *stage) {
 
 llm_status finish_with_finite_check(llm_cuda_context *context, const void *output,
                                     size_t value_count) {
+    if (context->numerics_mode == LLM_CUDA_NUMERICS_STEP) {
+        return llm_cuda_finish(context);
+    }
     const llm_status status = llm_cuda_check_finite(context, output, value_count);
     if (status != LLM_OK) {
         return status;
     }
     return llm_cuda_finish(context);
+}
+
+llm_status finish_with_required_finite_check(llm_cuda_context *context, const void *output,
+                                             size_t value_count) {
+    const llm_status status = llm_cuda_check_finite(context, output, value_count);
+    return status == LLM_OK ? llm_cuda_finish(context) : status;
 }
 
 } // namespace
@@ -185,6 +194,18 @@ llm_status llm_cuda_reduce_mean_square_last_f32(void *context, const float *inpu
     return cuda_reduce_last(context, input, output, outer_count, reduction_size, 2);
 }
 
+llm_status llm_cuda_accumulate_sum_squares_f32(void *opaque_context, const float *input,
+                                               float *accumulator, size_t value_count) {
+    if (opaque_context == NULL || input == NULL || accumulator == NULL || value_count == 0U) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    llm_cuda_context *context = as_context(opaque_context);
+    llm_cuda_launch_accumulate_sum_squares(context->stream, device_const_float(input),
+                                           device_float(accumulator), value_count);
+    ++context->metrics.kernel_launches;
+    return finish_with_finite_check(context, accumulator, 1U);
+}
+
 llm_status llm_cuda_softmax_last_f32(void *opaque_context, const float *input, float *output,
                                      size_t outer_count, size_t row_width) {
     if (opaque_context == NULL || input == NULL || output == NULL || row_width == 0U ||
@@ -235,13 +256,19 @@ llm_status llm_cuda_matmul_ex_f32(void *opaque_context, const float *left, const
     const float beta = 0.0F;
     const cublasOperation_t operation_left = transpose_left != 0 ? CUBLAS_OP_T : CUBLAS_OP_N;
     const cublasOperation_t operation_right = transpose_right != 0 ? CUBLAS_OP_T : CUBLAS_OP_N;
-    const cublasStatus_t status =
-        cublasSgemm(context->blas, operation_right, operation_left, (int)result_columns,
-                    (int)result_rows, (int)interior, &alpha, device_const_float(right),
-                    (int)right_columns, device_const_float(left), (int)left_columns, &beta,
-                    device_float(output), (int)result_columns);
+    const cublasComputeType_t compute_type =
+        context->math_mode == LLM_CUDA_MATH_TF32
+            ? CUBLAS_COMPUTE_32F_FAST_TF32
+            : context->math_mode == LLM_CUDA_MATH_BF16_COMPUTE
+                  ? CUBLAS_COMPUTE_32F_FAST_16BF
+                  : CUBLAS_COMPUTE_32F_PEDANTIC;
+    const cublasStatus_t status = cublasGemmEx(
+        context->blas, operation_right, operation_left, (int)result_columns, (int)result_rows,
+        (int)interior, &alpha, device_const_float(right), CUDA_R_32F, (int)right_columns,
+        device_const_float(left), CUDA_R_32F, (int)left_columns, &beta, device_float(output),
+        CUDA_R_32F, (int)result_columns, compute_type, CUBLAS_GEMM_DEFAULT);
     if (status != CUBLAS_STATUS_SUCCESS) {
-        return blas_report(status, "sgemm");
+        return blas_report(status, "gemm_ex");
     }
     ++context->metrics.kernel_launches;
     return finish_with_finite_check(context, output, result_rows * result_columns);
@@ -340,9 +367,11 @@ llm_status llm_cuda_rms_norm_backward_f32(void *opaque_context, const float *inp
         device_const_float(output_gradient), epsilon, device_float(input_gradient),
         device_float(weight_gradient), outer_count, row_width);
     ++context->metrics.kernel_launches;
-    const llm_status check = llm_cuda_check_finite(context, weight_gradient, row_width);
-    if (check != LLM_OK) {
-        return check;
+    if (context->numerics_mode == LLM_CUDA_NUMERICS_STRICT) {
+        const llm_status check = llm_cuda_check_finite(context, weight_gradient, row_width);
+        if (check != LLM_OK) {
+            return check;
+        }
     }
     return finish_with_finite_check(context, input_gradient, outer_count * row_width);
 }
@@ -485,12 +514,14 @@ llm_status llm_cuda_attention_backward_f32(void *opaque_context, const float *qu
         device_float(query_gradient), device_float(key_gradient), device_float(value_gradient),
         scale, query_rows, sequence_length, query_head_count, key_value_head_count, head_dimension);
     ++context->metrics.kernel_launches;
-    status = llm_cuda_check_finite(context, key_gradient, key_value_values);
-    if (status == LLM_OK) {
-        status = llm_cuda_check_finite(context, value_gradient, key_value_values);
-    }
-    if (status != LLM_OK) {
-        return status;
+    if (context->numerics_mode == LLM_CUDA_NUMERICS_STRICT) {
+        status = llm_cuda_check_finite(context, key_gradient, key_value_values);
+        if (status == LLM_OK) {
+            status = llm_cuda_check_finite(context, value_gradient, key_value_values);
+        }
+        if (status != LLM_OK) {
+            return status;
+        }
     }
     return finish_with_finite_check(context, query_gradient, query_values);
 }
@@ -519,7 +550,7 @@ llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float 
                                           device_const_u32(targets), device_float(loss), row_count,
                                           vocabulary_size);
     ++context->metrics.kernel_launches;
-    return finish_with_finite_check(context, loss, 1U);
+    return finish_with_required_finite_check(context, loss, 1U);
 }
 
 llm_status llm_cuda_cross_entropy_backward_f32(void *opaque_context, const float *logits,
@@ -544,11 +575,11 @@ llm_status llm_cuda_cross_entropy_backward_f32(void *opaque_context, const float
     return finish_with_finite_check(context, gradient, row_count * vocabulary_size);
 }
 
-llm_status llm_cuda_adamw_update_f32(void *opaque_context, float *parameter, const float *gradient,
+llm_status llm_cuda_adamw_update_f32(void *opaque_context, float *parameter, float *gradient,
                                      float *first_moment, float *second_moment, size_t value_count,
                                      float learning_rate, float beta1, float beta2, float epsilon,
                                      float weight_decay, float gradient_scale,
-                                     unsigned long long step) {
+                                     unsigned long long step, int zero_gradient) {
     if (opaque_context == NULL || parameter == NULL || gradient == NULL || first_moment == NULL ||
         second_moment == NULL || value_count == 0U || step == 0ULL) {
         return LLM_INVALID_ARGUMENT;
@@ -559,10 +590,13 @@ llm_status llm_cuda_adamw_update_f32(void *opaque_context, float *parameter, con
         return LLM_NUMERICAL_ERROR;
     }
     llm_cuda_context *context = as_context(opaque_context);
-    llm_cuda_launch_adamw(context->stream, device_float(parameter), device_const_float(gradient),
+    llm_cuda_launch_adamw(context->stream, device_float(parameter), device_float(gradient),
                           device_float(first_moment), device_float(second_moment), value_count,
                           learning_rate, beta1, beta2, epsilon, weight_decay, gradient_scale,
-                          (float)(1.0 / first_bias), (float)(1.0 / second_bias));
+                          (float)(1.0 / first_bias), (float)(1.0 / second_bias), zero_gradient,
+                          context->device_flags);
     ++context->metrics.kernel_launches;
-    return finish_with_finite_check(context, parameter, value_count);
+    /* AdamW raises the same sticky non-finite flag while the values are already
+       in registers. No second full read of every master parameter is needed. */
+    return llm_cuda_finish(context);
 }

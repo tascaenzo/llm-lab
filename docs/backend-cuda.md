@@ -21,11 +21,16 @@ non offre un equivalente diretto.
 
 | Operazione | Implementazione |
 |---|---|
-| `matmul_f32`, `matmul_ex_f32` | `cublasSgemm` |
+| `matmul_f32`, `matmul_ex_f32` | `cublasGemmEx`, calcolo F32/TF32/BF16 selezionabile |
 | elementwise, `accumulate`, `silu`, `adamw` | kernel grid-stride |
 | riduzioni, `softmax`, `rms_norm`, `cross_entropy` | kernel un blocco per riga, riduzione con `__shfl_xor_sync` |
 | `rope`, `gather_rows`, `scatter_add_rows` | kernel grid-stride, scatter con `atomicAdd` |
-| `attention_forward/backward` | kernel un blocco per riga di query, porting diretto della versione Metal |
+| `attention_forward/backward` | kernel un blocco per riga; softmax online nel forward e QK/dP fusi nel backward |
+
+Il trainer riduce inoltre l'overhead comune ai backend: la norma globale usa un solo kernel
+`accumulate_sum_squares` per parametro al posto di quattro operazioni, mentre AdamW azzera il
+gradiente e valida NaN/Inf nello stesso passaggio. Sul modello 75M vengono eliminati 444 dispatch
+per update; su CUDA spariscono anche le 111 scansioni post-AdamW dei parametri.
 
 Nel profilo 75M la ripartizione dei FLOP giustifica questa scelta: la output
 head su `V = 32.008` da sola vale circa un quarto del costo per token, e con
@@ -66,9 +71,10 @@ interno: un indice fuori intervallo salta l'elemento invece di scrivere fuori
 dalla tabella, quindi la memoria resta integra anche mentre l'esito della
 scansione e' ancora in volo sullo stream.
 
-Il costo di questa garanzia e' una lettura in piu' di ogni tensore prodotto. E'
-il prezzo della parita' con gli altri due backend ed e' il primo candidato alla
-misura quando il profilo sara' disponibile.
+`LLM_LAB_CUDA_NUMERICS=strict` mantiene questa garanzia per ogni output.
+`LLM_LAB_CUDA_NUMERICS=step` evita invece le scansioni delle attivazioni transitorie, mantenendo
+quelle che proteggono loss, indici e parametri master aggiornati. Questo riduce fortemente i kernel
+accessori senza permettere che uno stato AdamW non finito venga salvato in silenzio.
 
 ## Batch
 
@@ -80,22 +86,22 @@ asincrona.
 
 ## Precisione
 
-Il contratto runtime v1 e' F32 stretto. TF32 mantiene storage e accumulo in F32
-e tronca solo la mantissa dei moltiplicandi: sui tensor core e' un guadagno
-grande, ma cambia gli ultimi bit e i test di parita' confrontano con il backend
-CPU. Per questo resta opt-in:
+Il contratto di storage resta F32. La variabile `LLM_LAB_CUDA_MATH` seleziona il compute type
+passato a `cublasGemmEx`:
 
 ```sh
-LLM_LAB_CUDA_TF32=1 ./build/release/llm-lab model train ...
+LLM_LAB_CUDA_MATH=f32          # CUBLAS_COMPUTE_32F_PEDANTIC
+LLM_LAB_CUDA_MATH=tf32         # CUBLAS_COMPUTE_32F_FAST_TF32
+LLM_LAB_CUDA_MATH=bf16-compute # CUBLAS_COMPUTE_32F_FAST_16BF
 ```
 
-Senza la variabile il backend imposta `CUBLAS_PEDANTIC_MATH`. BF16 vero
-richiederebbe aprire `LLM_DTYPE_BF16` nel contratto ed e' un lavoro separato.
+TF32 e BF16 compute cambiano gli ultimi bit dei prodotti, ma parametri, gradienti, momenti AdamW e
+checkpoint restano FP32. `LLM_LAB_CUDA_TF32=0|1` continua a essere accettata come alias legacy.
+BF16 di storage, che ridurrebbe anche memoria e banda delle attivazioni, richiederebbe invece
+aprire `LLM_DTYPE_BF16` nel contratto ed e' un lavoro separato.
 
-Nella pipeline RunPod la stessa scelta passa da `LLM_LAB_CUDA_TF32=0|1` nel
-solo file `deploy/runpod/.env` e viene riportata nei log di avvio. Il valore
-resta `0` finche' un breve run di confronto non conferma che il throughput
-aggiuntivo non altera negativamente la validation del checkpoint in uso.
+La pipeline RunPod riporta modalita' richiesta ed effettiva nei log, forza sempre `f32/strict` nel
+preflight e scrive il training ottimizzato in un checkpoint candidato distinto.
 
 ## Build
 
@@ -198,7 +204,7 @@ dall'intuizione:
 
 1. profilare una sessione lunga reale e registrare le metriche CUDA per step
    nel log JSONL, prima di cambiare i kernel;
-2. attention con GEMM batched cuBLAS piu' un kernel di softmax mascherato, al
-   posto del kernel diretto;
+2. eliminare le atomiche del backward attention con un workspace tiled, se il
+   profilo CUDA mostra che restano dominanti;
 3. valutazione del costo effettivo della scansione di finitezza per operazione;
 4. vettorizzazione `float4` sui kernel elementwise, che sono bandwidth-bound.

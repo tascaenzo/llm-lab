@@ -45,6 +45,17 @@ typedef struct lm_trainer_config {
     float gradient_clip_norm;
 } lm_trainer_config;
 
+/**
+ * Optional resume-time execution overrides. Zero restores the saved value.
+ * The loader accepts a changed micro-batch only when batch_size multiplied by
+ * gradient_accumulation_steps remains identical to the checkpoint, preserving
+ * the number of sampled sequences and optimizer semantics per update.
+ */
+typedef struct lm_trainer_resume_options {
+    size_t batch_size;
+    size_t gradient_accumulation_steps;
+} lm_trainer_resume_options;
+
 /** Creates a decoder-only model described by config. */
 llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
                            lm_model **out_model);
@@ -99,5 +110,10 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
  */
 llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
                                       lm_model **out_model, lm_trainer **out_trainer);
+
+/** Restores a checkpoint with a batch-equivalent execution configuration. */
+llm_status lm_trainer_load_checkpoint_with_options(
+    llm_backend *backend, lm_dataset *dataset, const char *path,
+    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer);
 
 #endif

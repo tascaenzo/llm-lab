@@ -12,12 +12,9 @@ class ProfileModelWorkloadTests(unittest.TestCase):
         for stage, operation, _dimensions, count in workloads:
             calls[(stage, operation)] = calls.get((stage, operation), 0) + count
 
-        self.assertEqual(calls[("optimizer", "zero")], 111)
+        self.assertNotIn(("optimizer", "zero"), calls)
         self.assertEqual(calls[("optimizer", "adamw")], 111)
-        self.assertEqual(calls[("gradient_norm", "reduce_mean_square")], 111)
-        self.assertEqual(calls[("gradient_norm", "reduce_sum")], 111)
-        self.assertEqual(calls[("gradient_norm", "scale")], 111)
-        self.assertEqual(calls[("gradient_norm", "accumulate")], 111)
+        self.assertEqual(calls[("gradient_norm", "accumulate_sum_squares")], 111)
         self.assertEqual(calls[("gradient_norm", "fill")], 1)
 
 

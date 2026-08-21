@@ -38,9 +38,26 @@ runpod_require_positive_integer() {
 }
 
 runpod_pod_environment_json() {
+    : "${LLM_LAB_CUDA_MATH:=${LLM_LAB_CUDA_TF32:-0}}"
+    if [[ "${LLM_LAB_CUDA_MATH}" == "0" ]]; then
+        LLM_LAB_CUDA_MATH=f32
+    elif [[ "${LLM_LAB_CUDA_MATH}" == "1" ]]; then
+        LLM_LAB_CUDA_MATH=tf32
+    fi
+    : "${LLM_LAB_CUDA_NUMERICS:=strict}"
+    : "${LLM_LAB_RUN_MODE:=train}"
+    : "${LLM_LAB_RESUME_CHECKPOINT:=artifacts/models/italiano-base-75m/latest.llmckpt}"
+    : "${LLM_LAB_OUTPUT_CHECKPOINT:=artifacts/models/italiano-base-75m/candidate-fast.llmckpt}"
+    : "${LLM_LAB_BEST_CHECKPOINT:=artifacts/models/italiano-base-75m/candidate-fast-best.llmckpt}"
+    : "${LLM_LAB_TRAINING_LOG:=artifacts/models/italiano-base-75m/candidate-fast.jsonl}"
+    : "${LLM_LAB_RESUME_BATCH_SIZE:=0}"
+    : "${LLM_LAB_RESUME_GRADIENT_ACCUMULATION:=0}"
     local names=(LLM_LAB_BACKEND LLM_LAB_TRAIN_STEPS LLM_LAB_CHECKPOINT_EVERY
-                 LLM_LAB_VALIDATION_EVERY LLM_LAB_VALIDATION_BATCHES LLM_LAB_CUDA_TF32
-                 LLM_LAB_PROFILE_CUDA)
+                 LLM_LAB_VALIDATION_EVERY LLM_LAB_VALIDATION_BATCHES LLM_LAB_CUDA_MATH
+                 LLM_LAB_CUDA_NUMERICS LLM_LAB_PROFILE_CUDA LLM_LAB_RUN_MODE
+                 LLM_LAB_RESUME_CHECKPOINT LLM_LAB_OUTPUT_CHECKPOINT
+                 LLM_LAB_BEST_CHECKPOINT LLM_LAB_TRAINING_LOG LLM_LAB_RESUME_BATCH_SIZE
+                 LLM_LAB_RESUME_GRADIENT_ACCUMULATION)
     local index name value separator=''
     printf '{'
     for ((index = 0; index < ${#names[@]}; ++index)); do

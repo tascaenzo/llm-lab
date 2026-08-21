@@ -347,7 +347,8 @@ static void print_backend_header(const machine_information *machine,
 static void format_shape(cpu_benchmark_operation operation, const cpu_benchmark_config *config,
                          char *output, size_t capacity) {
     if (operation <= CPU_BENCHMARK_ACCUMULATE || operation == CPU_BENCHMARK_SILU ||
-        operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW) {
+        operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW ||
+        operation == CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES) {
         (void)snprintf(output, capacity, "%zu elementi", config->elements);
     } else if (operation == CPU_BENCHMARK_MATMUL ||
                operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT ||

@@ -285,6 +285,20 @@ llm_status llm_cpu_execute_reduce_mean_square_last_f32(void *context, const floa
                              reduce_mean_square_range);
 }
 
+llm_status llm_cpu_execute_accumulate_sum_squares_f32(void *context, const float *input,
+                                                       float *accumulator, size_t value_count) {
+    if (context == NULL || input == NULL || accumulator == NULL || value_count == 0U) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    double sum = 0.0;
+    for (size_t index = 0U; index < value_count; ++index) {
+        const double value = (double)input[index];
+        sum += value * value;
+    }
+    *accumulator += (float)sum;
+    return LLM_OK;
+}
+
 llm_status llm_cpu_execute_matmul_f32(void *context, const float *left, const float *right,
                                       float *output, size_t rows, size_t inner_size,
                                       size_t columns) {

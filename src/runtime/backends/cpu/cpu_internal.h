@@ -33,6 +33,8 @@ llm_status llm_cpu_execute_reduce_max_last_f32(void *context, const float *input
 llm_status llm_cpu_execute_reduce_mean_square_last_f32(void *context, const float *input,
                                                        float *output, size_t outer_count,
                                                        size_t reduction_size);
+llm_status llm_cpu_execute_accumulate_sum_squares_f32(void *context, const float *input,
+                                                       float *accumulator, size_t value_count);
 llm_status llm_cpu_execute_matmul_f32(void *context, const float *left, const float *right,
                                       float *output, size_t rows, size_t inner_size,
                                       size_t columns);
@@ -89,10 +91,11 @@ llm_status llm_cpu_execute_cross_entropy_forward_f32(void *context, const float 
 llm_status llm_cpu_execute_cross_entropy_backward_f32(void *context, const float *logits,
                                                       const uint32_t *targets, size_t row_count,
                                                       size_t vocabulary_size, float *gradient);
-llm_status llm_cpu_execute_adamw_update_f32(void *context, float *parameter, const float *gradient,
+llm_status llm_cpu_execute_adamw_update_f32(void *context, float *parameter, float *gradient,
                                             float *first_moment, float *second_moment,
                                             size_t value_count, float learning_rate, float beta1,
                                             float beta2, float epsilon, float weight_decay,
-                                            float gradient_scale, unsigned long long step);
+                                            float gradient_scale, unsigned long long step,
+                                            int zero_gradient);
 
 #endif

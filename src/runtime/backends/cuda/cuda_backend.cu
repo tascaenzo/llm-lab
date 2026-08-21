@@ -6,6 +6,7 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "cuda_internal.h"
@@ -24,6 +25,58 @@ char *copy_device_name(const cudaDeviceProp &properties) {
 int environment_flag_is_set(const char *name) {
     const char *value = getenv(name);
     return value != NULL && value[0] != '\0' && strcmp(value, "0") != 0;
+}
+
+llm_status configured_math_mode(llm_cuda_math_mode *out_mode) {
+    if (out_mode == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    const char *requested = getenv("LLM_LAB_CUDA_MATH");
+    if (requested == NULL || requested[0] == '\0') {
+        *out_mode = environment_flag_is_set("LLM_LAB_CUDA_TF32") != 0 ? LLM_CUDA_MATH_TF32
+                                                                       : LLM_CUDA_MATH_F32;
+        return LLM_OK;
+    }
+    if (strcmp(requested, "f32") == 0 || strcmp(requested, "0") == 0) {
+        *out_mode = LLM_CUDA_MATH_F32;
+    } else if (strcmp(requested, "tf32") == 0 || strcmp(requested, "1") == 0) {
+        *out_mode = LLM_CUDA_MATH_TF32;
+    } else if (strcmp(requested, "bf16-compute") == 0) {
+        *out_mode = LLM_CUDA_MATH_BF16_COMPUTE;
+    } else {
+        fprintf(stderr,
+                "cuda: LLM_LAB_CUDA_MATH must be f32, tf32, or bf16-compute (got %s)\n",
+                requested);
+        return LLM_INVALID_ARGUMENT;
+    }
+    return LLM_OK;
+}
+
+llm_status configured_numerics_mode(llm_cuda_numerics_mode *out_mode) {
+    if (out_mode == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    const char *requested = getenv("LLM_LAB_CUDA_NUMERICS");
+    if (requested == NULL || requested[0] == '\0' || strcmp(requested, "strict") == 0) {
+        *out_mode = LLM_CUDA_NUMERICS_STRICT;
+    } else if (strcmp(requested, "step") == 0) {
+        *out_mode = LLM_CUDA_NUMERICS_STEP;
+    } else {
+        fprintf(stderr, "cuda: LLM_LAB_CUDA_NUMERICS must be strict or step (got %s)\n",
+                requested);
+        return LLM_INVALID_ARGUMENT;
+    }
+    return LLM_OK;
+}
+
+const char *math_mode_name(llm_cuda_math_mode mode) {
+    return mode == LLM_CUDA_MATH_TF32          ? "tf32"
+           : mode == LLM_CUDA_MATH_BF16_COMPUTE ? "bf16-compute"
+                                                 : "f32";
+}
+
+const char *numerics_mode_name(llm_cuda_numerics_mode mode) {
+    return mode == LLM_CUDA_NUMERICS_STEP ? "step" : "strict";
 }
 
 void cuda_destroy(void *opaque_context) {
@@ -91,6 +144,7 @@ const llm_backend_ops *cuda_backend_ops() {
         /* .reduce_sum_last_f32 = */ llm_cuda_reduce_sum_last_f32,
         /* .reduce_max_last_f32 = */ llm_cuda_reduce_max_last_f32,
         /* .reduce_mean_square_last_f32 = */ llm_cuda_reduce_mean_square_last_f32,
+        /* .accumulate_sum_squares_f32 = */ llm_cuda_accumulate_sum_squares_f32,
         /* .matmul_f32 = */ llm_cuda_matmul_f32,
         /* .matmul_ex_f32 = */ llm_cuda_matmul_ex_f32,
         /* .gather_rows_f32 = */ llm_cuda_gather_rows_f32,
@@ -188,17 +242,32 @@ extern "C" llm_status llm_backend_cuda_create(llm_backend **out_backend) {
         free(backend);
         return LLM_BACKEND_ERROR;
     }
-    /*
-     * TF32 keeps F32 storage and F32 accumulation but truncates the mantissa of
-     * the multiplicands, which is a large speedup on tensor cores and a visible
-     * change in the last bits. The runtime v1 contract is strict F32 and the
-     * parity tests compare against the CPU backend, so it stays opt-in.
-     */
-    if (environment_flag_is_set("LLM_LAB_CUDA_TF32") != 0) {
-        (void)cublasSetMathMode(context->blas, CUBLAS_TF32_TENSOR_OP_MATH);
-    } else {
-        (void)cublasSetMathMode(context->blas, CUBLAS_PEDANTIC_MATH);
+    llm_status configuration_status = configured_math_mode(&context->math_mode);
+    if (configuration_status == LLM_OK) {
+        configuration_status = configured_numerics_mode(&context->numerics_mode);
     }
+    const cublasMath_t blas_math = context->math_mode == LLM_CUDA_MATH_F32
+                                       ? CUBLAS_PEDANTIC_MATH
+                                       : context->math_mode == LLM_CUDA_MATH_TF32
+                                             ? CUBLAS_TF32_TENSOR_OP_MATH
+                                             : CUBLAS_DEFAULT_MATH;
+    if (configuration_status != LLM_OK ||
+        cublasSetMathMode(context->blas, blas_math) != CUBLAS_STATUS_SUCCESS) {
+        cuda_destroy(context);
+        free(backend);
+        return configuration_status != LLM_OK ? configuration_status : LLM_BACKEND_ERROR;
+    }
+    cublasMath_t effective_math = CUBLAS_DEFAULT_MATH;
+    if (cublasGetMathMode(context->blas, &effective_math) != CUBLAS_STATUS_SUCCESS ||
+        effective_math != blas_math) {
+        fprintf(stderr, "cuda: cuBLAS did not retain requested math mode %s\n",
+                math_mode_name(context->math_mode));
+        cuda_destroy(context);
+        free(backend);
+        return LLM_BACKEND_ERROR;
+    }
+    fprintf(stderr, "cuda: math=%s, numerics=%s\n", math_mode_name(context->math_mode),
+            numerics_mode_name(context->numerics_mode));
     if (cudaEventCreate(&context->start_event) == cudaSuccess &&
         cudaEventCreate(&context->stop_event) == cudaSuccess) {
         context->events_enabled = 1;

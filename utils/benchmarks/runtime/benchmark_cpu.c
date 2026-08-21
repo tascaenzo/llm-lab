@@ -355,7 +355,8 @@ static void print_jsonl_metadata(const benchmark_cli_config *config) {
 
 static int operation_uses_vector_shape(cpu_benchmark_operation operation) {
     return operation <= CPU_BENCHMARK_ACCUMULATE || operation == CPU_BENCHMARK_SILU ||
-           operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW;
+           operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW ||
+           operation == CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES;
 }
 
 static int operation_uses_matmul_shape(cpu_benchmark_operation operation) {

@@ -222,8 +222,13 @@ validation e registrano i nuovi checkpoint best.
 
 ## Dati e allineamento conversazionale
 
-Il pretraining usa il tokenizer train-only `italiano-wikipedia-v2` e mantiene
-gli split documentali di `italiano-wikipedia-v1` invariati.
+Il pretraining usa il tokenizer train-only `italiano-v3.llmtok` e gli split
+documentali del corpus multi-sorgente `italiano-v3`. Un tokenizer diverso puo'
+avere lo stesso numero di ID ma assegnare loro byte completamente differenti:
+in quel caso loss e training restano validi, ma la generazione decodificata
+diventa illeggibile. Le diagnostiche confrontano percio' lo SHA-256 del
+tokenizer con quello registrato nell'header `.llmdat`, non soltanto la dimensione
+del vocabolario.
 Un corpus generale aggiuntivo puo' essere introdotto solo con manifest che
 registri origine, licenza, filtri, deduplicazione, identificatori e split.
 Il trainer del tokenizer rifiuta manifest che non dichiarano esplicitamente
