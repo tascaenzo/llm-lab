@@ -78,17 +78,13 @@ struct lm_trainer {
     llm_tensor logits;
     llm_tensor loss;
     llm_tensor logits_gradient;
-    llm_tensor gradient_mean_square;
-    llm_tensor gradient_sum_square;
     llm_tensor gradient_norm_square;
-    /** One partial-sums tensor per parameter, shaped like its leading dimensions. */
-    llm_tensor *gradient_partials;
-    size_t gradient_partial_count;
     token_id *host_inputs;
     token_id *host_targets;
     unsigned long long step;
     float learning_rate;
     float gradient_norm;
+    int gradients_are_zero;
 };
 
 llm_status lm_model_parameter_create(lm_model_parameter *parameter, llm_backend *backend,

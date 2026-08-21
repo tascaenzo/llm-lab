@@ -242,6 +242,11 @@ I valori mostrati sono anche i default. `--temperature` controlla la variabilita
 risultato riproducibile. L'output UTF-8 valido viene scritto direttamente; solo
 byte isolati o caratteri di controllo vengono mostrati come escape.
 
+Il checkpoint canonico `italiano-base-75m`, addestrato sul dataset
+`italiano-v3`, deve essere generato con
+`artifacts/tokenizers/italiano-v3.llmtok`. Tokenizer diversi possono avere la
+stessa dimensione del vocabolario senza condividere la mappa ID → testo.
+
 Il Modello Minimal ha un solo blocco causale: questa prova verifica il percorso checkpoint →
 token → logits → testo, ma un modello piccolo e addestrato per pochi step non
 produce ancora articoli o dialoghi affidabili.
@@ -252,6 +257,18 @@ Per misurare invece il checkpoint sullo split non visto:
 ./build/debug/llm-lab model evaluate \
   data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2.validation.llmdat \
   artifacts/models/m1-step-10000.llmckpt 100 --batch-size 2 --seed 1
+```
+
+Per distinguere una loss bassa da una reale capacita' di predire il token
+successivo, `model diagnose` aggiunge top-1/5/20/100, rango medio, MRR e un
+campione teacher-forced decodificato. Verifica inoltre l'identita' SHA-256 del
+tokenizer registrata nel dataset:
+
+```sh
+./build/release/llm-lab model diagnose \
+  data/derived/italiano-v3/lm/italiano-v3.validation.llmdat \
+  artifacts/models/italiano-base-75m/best.llmckpt \
+  artifacts/tokenizers/italiano-v3.llmtok 16 --batch-size 1 --backend metal
 ```
 
 Il Modello Minimal e' volutamente un riferimento ristretto: al momento accetta

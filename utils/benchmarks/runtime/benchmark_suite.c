@@ -47,6 +47,7 @@ static const char *const operation_names[CPU_BENCHMARK_OPERATION_COUNT] = {
     [CPU_BENCHMARK_REDUCE_SUM] = "reduce_sum",
     [CPU_BENCHMARK_REDUCE_MAX] = "reduce_max",
     [CPU_BENCHMARK_REDUCE_MEAN_SQUARE] = "reduce_mean_square",
+    [CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES] = "accumulate_sum_squares",
     [CPU_BENCHMARK_MATMUL] = "matmul",
     [CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT] = "matmul_transpose_left",
     [CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT] = "matmul_transpose_right",
@@ -118,6 +119,7 @@ int runtime_benchmark_operation_supported(runtime_benchmark_backend backend,
     case CPU_BENCHMARK_REDUCE_SUM:
     case CPU_BENCHMARK_REDUCE_MAX:
     case CPU_BENCHMARK_REDUCE_MEAN_SQUARE:
+    case CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES:
     case CPU_BENCHMARK_MATMUL:
     case CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT:
     case CPU_BENCHMARK_MATMUL_TRANSPOSE_RIGHT:
@@ -246,6 +248,14 @@ static llm_status setup_vector_workload(cpu_benchmark_workload *workload) {
     case CPU_BENCHMARK_FILL:
         status = create_f32_tensor(workload->backend, 1U, shape,
                                    workload_tensor(workload, BENCHMARK_OUTPUT), 0.75F);
+        break;
+    case CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES:
+        status = create_f32_tensor(workload->backend, 1U, shape,
+                                   workload_tensor(workload, BENCHMARK_FIRST), 0.001F);
+        if (status == LLM_OK) {
+            status = create_f32_tensor(workload->backend, 0U, NULL,
+                                       workload_tensor(workload, BENCHMARK_OUTPUT), 0.0F);
+        }
         break;
     case CPU_BENCHMARK_COPY:
         status = create_f32_tensor(workload->backend, 1U, shape,
@@ -490,6 +500,7 @@ static int operation_is_vector(cpu_benchmark_operation operation) {
     case CPU_BENCHMARK_MULTIPLY:
     case CPU_BENCHMARK_SCALE:
     case CPU_BENCHMARK_ACCUMULATE:
+    case CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES:
     case CPU_BENCHMARK_SILU:
     case CPU_BENCHMARK_SILU_BACKWARD:
     case CPU_BENCHMARK_ADAMW:
@@ -591,6 +602,8 @@ static llm_status workload_execute(cpu_benchmark_workload *workload) {
         return llm_scale(workload->backend, first, 0.5F, output);
     case CPU_BENCHMARK_ACCUMULATE:
         return llm_accumulate(workload->backend, first, output);
+    case CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES:
+        return llm_accumulate_sum_squares(workload->backend, first, output);
     case CPU_BENCHMARK_REDUCE_SUM:
         return llm_reduce_sum_last(workload->backend, first, output);
     case CPU_BENCHMARK_REDUCE_MAX:
@@ -652,6 +665,7 @@ static llm_status workload_execute(cpu_benchmark_workload *workload) {
             .weight_decay = 0.01F,
             .gradient_scale = 1.0F,
             .step = 1ULL,
+            .zero_gradient = 1,
         };
         return llm_adamw_update(workload->backend, output, first, second, third, &options);
     }
@@ -711,6 +725,7 @@ static int workload_verify(cpu_benchmark_workload *workload, double *out_guard_v
         expected = 0.25F;
         break;
     case CPU_BENCHMARK_ACCUMULATE:
+    case CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES:
     case CPU_BENCHMARK_SCATTER_ADD:
     case CPU_BENCHMARK_ADAMW:
         compare_expected = 0;
@@ -800,6 +815,10 @@ static double workload_throughput(const cpu_benchmark_workload *workload, double
     case CPU_BENCHMARK_MULTIPLY:
     case CPU_BENCHMARK_ACCUMULATE:
         work = 3.0 * (double)workload->elements * sizeof(float);
+        *out_unit = "GB/s";
+        return work / seconds / 1.0e9;
+    case CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES:
+        work = (double)workload->elements * sizeof(float) + sizeof(float);
         *out_unit = "GB/s";
         return work / seconds / 1.0e9;
     case CPU_BENCHMARK_REDUCE_SUM:

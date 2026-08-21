@@ -36,6 +36,20 @@ typedef struct llm_cuda_buffer {
     struct llm_cuda_buffer *next;
 } llm_cuda_buffer;
 
+typedef enum llm_cuda_math_mode {
+    LLM_CUDA_MATH_F32 = 0,
+    LLM_CUDA_MATH_TF32,
+    /** FP32 storage and output with BF16-rounded GEMM multiplicands. */
+    LLM_CUDA_MATH_BF16_COMPUTE
+} llm_cuda_math_mode;
+
+typedef enum llm_cuda_numerics_mode {
+    /** Scan every floating-point result. Used by the contract tests and debugging. */
+    LLM_CUDA_NUMERICS_STRICT = 0,
+    /** Scan loss and validate updated parameters inside AdamW, relying on propagation elsewhere. */
+    LLM_CUDA_NUMERICS_STEP
+} llm_cuda_numerics_mode;
+
 typedef struct llm_cuda_context {
     int device_index;
     cudaStream_t stream;
@@ -53,6 +67,8 @@ typedef struct llm_cuda_context {
     int batch_active;
     int events_enabled;
     int timing_active;
+    llm_cuda_math_mode math_mode;
+    llm_cuda_numerics_mode numerics_mode;
 } llm_cuda_context;
 
 /** Returns the device pointer behind an opaque storage handle. */
@@ -98,6 +114,8 @@ llm_status llm_cuda_reduce_max_last_f32(void *context, const float *input, float
                                         size_t outer_count, size_t reduction_size);
 llm_status llm_cuda_reduce_mean_square_last_f32(void *context, const float *input, float *output,
                                                 size_t outer_count, size_t reduction_size);
+llm_status llm_cuda_accumulate_sum_squares_f32(void *context, const float *input,
+                                               float *accumulator, size_t value_count);
 llm_status llm_cuda_matmul_f32(void *context, const float *left, const float *right, float *output,
                                size_t rows, size_t inner_size, size_t columns);
 llm_status llm_cuda_matmul_ex_f32(void *context, const float *left, const float *right,
@@ -149,11 +167,11 @@ llm_status llm_cuda_cross_entropy_forward_f32(void *context, const float *logits
 llm_status llm_cuda_cross_entropy_backward_f32(void *context, const float *logits,
                                                const uint32_t *targets, size_t row_count,
                                                size_t vocabulary_size, float *gradient);
-llm_status llm_cuda_adamw_update_f32(void *context, float *parameter, const float *gradient,
+llm_status llm_cuda_adamw_update_f32(void *context, float *parameter, float *gradient,
                                      float *first_moment, float *second_moment, size_t value_count,
                                      float learning_rate, float beta1, float beta2, float epsilon,
                                      float weight_decay, float gradient_scale,
-                                     unsigned long long step);
+                                     unsigned long long step, int zero_gradient);
 
 /* Kernel launchers. Each one only enqueues work on the context stream. */
 void llm_cuda_launch_fill(cudaStream_t stream, float *output, size_t count, float value);
@@ -175,6 +193,8 @@ void llm_cuda_launch_reduce_max_last(cudaStream_t stream, const float *input, fl
                                      size_t outer_count, size_t reduction_size);
 void llm_cuda_launch_reduce_mean_square_last(cudaStream_t stream, const float *input, float *output,
                                              size_t outer_count, size_t reduction_size);
+void llm_cuda_launch_accumulate_sum_squares(cudaStream_t stream, const float *input,
+                                            float *accumulator, size_t value_count);
 void llm_cuda_launch_softmax_last(cudaStream_t stream, const float *input, float *output,
                                   size_t outer_count, size_t row_width);
 void llm_cuda_launch_gather_rows(cudaStream_t stream, const float *table, const uint32_t *indices,
@@ -213,11 +233,11 @@ void llm_cuda_launch_cross_entropy_forward(cudaStream_t stream, const float *log
 void llm_cuda_launch_cross_entropy_backward(cudaStream_t stream, const float *logits,
                                             const uint32_t *targets, float *gradient,
                                             size_t row_count, size_t vocabulary_size);
-void llm_cuda_launch_adamw(cudaStream_t stream, float *parameter, const float *gradient,
+void llm_cuda_launch_adamw(cudaStream_t stream, float *parameter, float *gradient,
                            float *first_moment, float *second_moment, size_t count,
                            float learning_rate, float beta1, float beta2, float epsilon,
                            float weight_decay, float gradient_scale, float inverse_first_bias,
-                           float inverse_second_bias);
+                           float inverse_second_bias, int zero_gradient, int *flags);
 void llm_cuda_launch_check_finite(cudaStream_t stream, const float *values, size_t count,
                                   int *flags);
 void llm_cuda_launch_check_indices(cudaStream_t stream, const uint32_t *indices, size_t count,

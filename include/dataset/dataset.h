@@ -112,6 +112,10 @@ uint32_t lm_dataset_model_vocabulary_size(const lm_dataset *dataset);
 token_id lm_dataset_end_of_document_token(const lm_dataset *dataset);
 lm_dataset_split lm_dataset_get_split(const lm_dataset *dataset);
 
+/** Compares a tokenizer artifact with the SHA-256 identity stored in the dataset header. */
+lm_dataset_status lm_dataset_tokenizer_matches(const lm_dataset *dataset,
+                                               const char *tokenizer_path, int *out_matches);
+
 /** Reads count tokens starting at token_offset. */
 lm_dataset_status lm_dataset_read_tokens(lm_dataset *dataset, uint64_t token_offset, size_t count,
                                          token_id *out_tokens);

@@ -11,8 +11,9 @@ training; gli script inoltrano al container soltanto la lista esplicita di
 chiavi `LLM_LAB_*` prevista dalla pipeline.
 
 Il checkpoint Metal e il dataset sono portabili: la pipeline riprende
-`latest.llmckpt` con il backend CUDA configurato nell'ambiente, senza conversione e senza modificare gli
-iperparametri salvati nel checkpoint.
+il checkpoint sorgente con il backend CUDA configurato nell'ambiente, senza conversione. Batch e
+gradient accumulation possono essere ridistribuiti al resume purche' il loro prodotto resti
+identico, quindi la dimensione effettiva dell'update e lo stato del sampler non cambiano.
 
 ## 1. Pubblicare l'immagine
 
@@ -28,7 +29,7 @@ L'immagine non contiene dati, checkpoint o segreti: `.dockerignore` li esclude.
 Installa e configura `runpodctl`, poi crea l'unico file locale. Gli script
 caricano `.env` automaticamente anche se vengono lanciati da un'altra
 directory; variabili gia' esportate hanno precedenza. Configura qui account,
-SSH, training, checkpoint, validation, TF32 e profiling. Quindi crea un Pod
+SSH, training, checkpoint, validation, matematica CUDA e profiling. Quindi crea un Pod
 on-demand con volume da 40 GB (gli input attuali occupano circa 14 GB prima di
 build e log):
 
@@ -78,8 +79,9 @@ Al primo avvio il container resta in attesa del marker di upload: e' normale e
 serve a permettere la copia sicura sul volume. Dopo `sync_to_pod.sh`, arresta e
 riavvia il Pod con `runpodctl pod stop POD_ID` e `runpodctl pod start POD_ID`.
 All'avvio successivo esegue la parita' CUDA e un vero step di training su un
-checkpoint temporaneo. Verifica inoltre che l'hash di `latest.llmckpt` non sia
-cambiato, poi lancia il resume reale. Il preflight viene ripetuto solo quando
+checkpoint temporaneo in modalita' F32 rigorosa. Verifica inoltre che l'hash del checkpoint
+sorgente non sia cambiato, poi lancia il resume reale verso un file candidato distinto. Il
+preflight viene ripetuto solo quando
 cambiano i binari dell'immagine. A ogni checkpoint il volume contiene uno stato
 riavviabile.
 
@@ -109,18 +111,40 @@ runpodctl pod start POD_ID
 JSON incollati a mano nella shell. Non eseguirlo durante il training: la
 modifica del Pod ricrea il container, mentre `/workspace` resta persistente.
 
-### Test TF32 prima del run lungo
+### Checkpoint sorgente, candidato e promozione
 
-`LLM_LAB_CUDA_TF32=1` nel file `.env` abilita i Tensor Core per i GEMM cuBLAS. Storage dei
-parametri, gradienti, optimizer e checkpoint rimangono F32, ma i prodotti
-matrice-matrice non sono bit-exact rispetto al percorso F32 rigoroso. Il valore
-predefinito e' `0`.
+`LLM_LAB_RESUME_CHECKPOINT` e' sempre di sola lettura durante il run. Il risultato viene scritto
+in `LLM_LAB_OUTPUT_CHECKPOINT`; il best e il log hanno percorsi separati. I default usano
+`latest.llmckpt` come sorgente e `candidate-fast.llmckpt` come output, quindi una regressione non
+puo' cancellare i progressi esistenti. Dopo il canary e la validation, promuovi il candidato a
+`latest.llmckpt` solo con una copia esplicita e conserva il vecchio latest finche' non hai
+verificato il nuovo file.
 
-Per provarlo senza rischiare il run lungo, prima scarica o copia il checkpoint
-latest corrente, poi aggiorna temporaneamente il Pod con 1.000 step, TF32 e la
-stessa validation. Confronta step/s e validation loss/perplexity con l'ultimo
-run F32. Mantieni TF32 per le sessioni lunghe solo se non introduce anomalie
-nelle metriche. L'avvio stampa esplicitamente la modalita' di matematica scelta.
+Se il Pod viene fermato dopo il primo salvataggio, al riavvio la pipeline rileva il candidato e
+riprende automaticamente da quello, non dal baseline. Se il candidato e' corrotto il loader
+fallisce senza fallback silenzioso: `latest` resta disponibile per il rollback e il lavoro cloud
+gia' salvato non viene ripetuto per errore.
+
+Per una ripresa piu' efficiente, il checkpoint canonico `batch=4, accumulation=2` puo' per esempio
+diventare `batch=8, accumulation=1` impostando le due variabili `LLM_LAB_RESUME_*`. Il loader
+rifiuta combinazioni che cambiano il prodotto, cosi' non altera la semantica dell'update.
+
+### Modalita' matematica CUDA
+
+`LLM_LAB_CUDA_MATH` accetta `f32`, `tf32` e `bf16-compute`. Storage di parametri, gradienti,
+optimizer e checkpoint rimangono F32 in tutti e tre i casi; cambia soltanto il percorso di calcolo
+dei GEMM cuBLAS. `bf16-compute` usa i Tensor Core BF16 con accumulo e output F32 ed e' il primo
+candidato da misurare sulla RTX 4090. `tf32` resta disponibile per confronto. `f32` e' il default
+prudente e viene sempre forzato dal preflight.
+
+`LLM_LAB_CUDA_NUMERICS=strict` controlla ogni output come prima. `step` elimina le scansioni delle
+attivazioni intermedie, ma conserva i controlli obbligatori su loss, indici e parametri master
+dopo AdamW. Usalo soltanto insieme al checkpoint candidato separato e dopo un canary valido.
+
+Per misurare senza avviare il training usa `LLM_LAB_RUN_MODE=profile-only`. Per il canary usa
+`train`, un output candidato, 200-1.000 step e la stessa validation del run F32. Confronta
+token/s, loss e perplexity; promuovi la combinazione veloce solo se le metriche restano sane.
+L'avvio stampa esplicitamente matematica e politica numerica effettive.
 
 ## Profilare prima di spendere
 

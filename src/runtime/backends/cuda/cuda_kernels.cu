@@ -213,6 +213,20 @@ __global__ void reduce_mean_square_last_kernel(const float *input, float *output
     }
 }
 
+__global__ void accumulate_sum_squares_kernel(const float *input, float *accumulator,
+                                              size_t value_count) {
+    __shared__ float partial[32];
+    float sum = 0.0f;
+    for (size_t index = grid_index(); index < value_count; index += grid_stride()) {
+        const float value = input[index];
+        sum += value * value;
+    }
+    sum = block_sum(sum, partial);
+    if (threadIdx.x == 0U) {
+        atomicAdd(accumulator, sum);
+    }
+}
+
 __global__ void softmax_last_kernel(const float *input, float *output, size_t outer_count,
                                     size_t row_width) {
     const size_t row = blockIdx.x;
@@ -382,8 +396,8 @@ __global__ void attention_forward_kernel(const float *query, const float *key, c
         return;
     }
     extern __shared__ float shared[];
-    float *probabilities = shared;
-    float *partial = shared + sequence_length;
+    float *partial = shared;
+    float *accumulator = shared + 32U;
 
     const size_t rows_per_batch = sequence_length * query_head_count;
     const size_t batch = query_row / rows_per_batch;
@@ -395,7 +409,13 @@ __global__ void attention_forward_kernel(const float *query, const float *key, c
     const size_t query_index = attention_offset(batch, query_position, query_head, sequence_length,
                                                 query_head_count, head_dimension);
     const float *query_row_values = query + query_index;
+    for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
+        accumulator[dimension] = 0.0f;
+    }
+    __syncthreads();
 
+    float running_maximum = -INFINITY;
+    float running_sum = 0.0f;
     for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
         const size_t key_index =
             attention_offset(batch, key_position, key_value_head, sequence_length,
@@ -404,43 +424,21 @@ __global__ void attention_forward_kernel(const float *query, const float *key, c
         for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             dot += query_row_values[dimension] * key[key_index + dimension];
         }
-        dot = block_sum(dot, partial);
-        if (threadIdx.x == 0U) {
-            probabilities[key_position] = dot * scale;
+        const float score = block_sum(dot, partial) * scale;
+        const float new_maximum = fmaxf(running_maximum, score);
+        const float previous_scale =
+            running_sum == 0.0f ? 0.0f : expf(running_maximum - new_maximum);
+        const float score_scale = expf(score - new_maximum);
+        running_sum = running_sum * previous_scale + score_scale;
+        for (size_t dimension = threadIdx.x; dimension < head_dimension;
+             dimension += blockDim.x) {
+            accumulator[dimension] = accumulator[dimension] * previous_scale +
+                                     score_scale * value[key_index + dimension];
         }
-        __syncthreads();
+        running_maximum = new_maximum;
     }
-
-    float maximum = -INFINITY;
-    for (size_t key_position = threadIdx.x; key_position <= query_position;
-         key_position += blockDim.x) {
-        maximum = fmaxf(maximum, probabilities[key_position]);
-    }
-    maximum = block_max(maximum, partial);
-    float denominator = 0.0f;
-    for (size_t key_position = threadIdx.x; key_position <= query_position;
-         key_position += blockDim.x) {
-        const float probability = expf(probabilities[key_position] - maximum);
-        probabilities[key_position] = probability;
-        denominator += probability;
-    }
-    denominator = block_sum(denominator, partial);
-    const float inverse_denominator = 1.0f / denominator;
-    for (size_t key_position = threadIdx.x; key_position <= query_position;
-         key_position += blockDim.x) {
-        probabilities[key_position] *= inverse_denominator;
-    }
-    __syncthreads();
-
     for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
-        float result = 0.0f;
-        for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-            const size_t key_index =
-                attention_offset(batch, key_position, key_value_head, sequence_length,
-                                 key_value_head_count, head_dimension);
-            result += probabilities[key_position] * value[key_index + dimension];
-        }
-        output[query_index + dimension] = result;
+        output[query_index + dimension] = accumulator[dimension] / running_sum;
     }
 }
 
@@ -476,12 +474,17 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
             attention_offset(batch, key_position, key_value_head, sequence_length,
                              key_value_head_count, head_dimension);
         float dot = 0.0f;
+        float probability_gradient = 0.0f;
         for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             dot += query_row_values[dimension] * key[key_index + dimension];
+            probability_gradient +=
+                output_gradient_row[dimension] * value[key_index + dimension];
         }
         dot = block_sum(dot, partial);
+        probability_gradient = block_sum(probability_gradient, partial);
         if (threadIdx.x == 0U) {
             probabilities[key_position] = dot * scale;
+            probability_gradients[key_position] = probability_gradient;
         }
         __syncthreads();
     }
@@ -506,21 +509,6 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
         probabilities[key_position] *= inverse_denominator;
     }
     __syncthreads();
-
-    for (size_t key_position = 0U; key_position <= query_position; ++key_position) {
-        const size_t key_index =
-            attention_offset(batch, key_position, key_value_head, sequence_length,
-                             key_value_head_count, head_dimension);
-        float probability_gradient = 0.0f;
-        for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
-            probability_gradient += output_gradient_row[dimension] * value[key_index + dimension];
-        }
-        probability_gradient = block_sum(probability_gradient, partial);
-        if (threadIdx.x == 0U) {
-            probability_gradients[key_position] = probability_gradient;
-        }
-        __syncthreads();
-    }
 
     float weighted_probability_gradient = 0.0f;
     for (size_t key_position = threadIdx.x; key_position <= query_position;
@@ -637,21 +625,33 @@ __global__ void cross_entropy_backward_kernel(const float *logits, const uint32_
     }
 }
 
-__global__ void adamw_kernel(float *parameter, const float *gradient, float *first_moment,
+__global__ void adamw_kernel(float *parameter, float *gradient, float *first_moment,
                              float *second_moment, size_t count, float learning_rate, float beta1,
                              float beta2, float epsilon, float weight_decay, float gradient_scale,
-                             float inverse_first_bias, float inverse_second_bias) {
+                             float inverse_first_bias, float inverse_second_bias,
+                             int zero_gradient, int *flags) {
     for (size_t index = grid_index(); index < count; index += grid_stride()) {
+        const float old_parameter = parameter[index];
         const float scaled_gradient = gradient[index] * gradient_scale;
         const float first = beta1 * first_moment[index] + (1.0f - beta1) * scaled_gradient;
         const float second =
             beta2 * second_moment[index] + (1.0f - beta2) * scaled_gradient * scaled_gradient;
         const float corrected_first = first * inverse_first_bias;
         const float corrected_second = second * inverse_second_bias;
-        parameter[index] -= learning_rate * (corrected_first / (sqrtf(corrected_second) + epsilon) +
-                                             weight_decay * parameter[index]);
+        const float updated =
+            old_parameter -
+            learning_rate * (corrected_first / (sqrtf(corrected_second) + epsilon) +
+                             weight_decay * old_parameter);
+        if (isfinite(old_parameter) == 0 || isfinite(scaled_gradient) == 0 ||
+            isfinite(first) == 0 || isfinite(second) == 0 || isfinite(updated) == 0) {
+            atomicExch(&flags[LLM_CUDA_FLAG_NON_FINITE], 1);
+        }
+        parameter[index] = updated;
         first_moment[index] = first;
         second_moment[index] = second;
+        if (zero_gradient != 0) {
+            gradient[index] = 0.0f;
+        }
     }
 }
 
@@ -680,6 +680,11 @@ unsigned int elementwise_blocks(size_t count, unsigned int block_size) {
     const size_t needed = (count + block_size - 1U) / block_size;
     const size_t capped = needed > 65535U ? 65535U : needed;
     return capped == 0U ? 1U : static_cast<unsigned int>(capped);
+}
+
+unsigned int sum_squares_blocks(size_t count) {
+    const unsigned int needed = elementwise_blocks(count, LLM_CUDA_ELEMENTWISE_BLOCK);
+    return needed > 4096U ? 4096U : needed;
 }
 
 unsigned int row_block_size(size_t row_width) {
@@ -753,6 +758,12 @@ void llm_cuda_launch_reduce_mean_square_last(cudaStream_t stream, const float *i
         input, output, outer_count, reduction_size);
 }
 
+void llm_cuda_launch_accumulate_sum_squares(cudaStream_t stream, const float *input,
+                                            float *accumulator, size_t value_count) {
+    accumulate_sum_squares_kernel<<<sum_squares_blocks(value_count), LLM_CUDA_ELEMENTWISE_BLOCK,
+                                    0, stream>>>(input, accumulator, value_count);
+}
+
 void llm_cuda_launch_softmax_last(cudaStream_t stream, const float *input, float *output,
                                   size_t outer_count, size_t row_width) {
     softmax_last_kernel<<<static_cast<unsigned int>(outer_count), row_block_size(row_width), 0,
@@ -816,7 +827,7 @@ void llm_cuda_launch_attention_forward(cudaStream_t stream, const float *query, 
                                        size_t query_rows, size_t sequence_length,
                                        size_t query_head_count, size_t key_value_head_count,
                                        size_t head_dimension) {
-    const size_t shared_bytes = (sequence_length + 32U) * sizeof(float);
+    const size_t shared_bytes = (32U + head_dimension) * sizeof(float);
     attention_forward_kernel<<<static_cast<unsigned int>(query_rows), LLM_CUDA_ATTENTION_BLOCK,
                                shared_bytes, stream>>>(query, key, value, output, scale, query_rows,
                                                        sequence_length, query_head_count,
@@ -852,15 +863,16 @@ void llm_cuda_launch_cross_entropy_backward(cudaStream_t stream, const float *lo
         logits, targets, gradient, row_count, vocabulary_size);
 }
 
-void llm_cuda_launch_adamw(cudaStream_t stream, float *parameter, const float *gradient,
+void llm_cuda_launch_adamw(cudaStream_t stream, float *parameter, float *gradient,
                            float *first_moment, float *second_moment, size_t count,
                            float learning_rate, float beta1, float beta2, float epsilon,
                            float weight_decay, float gradient_scale, float inverse_first_bias,
-                           float inverse_second_bias) {
+                           float inverse_second_bias, int zero_gradient, int *flags) {
     adamw_kernel<<<elementwise_blocks(count, LLM_CUDA_ELEMENTWISE_BLOCK),
                    LLM_CUDA_ELEMENTWISE_BLOCK, 0, stream>>>(
         parameter, gradient, first_moment, second_moment, count, learning_rate, beta1, beta2,
-        epsilon, weight_decay, gradient_scale, inverse_first_bias, inverse_second_bias);
+        epsilon, weight_decay, gradient_scale, inverse_first_bias, inverse_second_bias,
+        zero_gradient, flags);
 }
 
 void llm_cuda_launch_check_finite(cudaStream_t stream, const float *values, size_t count,

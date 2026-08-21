@@ -29,12 +29,12 @@ except ImportError:  # Direct script execution.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabulary):
+def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabulary,
+                    gradient_accumulation=2):
     """Returns (stage, operation, dimension flags, calls per update) tuples."""
     rows = batch * sequence
     head_dim = hidden // heads
-    # Two micro-batches per update at the canonical gradient_accumulation_steps.
-    micro = 2
+    micro = gradient_accumulation
     matrix = lambda r, k, c: ["--rows", str(r), "--inner", str(k), "--columns", str(c)]
     vector = lambda n: ["--elements", str(n)]
     attn = ["--batch", str(batch), "--sequence", str(sequence),
@@ -96,9 +96,9 @@ def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabu
                                      "--elements", str(rows)], 1)
 
     # ---- gradients and optimizer, once per update -----------------------
-    # Keep the real parameter tensor boundaries. The runtime launches zero,
-    # gradient-norm reductions and AdamW once per parameter rather than over
-    # one imaginary flat 75M-element vector.
+    # Keep the real parameter tensor boundaries. AdamW clears each gradient in
+    # the optimizer kernel, and the norm uses one fused sum-of-squares dispatch
+    # per tensor rather than four reductions and scalar operations.
     parameter_shapes = [
         (vocabulary, hidden, 1),          # token embedding
         (hidden, vocabulary, 1),          # output head
@@ -108,19 +108,10 @@ def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabu
         (feed_forward, hidden, layers),
     ]
     parameters = sum(rows * columns * count for rows, columns, count in parameter_shapes)
-    parameter_tensor_count = sum(count for _, _, count in parameter_shapes)
     for rows, columns, count in parameter_shapes:
         elements = rows * columns
-        w.append(("optimizer", "zero", vector(elements), count))
         w.append(("optimizer", "adamw", vector(elements), count))
-        w.append(("gradient_norm", "reduce_mean_square",
-                  ["--rows", str(rows), "--columns", str(columns)], count))
-        w.append(("gradient_norm", "reduce_sum",
-                  ["--rows", "1", "--columns", str(rows)], count))
-    # One scalar scale and accumulation follow each parameter reduction; the
-    # destination scalar is cleared once at the start of the norm calculation.
-    w.append(("gradient_norm", "scale", vector(1), parameter_tensor_count))
-    w.append(("gradient_norm", "accumulate", vector(1), parameter_tensor_count))
+        w.append(("gradient_norm", "accumulate_sum_squares", vector(elements), count))
     w.append(("gradient_norm", "fill", vector(1), 1))
     return w, parameters
 
@@ -156,6 +147,7 @@ def main():
     parser.add_argument("--feed-forward", type=int, default=1608)
     parser.add_argument("--layers", type=int, default=12)
     parser.add_argument("--vocabulary", type=int, default=32008)
+    parser.add_argument("--gradient-accumulation", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--sample-ms", type=int, default=20)
     arguments = parser.parse_args()
@@ -169,7 +161,8 @@ def main():
 
     workloads, parameters = build_workloads(
         arguments.batch, arguments.sequence, arguments.hidden, arguments.heads,
-        arguments.feed_forward, arguments.layers, arguments.vocabulary)
+        arguments.feed_forward, arguments.layers, arguments.vocabulary,
+        arguments.gradient_accumulation)
     print(f"Backend: {arguments.backend} | modello: {parameters/1e6:.2f}M parametri, "
           f"{len(workloads)} forme distinte da misurare\n", file=sys.stderr)
 

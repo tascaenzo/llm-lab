@@ -11,6 +11,7 @@
 #define LLM_METAL_MAX_THREADS_1D 256U
 #define LLM_METAL_MATMUL_TILE 16U
 #define LLM_METAL_ELEMENTWISE_VECTOR_WIDTH 4U
+#define LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP 4096U
 
 typedef struct metal_elementwise_parameters {
     uint32_t count;
@@ -70,6 +71,7 @@ typedef struct metal_adamw_parameters {
     float gradient_scale;
     float inverse_first_bias;
     float inverse_second_bias;
+    uint32_t zero_gradient;
 } metal_adamw_parameters;
 
 #define LLM_METAL_AUTOTUNE_TRIALS 3U
@@ -600,8 +602,8 @@ llm_status llm_metal_attention_forward_f32(void *opaque_context, const float *qu
         [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:3U];
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4U];
         status = metal_dispatch_attention_groups(context, LLM_METAL_PIPELINE_ATTENTION_FORWARD,
-                                                 command_buffer, encoder, query_rows,
-                                                 head_dimension, sequence_length);
+                                                  command_buffer, encoder, query_rows,
+                                                  head_dimension, 32U + head_dimension);
         if (status != LLM_OK || context->batch_active != 0) {
             return status;
         }
@@ -672,11 +674,11 @@ llm_status llm_metal_attention_backward_f32(void *opaque_context, const float *q
     }
 }
 
-llm_status llm_metal_adamw_update_f32(void *opaque_context, float *parameter, const float *gradient,
+llm_status llm_metal_adamw_update_f32(void *opaque_context, float *parameter, float *gradient,
                                       float *first_moment, float *second_moment, size_t value_count,
                                       float learning_rate, float beta1, float beta2, float epsilon,
                                       float weight_decay, float gradient_scale,
-                                      unsigned long long step) {
+                                      unsigned long long step, int zero_gradient) {
     if (opaque_context == NULL || parameter == NULL || gradient == NULL || first_moment == NULL ||
         second_moment == NULL || !isfinite(learning_rate) || learning_rate < 0.0F ||
         !isfinite(beta1) || beta1 < 0.0F || beta1 >= 1.0F || !isfinite(beta2) || beta2 < 0.0F ||
@@ -702,6 +704,7 @@ llm_status llm_metal_adamw_update_f32(void *opaque_context, float *parameter, co
     parameters.gradient_scale = gradient_scale;
     parameters.inverse_first_bias = 1.0F / first_bias;
     parameters.inverse_second_bias = 1.0F / second_bias;
+    parameters.zero_gradient = zero_gradient != 0 ? 1U : 0U;
     llm_metal_context *context = opaque_context;
     @autoreleasepool {
         id<MTLCommandBuffer> command_buffer = nil;
@@ -781,6 +784,40 @@ llm_status llm_metal_reduce_mean_square_last_f32(void *context, const float *inp
                                                  size_t outer_count, size_t reduction_size) {
     return metal_reduce(context, LLM_METAL_PIPELINE_REDUCE_MEAN_SQUARE, input, output, outer_count,
                         reduction_size);
+}
+
+llm_status llm_metal_accumulate_sum_squares_f32(void *opaque_context, const float *input,
+                                                float *accumulator, size_t value_count) {
+    if (opaque_context == NULL || input == NULL || accumulator == NULL || value_count == 0U) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    metal_elementwise_parameters parameters = {0};
+    if (metal_size_to_u32(value_count, &parameters.count) == 0) {
+        return LLM_OVERFLOW;
+    }
+    llm_metal_context *context = opaque_context;
+    @autoreleasepool {
+        id<MTLCommandBuffer> command_buffer = nil;
+        id<MTLComputeCommandEncoder> encoder = nil;
+        const llm_metal_pipeline pipeline = LLM_METAL_PIPELINE_ACCUMULATE_SUM_SQUARES;
+        llm_status status = metal_begin_compute(context, pipeline, &command_buffer, &encoder);
+        if (status != LLM_OK) {
+            return status;
+        }
+        [encoder setBuffer:metal_buffer_handle(input) offset:0U atIndex:0U];
+        [encoder setBuffer:metal_buffer_handle(accumulator) offset:0U atIndex:1U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:2U];
+        const size_t group_count =
+            (value_count + LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP - 1U) /
+            LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP;
+        status = metal_dispatch_row_groups(context, pipeline, command_buffer, encoder, group_count,
+                                           LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP);
+        if (status != LLM_OK || context->batch_active != 0) {
+            return status;
+        }
+        return metal_buffer_values_are_finite(accumulator, 1U) != 0 ? LLM_OK
+                                                                    : LLM_NUMERICAL_ERROR;
+    }
 }
 
 static size_t metal_matmul_pipeline_tile(llm_metal_pipeline pipeline) {

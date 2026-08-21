@@ -253,6 +253,8 @@ static lm_dataset_status validate_header(const unsigned char header[LM_DATASET_H
     dataset->model_vocabulary_size = model_vocabulary_size;
     dataset->end_of_document_token = end_of_document_token;
     dataset->split = (lm_dataset_split)split;
+    memcpy(dataset->tokenizer_checksum, header + TOKENIZER_CHECKSUM_OFFSET,
+           sizeof(dataset->tokenizer_checksum));
     return LM_DATASET_OK;
 }
 
