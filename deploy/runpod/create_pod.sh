@@ -8,7 +8,7 @@ cd "${RUNPOD_PROJECT_ROOT}"
 
 readonly image="${RUNPOD_IMAGE:-ghcr.io/tascaenzo/llm-lab-cuda:latest}"
 readonly gpu="${RUNPOD_GPU_ID:-NVIDIA GeForce RTX 4090}"
-readonly name="${RUNPOD_POD_NAME:-llm-lab-cuda-train}"
+readonly pod_name="${RUNPOD_POD_NAME:-llm-lab-cuda-train}"
 readonly volume_gb="${RUNPOD_VOLUME_GB:-40}"
 readonly pod_environment="$(runpod_pod_environment_json)"
 
@@ -25,7 +25,7 @@ if ! runpodctl user >/dev/null; then
 fi
 
 runpodctl pod create \
-    --name "${name}" \
+    --name "${pod_name}" \
     --gpu-id "${gpu}" \
     --gpu-count 1 \
     --image "${image}" \
