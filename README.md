@@ -88,7 +88,7 @@ Baseline e confronto automatico sono descritti nella
 
 ## Requisiti
 
-- CMake 3.24 o superiore;
+- CMake 3.22 o superiore;
 - Ninja;
 - compilatore C con supporto C23: Clang o GCC recente;
 - Git (solo per clonare il progetto).
