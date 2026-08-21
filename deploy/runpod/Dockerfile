@@ -1,4 +1,8 @@
-FROM nvidia/cuda:12.6.2-devel-ubuntu24.04
+# RunPod's RTX 4090 deployment selected for this pipeline exposes CUDA 12.4.
+# A CUDA 12.6 container is rejected by its driver before the entrypoint runs.
+# Ubuntu 22.04 is intentional: NVIDIA publishes the maintained CUDA 12.4
+# development image for it, and its CMake 3.22 satisfies this project.
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LLM_LAB_BACKEND=cuda
