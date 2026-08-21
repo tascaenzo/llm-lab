@@ -83,17 +83,23 @@ runpod_rsync() {
     # Checkpoints are rewritten atomically but retain the same byte length. Do
     # not use --append here: old macOS rsync then treats a stale equal-size file
     # as complete and silently skips the new checkpoint.
-    rsync --archive --compress --partial --progress "$@"
+    # The RunPod network volume forbids chown/chgrp/chmod metadata updates.
+    # Content, paths and timestamps are sufficient for datasets, checkpoints
+    # and logs, so transfer them without ownership or permission preservation.
+    rsync --archive --no-owner --no-group --no-perms --omit-dir-times \
+        --compress --partial --progress "$@"
 }
 
 runpod_rsync_resume_immutable_upload() {
     if rsync --append-verify --version >/dev/null 2>&1; then
-        rsync --archive --compress --partial --append-verify --progress "$@"
+        rsync --archive --no-owner --no-group --no-perms --omit-dir-times \
+            --compress --partial --append-verify --progress "$@"
         return
     fi
 
     # macOS ships rsync 2.6.9, which lacks --append-verify. --append keeps
     # interrupted large transfers resumable; SSH already protects each block.
     printf 'RunPod pipeline: rsync lacks --append-verify; using --append for immutable upload.\n' >&2
-    rsync --archive --compress --partial --append --progress "$@"
+    rsync --archive --no-owner --no-group --no-perms --omit-dir-times \
+        --compress --partial --append --progress "$@"
 }
