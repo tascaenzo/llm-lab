@@ -98,8 +98,9 @@ if [[ "${cuda_numerics}" != "strict" && "${cuda_numerics}" != "step" ]]; then
     printf 'RunPod pipeline: LLM_LAB_CUDA_NUMERICS must be strict or step.\n' >&2
     exit 2
 fi
-if [[ "${run_mode}" != "train" && "${run_mode}" != "profile-only" ]]; then
-    printf 'RunPod pipeline: LLM_LAB_RUN_MODE must be train or profile-only.\n' >&2
+if [[ "${run_mode}" != "train" && "${run_mode}" != "profile-only" &&
+      "${run_mode}" != "transfer-only" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_RUN_MODE must be train, profile-only, or transfer-only.\n' >&2
     exit 2
 fi
 if [[ "${checkpoint_input}" == "${checkpoint_output}" ]]; then
@@ -113,6 +114,10 @@ if ! [[ "${resume_batch_size}" =~ ^[0-9]+$ ]] ||
 fi
 
 start_ssh
+if [[ "${run_mode}" == "transfer-only" ]]; then
+    printf 'RunPod pipeline: transfer-only mode; CUDA and training are disabled.\n' >&2
+    exec sleep infinity
+fi
 nvidia-smi
 export LLM_LAB_CUDA_MATH="${cuda_math}"
 export LLM_LAB_CUDA_NUMERICS="${cuda_numerics}"
