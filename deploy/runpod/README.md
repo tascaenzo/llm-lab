@@ -146,6 +146,14 @@ Per misurare senza avviare il training usa `LLM_LAB_RUN_MODE=profile-only`. Per 
 token/s, loss e perplexity; promuovi la combinazione veloce solo se le metriche restano sane.
 L'avvio stampa esplicitamente matematica e politica numerica effettive.
 
+### Recuperare un volume senza GPU
+
+`LLM_LAB_RUN_MODE=transfer-only` avvia soltanto SSH e resta inattivo: non chiama CUDA e non
+avvia il trainer. Serve per montare un volume persistente su un Pod CPU e recuperare checkpoint
+e log quando una GPU non e' disponibile. Imposta temporaneamente la variabile, aggiorna e avvia
+il Pod, esegui `sync_from_pod.sh`, quindi fermalo. Ripristina `train` prima della prossima
+sessione CUDA.
+
 ## Profilare prima di spendere
 
 Imposta `LLM_LAB_PROFILE_CUDA=1` quando crei un Pod diagnostico. Dopo il
