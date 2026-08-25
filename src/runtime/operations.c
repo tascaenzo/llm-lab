@@ -765,9 +765,9 @@ llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, llm_ten
         return LLM_UNSUPPORTED_OPERATION;
     }
     return backend->ops->adamw_update_f32(
-        backend->context, (float *)parameter->storage->memory,
-        (float *)gradient->storage->memory, (float *)first_moment->storage->memory,
-        (float *)second_moment->storage->memory, parameter->element_count, options->learning_rate,
-        options->beta1, options->beta2, options->epsilon, options->weight_decay,
-        options->gradient_scale, options->step, options->zero_gradient != 0);
+        backend->context, (float *)parameter->storage->memory, (float *)gradient->storage->memory,
+        (float *)first_moment->storage->memory, (float *)second_moment->storage->memory,
+        parameter->element_count, options->learning_rate, options->beta1, options->beta2,
+        options->epsilon, options->weight_decay, options->gradient_scale, options->step,
+        options->zero_gradient != 0);
 }

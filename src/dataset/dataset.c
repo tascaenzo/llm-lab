@@ -40,8 +40,7 @@ lm_dataset_status lm_dataset_tokenizer_matches(const lm_dataset *dataset,
     unsigned char checksum[TOKENIZER_SHA256_DIGEST_SIZE] = {0};
     const lm_dataset_status status = sha256_file(tokenizer_path, checksum);
     if (status == LM_DATASET_OK) {
-        *out_matches =
-            memcmp(checksum, dataset->tokenizer_checksum, sizeof(checksum)) == 0 ? 1 : 0;
+        *out_matches = memcmp(checksum, dataset->tokenizer_checksum, sizeof(checksum)) == 0 ? 1 : 0;
     }
     return status;
 }

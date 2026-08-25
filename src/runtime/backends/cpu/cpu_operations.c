@@ -286,7 +286,7 @@ llm_status llm_cpu_execute_reduce_mean_square_last_f32(void *context, const floa
 }
 
 llm_status llm_cpu_execute_accumulate_sum_squares_f32(void *context, const float *input,
-                                                       float *accumulator, size_t value_count) {
+                                                      float *accumulator, size_t value_count) {
     if (context == NULL || input == NULL || accumulator == NULL || value_count == 0U) {
         return LLM_INVALID_ARGUMENT;
     }

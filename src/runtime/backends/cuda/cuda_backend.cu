@@ -5,8 +5,8 @@
  * above src/runtime/backends knows it exists beyond the create call.
  */
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cuda_internal.h"
@@ -34,7 +34,7 @@ llm_status configured_math_mode(llm_cuda_math_mode *out_mode) {
     const char *requested = getenv("LLM_LAB_CUDA_MATH");
     if (requested == NULL || requested[0] == '\0') {
         *out_mode = environment_flag_is_set("LLM_LAB_CUDA_TF32") != 0 ? LLM_CUDA_MATH_TF32
-                                                                       : LLM_CUDA_MATH_F32;
+                                                                      : LLM_CUDA_MATH_F32;
         return LLM_OK;
     }
     if (strcmp(requested, "f32") == 0 || strcmp(requested, "0") == 0) {
@@ -44,8 +44,7 @@ llm_status configured_math_mode(llm_cuda_math_mode *out_mode) {
     } else if (strcmp(requested, "bf16-compute") == 0) {
         *out_mode = LLM_CUDA_MATH_BF16_COMPUTE;
     } else {
-        fprintf(stderr,
-                "cuda: LLM_LAB_CUDA_MATH must be f32, tf32, or bf16-compute (got %s)\n",
+        fprintf(stderr, "cuda: LLM_LAB_CUDA_MATH must be f32, tf32, or bf16-compute (got %s)\n",
                 requested);
         return LLM_INVALID_ARGUMENT;
     }
@@ -62,17 +61,16 @@ llm_status configured_numerics_mode(llm_cuda_numerics_mode *out_mode) {
     } else if (strcmp(requested, "step") == 0) {
         *out_mode = LLM_CUDA_NUMERICS_STEP;
     } else {
-        fprintf(stderr, "cuda: LLM_LAB_CUDA_NUMERICS must be strict or step (got %s)\n",
-                requested);
+        fprintf(stderr, "cuda: LLM_LAB_CUDA_NUMERICS must be strict or step (got %s)\n", requested);
         return LLM_INVALID_ARGUMENT;
     }
     return LLM_OK;
 }
 
 const char *math_mode_name(llm_cuda_math_mode mode) {
-    return mode == LLM_CUDA_MATH_TF32          ? "tf32"
+    return mode == LLM_CUDA_MATH_TF32           ? "tf32"
            : mode == LLM_CUDA_MATH_BF16_COMPUTE ? "bf16-compute"
-                                                 : "f32";
+                                                : "f32";
 }
 
 const char *numerics_mode_name(llm_cuda_numerics_mode mode) {
@@ -246,11 +244,10 @@ extern "C" llm_status llm_backend_cuda_create(llm_backend **out_backend) {
     if (configuration_status == LLM_OK) {
         configuration_status = configured_numerics_mode(&context->numerics_mode);
     }
-    const cublasMath_t blas_math = context->math_mode == LLM_CUDA_MATH_F32
-                                       ? CUBLAS_PEDANTIC_MATH
-                                       : context->math_mode == LLM_CUDA_MATH_TF32
-                                             ? CUBLAS_TF32_TENSOR_OP_MATH
-                                             : CUBLAS_DEFAULT_MATH;
+    const cublasMath_t blas_math = context->math_mode == LLM_CUDA_MATH_F32 ? CUBLAS_PEDANTIC_MATH
+                                   : context->math_mode == LLM_CUDA_MATH_TF32
+                                       ? CUBLAS_TF32_TENSOR_OP_MATH
+                                       : CUBLAS_DEFAULT_MATH;
     if (configuration_status != LLM_OK ||
         cublasSetMathMode(context->blas, blas_math) != CUBLAS_STATUS_SUCCESS) {
         cuda_destroy(context);

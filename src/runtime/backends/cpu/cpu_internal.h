@@ -34,7 +34,7 @@ llm_status llm_cpu_execute_reduce_mean_square_last_f32(void *context, const floa
                                                        float *output, size_t outer_count,
                                                        size_t reduction_size);
 llm_status llm_cpu_execute_accumulate_sum_squares_f32(void *context, const float *input,
-                                                       float *accumulator, size_t value_count);
+                                                      float *accumulator, size_t value_count);
 llm_status llm_cpu_execute_matmul_f32(void *context, const float *left, const float *right,
                                       float *output, size_t rows, size_t inner_size,
                                       size_t columns);

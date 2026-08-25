@@ -257,11 +257,9 @@ llm_status llm_cuda_matmul_ex_f32(void *opaque_context, const float *left, const
     const cublasOperation_t operation_left = transpose_left != 0 ? CUBLAS_OP_T : CUBLAS_OP_N;
     const cublasOperation_t operation_right = transpose_right != 0 ? CUBLAS_OP_T : CUBLAS_OP_N;
     const cublasComputeType_t compute_type =
-        context->math_mode == LLM_CUDA_MATH_TF32
-            ? CUBLAS_COMPUTE_32F_FAST_TF32
-            : context->math_mode == LLM_CUDA_MATH_BF16_COMPUTE
-                  ? CUBLAS_COMPUTE_32F_FAST_16BF
-                  : CUBLAS_COMPUTE_32F_PEDANTIC;
+        context->math_mode == LLM_CUDA_MATH_TF32           ? CUBLAS_COMPUTE_32F_FAST_TF32
+        : context->math_mode == LLM_CUDA_MATH_BF16_COMPUTE ? CUBLAS_COMPUTE_32F_FAST_16BF
+                                                           : CUBLAS_COMPUTE_32F_PEDANTIC;
     const cublasStatus_t status = cublasGemmEx(
         context->blas, operation_right, operation_left, (int)result_columns, (int)result_rows,
         (int)interior, &alpha, device_const_float(right), CUDA_R_32F, (int)right_columns,

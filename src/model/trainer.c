@@ -177,8 +177,7 @@ static llm_status trainer_gradient_norm(lm_trainer *trainer, int use_device_batc
             status = LLM_INVALID_ARGUMENT;
             break;
         }
-        status = llm_accumulate_sum_squares(backend, gradient,
-                                            &trainer->gradient_norm_square);
+        status = llm_accumulate_sum_squares(backend, gradient, &trainer->gradient_norm_square);
     }
     status = end_device_batch(backend, use_device_batch, status);
     float sum_square = 0.0F;
