@@ -18,10 +18,11 @@ prima la pagina wiki e poi la specifica corrispondente.
 7. [Runtime v1: training minimo su Apple Silicon](runtime-v1-architecture.md)
 8. [Modello Minimal: prima rete addestrabile](model-minimal.md)
 9. [Italiano-Base-75M: primo decoder utilizzabile](italiano-base-75m.md)
-10. [Backend CPU](backend-cpu.md)
-11. [Backend Metal](backend-metal.md)
-12. [Backend CUDA](backend-cuda.md)
-13. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
+10. [Checkpoint pubblici di Italiano Base 75M](italiano-base-75m-checkpoints.md)
+11. [Backend CPU](backend-cpu.md)
+12. [Backend Metal](backend-metal.md)
+13. [Backend CUDA](backend-cuda.md)
+14. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.
