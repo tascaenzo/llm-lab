@@ -6,7 +6,7 @@
 
 typedef struct cpu_adamw_job {
     float *parameter;
-    const float *gradient;
+    float *gradient;
     float *first_moment;
     float *second_moment;
     float learning_rate;
@@ -17,6 +17,7 @@ typedef struct cpu_adamw_job {
     float gradient_scale;
     float inverse_first_bias;
     float inverse_second_bias;
+    int zero_gradient;
 } cpu_adamw_job;
 
 static llm_status adamw_range(void *context, size_t begin, size_t end) {
@@ -41,15 +42,19 @@ static llm_status adamw_range(void *context, size_t begin, size_t end) {
         job->first_moment[index] = first_moment;
         job->second_moment[index] = second_moment;
         job->parameter[index] = updated;
+        if (job->zero_gradient != 0) {
+            job->gradient[index] = 0.0F;
+        }
     }
     return LLM_OK;
 }
 
-llm_status llm_cpu_execute_adamw_update_f32(void *context, float *parameter, const float *gradient,
+llm_status llm_cpu_execute_adamw_update_f32(void *context, float *parameter, float *gradient,
                                             float *first_moment, float *second_moment,
                                             size_t value_count, float learning_rate, float beta1,
                                             float beta2, float epsilon, float weight_decay,
-                                            float gradient_scale, unsigned long long step) {
+                                            float gradient_scale, unsigned long long step,
+                                            int zero_gradient) {
     llm_cpu_context *cpu = context;
     if (cpu == NULL || parameter == NULL || gradient == NULL || first_moment == NULL ||
         second_moment == NULL || value_count == 0U || !isfinite(learning_rate) ||
@@ -78,6 +83,7 @@ llm_status llm_cpu_execute_adamw_update_f32(void *context, float *parameter, con
         .gradient_scale = gradient_scale,
         .inverse_first_bias = 1.0F / first_bias,
         .inverse_second_bias = 1.0F / second_bias,
+        .zero_gradient = zero_gradient,
     };
     return llm_cpu_parallel_for(cpu->executor, value_count, LLM_CPU_OPTIMIZER_VALUES_PER_TASK,
                                 adamw_range, &job);

@@ -51,6 +51,23 @@ RawPage = Tuple[str, str, str]
 CleanPage = Tuple[str, str, str]
 
 
+def fnv1a_64(text: str) -> int:
+    value = 14695981039346656037
+    for byte in text.encode("utf-8"):
+        value ^= byte
+        value = (value * 1099511628211) & ((1 << 64) - 1)
+    return value
+
+
+def document_split(document_id: str) -> str:
+    bucket = fnv1a_64(document_id) % 10000
+    if bucket < 9000:
+        return "train"
+    if bucket < 9500:
+        return "validation"
+    return "test"
+
+
 def local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
@@ -218,8 +235,8 @@ def safe_name(value: str) -> str:
     return result
 
 
-def discover_dump(project_root: Path) -> Path:
-    candidates = sorted((project_root / "data" / "raw" / "wikipedia-it").glob("*-pages-articles.xml.bz2"))
+def discover_dump(project_root: Path, source: str) -> Path:
+    candidates = sorted((project_root / "data" / "raw" / source).glob("*-pages-articles.xml.bz2"))
     if len(candidates) != 1:
         raise RuntimeError("specificare --input: non e' stato trovato un solo dump pages-articles")
     return candidates[0]
@@ -268,7 +285,8 @@ class ProgressReporter:
         self.bytes_read = 0
         self.started_at = time.monotonic()
         self.last_update_at = 0.0
-        self.enabled = sys.stderr.isatty()
+        self.enabled = True
+        self.interactive = sys.stderr.isatty() and os.environ.get("LLM_LAB_PROGRESS_LOG") != "1"
 
     def update(
         self,
@@ -282,7 +300,8 @@ class ProgressReporter:
         if not self.enabled:
             return
         now = time.monotonic()
-        if not force and now - self.last_update_at < 0.5:
+        interval = 0.5 if self.interactive else 5.0
+        if not force and now - self.last_update_at < interval:
             return
 
         elapsed = now - self.started_at
@@ -293,23 +312,24 @@ class ProgressReporter:
         speed = self.bytes_read / elapsed if elapsed else 0.0
         remaining = (self.total_bytes - self.bytes_read) / speed if speed else 0.0
         eta = format_duration(remaining) if speed else "--:--"
-        print(
-            f"\rEstrazione [{bar}] {fraction * 100:5.1f}% "
+        message = (
+            f"Estrazione [{bar}] {fraction * 100:5.1f}% "
             f"{format_bytes(self.bytes_read)}/{format_bytes(self.total_bytes)} "
             f"{format_bytes(speed)}/s ETA {eta} | "
-            f"pagine {pages_seen:,}, documenti {documents_written:,}",
-            end="",
-            file=sys.stderr,
-            flush=True,
+            f"pagine {pages_seen:,}, documenti {documents_written:,}"
         )
+        print(f"\r{message}" if self.interactive and not force else message,
+              end="\r" if self.interactive and not force else "\n", file=sys.stderr, flush=True)
         self.last_update_at = now
 
     def finish(self) -> None:
-        if self.enabled:
+        if self.enabled and self.interactive:
             print(file=sys.stderr)
 
 
-def iter_raw_pages(input_path: Path, statistics: dict, reporter: ProgressReporter) -> Iterator[RawPage]:
+def iter_raw_pages(
+    input_path: Path, statistics: dict, reporter: ProgressReporter, namespace_to_extract: int
+) -> Iterator[RawPage]:
     with input_path.open("rb") as input_file:
         counting_reader = CountingReader(input_file)
         with bz2.BZ2File(counting_reader, "rb") as dump_file:
@@ -341,9 +361,9 @@ def iter_raw_pages(input_path: Path, statistics: dict, reporter: ProgressReporte
                 if root is not None:
                     root.clear()
 
-                if namespace != "0":
+                if namespace != str(namespace_to_extract):
                     continue
-                statistics["pages_main_namespace"] += 1
+                statistics["pages_selected_namespace"] += 1
                 if is_redirect:
                     statistics["redirects_skipped"] += 1
                     continue
@@ -420,9 +440,25 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, help="dump .xml.bz2; se omesso viene rilevato in data/raw")
     parser.add_argument("--name", default="italiano-wikipedia-v1", help="nome stabile del corpus")
+    # Wikisource usa lo stesso formato di dump. Parametrizzare la provenienza
+    # evita di dover duplicare l'estrattore, e soprattutto evita che i suoi
+    # documenti finiscano con identificatori del namespace di Wikipedia.
+    parser.add_argument("--source", default="wikipedia-it", help="nome della fonte e namespace degli ID")
+    parser.add_argument("--license", dest="license_name", default="CC BY-SA", help="licenza dichiarata")
+    parser.add_argument(
+        "--url-template",
+        default="https://it.wikipedia.org/?curid={page_id}",
+        help="modello dell'URL del documento, con {page_id}",
+    )
     parser.add_argument("--clean-root", type=Path, default=project_root / "data" / "clean")
     parser.add_argument("--derived-root", type=Path, default=project_root / "data" / "derived")
     parser.add_argument("--min-characters", type=int, default=200)
+    parser.add_argument(
+        "--namespace",
+        type=int,
+        default=0,
+        help="namespace MediaWiki da estrarre (0 per Wikipedia, 108 per Pagina: di Wikisource)",
+    )
     parser.add_argument("--part-size-mib", type=int, default=256)
     parser.add_argument("--workers", type=int, default=default_workers)
     return parser.parse_args()
@@ -435,6 +471,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise ValueError("--part-size-mib deve essere positivo")
     if args.workers < 1:
         raise ValueError("--workers deve essere positivo")
+    if args.namespace < 0:
+        raise ValueError("--namespace deve essere non negativo")
 
 
 def output_is_empty(path: Path) -> bool:
@@ -457,7 +495,12 @@ def main() -> int:
     try:
         validate_args(args)
         name = safe_name(args.name)
-        input_path = args.input if args.input is not None else discover_dump(project_root)
+        source = args.source
+        license_name = args.license_name
+        url_template = args.url_template
+        input_path = (
+            args.input if args.input is not None else discover_dump(project_root, args.source)
+        )
         input_path = input_path.resolve()
         if not input_path.is_file():
             raise RuntimeError(f"dump non trovato: {input_path}")
@@ -476,12 +519,14 @@ def main() -> int:
         part_writer = PartWriter(derived_dir, args.part_size_mib * MEBIBYTE)
         statistics = {
             "pages_seen": 0,
-            "pages_main_namespace": 0,
+            "pages_selected_namespace": 0,
             "redirects_skipped": 0,
             "too_short_skipped": 0,
             "duplicates_skipped": 0,
             "documents_written": 0,
             "text_bytes_written": 0,
+            "tokenizer_train_documents": 0,
+            "tokenizer_train_bytes": 0,
         }
 
         deduplication = sqlite3.connect(deduplication_path)
@@ -493,7 +538,7 @@ def main() -> int:
             "w", encoding="utf-8", buffering=WRITE_BUFFER_BYTES
         ) as documents_file:
             for page_id, title, text in iter_clean_pages(
-                iter_raw_pages(input_path, statistics, reporter), args.workers
+                iter_raw_pages(input_path, statistics, reporter, args.namespace), args.workers
             ):
                 if len(text) < args.min_characters:
                     statistics["too_short_skipped"] += 1
@@ -506,16 +551,19 @@ def main() -> int:
                     continue
 
                 record = {
-                    "id": f"wikipedia-it:{page_id}",
-                    "source": "wikipedia-it",
-                    "license": "CC BY-SA",
-                    "url": f"https://it.wikipedia.org/?curid={page_id}",
+                    "id": f"{source}:{page_id}",
+                    "source": source,
+                    "license": license_name,
+                    "url": url_template.format(page_id=page_id),
                     "title": title,
                     "text": text,
                 }
                 documents_file.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
                 documents_file.write("\n")
-                part_writer.write_document(text)
+                if document_split(record["id"]) == "train":
+                    part_writer.write_document(text)
+                    statistics["tokenizer_train_documents"] += 1
+                    statistics["tokenizer_train_bytes"] += len(text.encode("utf-8"))
                 statistics["documents_written"] += 1
                 statistics["text_bytes_written"] += len(text.encode("utf-8"))
 
@@ -547,7 +595,7 @@ def main() -> int:
                 "input": relative_to_project(input_path, project_root),
                 "provenance": load_source_provenance(input_path),
             },
-            "selection": {"namespace": 0, "skip_redirects": True, "min_characters": args.min_characters, "deduplicate": True},
+            "selection": {"namespace": args.namespace, "skip_redirects": True, "min_characters": args.min_characters, "deduplicate": True},
             "cleaning": {
                 "version": "wikitext-basic-v2",
                 "description": "rimuove markup, media, tabelle e conserva testo visibile",
@@ -557,6 +605,13 @@ def main() -> int:
             "outputs": {
                 "documents": relative_to_project(documents_path, project_root),
                 "tokenizer_input": [relative_to_project(path, project_root) for path in part_writer.paths],
+                "tokenizer_input_split": "train",
+            },
+            "split": {
+                "algorithm": "fnv1a-64-mod-10000",
+                "train_buckets": [0, 8999],
+                "validation_buckets": [9000, 9499],
+                "test_buckets": [9500, 9999],
             },
             "statistics": statistics,
         }

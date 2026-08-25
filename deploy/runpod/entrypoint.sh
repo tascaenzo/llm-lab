@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly project_dir=/opt/llm-lab
+readonly backend="${LLM_LAB_BACKEND:-cuda}"
+readonly workspace_dir="${LLM_LAB_WORKSPACE:-/workspace/llm-lab}"
+readonly train_steps="${LLM_LAB_TRAIN_STEPS:?Set LLM_LAB_TRAIN_STEPS before starting the Pod}"
+readonly checkpoint_every="${LLM_LAB_CHECKPOINT_EVERY:-5000}"
+readonly validation_every="${LLM_LAB_VALIDATION_EVERY:-5000}"
+readonly validation_batches="${LLM_LAB_VALIDATION_BATCHES:-100}"
+readonly cuda_math="${LLM_LAB_CUDA_MATH:-${LLM_LAB_CUDA_TF32:-0}}"
+readonly cuda_numerics="${LLM_LAB_CUDA_NUMERICS:-strict}"
+readonly profile_cuda="${LLM_LAB_PROFILE_CUDA:-0}"
+readonly run_mode="${LLM_LAB_RUN_MODE:-train}"
+readonly resume_batch_size="${LLM_LAB_RESUME_BATCH_SIZE:-0}"
+readonly resume_gradient_accumulation="${LLM_LAB_RESUME_GRADIENT_ACCUMULATION:-0}"
+readonly dataset="${workspace_dir}/data/derived/italiano-v3/lm/italiano-v3.train.llmdat"
+readonly validation_dataset="${workspace_dir}/data/derived/italiano-v3/lm/italiano-v3.validation.llmdat"
+readonly model_dir="${workspace_dir}/artifacts/models/italiano-base-75m"
+resolve_workspace_path() {
+    if [[ "$1" == /* ]]; then
+        printf '%s' "$1"
+    else
+        printf '%s/%s' "${workspace_dir}" "$1"
+    fi
+}
+
+readonly checkpoint_input="$(resolve_workspace_path "${LLM_LAB_RESUME_CHECKPOINT:-artifacts/models/italiano-base-75m/latest.llmckpt}")"
+readonly checkpoint_output="$(resolve_workspace_path "${LLM_LAB_OUTPUT_CHECKPOINT:-artifacts/models/italiano-base-75m/candidate-fast.llmckpt}")"
+readonly best_checkpoint="$(resolve_workspace_path "${LLM_LAB_BEST_CHECKPOINT:-artifacts/models/italiano-base-75m/candidate-fast-best.llmckpt}")"
+readonly training_log="$(resolve_workspace_path "${LLM_LAB_TRAINING_LOG:-artifacts/models/italiano-base-75m/candidate-fast.jsonl}")"
+readonly ready_marker="${workspace_dir}/.llm-lab-inputs-ready"
+readonly profile_dir="${workspace_dir}/artifacts/benchmarks/runpod"
+readonly preflight_marker="${workspace_dir}/.llm-lab-cuda-preflight"
+readonly profile_marker="${workspace_dir}/.llm-lab-cuda-profile"
+readonly cli="${project_dir}/build/cuda-release/llm-lab"
+readonly cuda_test="${project_dir}/build/cuda-release/tests/runtime_cuda_backend_test"
+readonly benchmark="${project_dir}/build/cuda-release/utils/benchmarks/runtime_benchmark"
+
+require_file() {
+    if [[ ! -f "$1" ]]; then
+        printf 'RunPod pipeline: required file is missing: %s\n' "$1" >&2
+        exit 2
+    fi
+}
+
+start_ssh() {
+    mkdir -p /run/sshd /root/.ssh
+    chmod 0700 /root/.ssh
+    if [[ -n "${PUBLIC_KEY:-}" ]]; then
+        printf '%s\n' "${PUBLIC_KEY}" > /root/.ssh/authorized_keys
+        chmod 0600 /root/.ssh/authorized_keys
+    else
+        printf 'RunPod pipeline: PUBLIC_KEY is empty; SSH file transfer is unavailable.\n' >&2
+    fi
+    /usr/sbin/sshd
+}
+
+marker_matches() {
+    [[ -f "$1" ]] && [[ "$(<"$1")" == "$2" ]]
+}
+
+write_marker() {
+    local marker_path="$1"
+    local marker_value="$2"
+    local temporary_marker="${marker_path}.tmp"
+    printf '%s\n' "${marker_value}" > "${temporary_marker}"
+    mv "${temporary_marker}" "${marker_path}"
+}
+
+require_positive_integer() {
+    local variable_name="$1"
+    local value="$2"
+    if ! [[ "${value}" =~ ^[1-9][0-9]*$ ]]; then
+        printf 'RunPod pipeline: %s must be a positive integer.\n' "${variable_name}" >&2
+        exit 2
+    fi
+}
+
+require_positive_integer LLM_LAB_TRAIN_STEPS "${train_steps}"
+require_positive_integer LLM_LAB_CHECKPOINT_EVERY "${checkpoint_every}"
+require_positive_integer LLM_LAB_VALIDATION_EVERY "${validation_every}"
+require_positive_integer LLM_LAB_VALIDATION_BATCHES "${validation_batches}"
+if [[ "${backend}" != "cuda" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_BACKEND must be cuda for this image.\n' >&2
+    exit 2
+fi
+if [[ "${profile_cuda}" != "0" && "${profile_cuda}" != "1" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_PROFILE_CUDA must be 0 or 1.\n' >&2
+    exit 2
+fi
+if [[ "${cuda_math}" != "f32" && "${cuda_math}" != "tf32" &&
+      "${cuda_math}" != "bf16-compute" && "${cuda_math}" != "0" && "${cuda_math}" != "1" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_CUDA_MATH must be f32, tf32, or bf16-compute.\n' >&2
+    exit 2
+fi
+if [[ "${cuda_numerics}" != "strict" && "${cuda_numerics}" != "step" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_CUDA_NUMERICS must be strict or step.\n' >&2
+    exit 2
+fi
+if [[ "${run_mode}" != "train" && "${run_mode}" != "profile-only" &&
+      "${run_mode}" != "transfer-only" ]]; then
+    printf 'RunPod pipeline: LLM_LAB_RUN_MODE must be train, profile-only, or transfer-only.\n' >&2
+    exit 2
+fi
+if [[ "${checkpoint_input}" == "${checkpoint_output}" ]]; then
+    printf 'RunPod pipeline: input and output checkpoints must be different.\n' >&2
+    exit 2
+fi
+if ! [[ "${resume_batch_size}" =~ ^[0-9]+$ ]] ||
+   ! [[ "${resume_gradient_accumulation}" =~ ^[0-9]+$ ]]; then
+    printf 'RunPod pipeline: resume batch overrides must be non-negative integers.\n' >&2
+    exit 2
+fi
+
+start_ssh
+if [[ "${run_mode}" == "transfer-only" ]]; then
+    printf 'RunPod pipeline: transfer-only mode; CUDA and training are disabled.\n' >&2
+    exec sleep infinity
+fi
+nvidia-smi
+export LLM_LAB_CUDA_MATH="${cuda_math}"
+export LLM_LAB_CUDA_NUMERICS="${cuda_numerics}"
+printf 'RunPod pipeline: CUDA math=%s, numerics=%s, mode=%s.\n' \
+    "${cuda_math}" "${cuda_numerics}" "${run_mode}" >&2
+if [[ ! -f "${ready_marker}" ]]; then
+    printf 'RunPod pipeline: waiting for input upload marker %s\n' "${ready_marker}" >&2
+    printf 'Run deploy/runpod/sync_to_pod.sh, then stop and restart this Pod.\n' >&2
+    exec sleep infinity
+fi
+require_file "${dataset}"
+require_file "${validation_dataset}"
+require_file "${checkpoint_input}"
+require_file "${cli}"
+require_file "${cuda_test}"
+require_file "${benchmark}"
+mkdir -p "${model_dir}" "${profile_dir}" "$(dirname "${checkpoint_output}")" \
+    "$(dirname "${best_checkpoint}")" "$(dirname "${training_log}")"
+
+# Once the candidate exists it is the newest durable state for this run. A Pod
+# restart continues from it, while the original source remains an untouched
+# rollback point. A corrupt candidate fails closed instead of silently falling
+# back and repeating paid work from an older checkpoint.
+resume_checkpoint="${checkpoint_input}"
+if [[ -f "${checkpoint_output}" ]]; then
+    resume_checkpoint="${checkpoint_output}"
+    printf 'RunPod pipeline: resuming existing candidate %s\n' "${resume_checkpoint}" >&2
+else
+    printf 'RunPod pipeline: starting candidate from source %s\n' "${resume_checkpoint}" >&2
+fi
+readonly resume_checkpoint
+
+readonly build_key="$(sha256sum "${cli}" "${cuda_test}" | sha256sum | cut -d' ' -f1)"
+
+# Run the numerical suite and one disposable real trainer step once per image.
+# The input checkpoint is hashed before and after to prove that the preflight
+# did not consume or rewrite the saved training progress.
+if ! marker_matches "${preflight_marker}" "${build_key}"; then
+    LLM_LAB_CUDA_MATH=f32 LLM_LAB_CUDA_NUMERICS=strict \
+    ctest --test-dir "${project_dir}/build/cuda-release" \
+        --output-on-failure --no-tests=error -R '^runtime\.cuda_backend$'
+
+    readonly preflight_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    readonly preflight_work_dir="$(mktemp -d /tmp/llm-lab-cuda-preflight.XXXXXX)"
+    readonly preflight_checkpoint="${preflight_work_dir}/preflight.llmckpt"
+    readonly preflight_log="${profile_dir}/cuda-preflight-${preflight_timestamp}.jsonl"
+    readonly preflight_summary="${profile_dir}/cuda-preflight-${preflight_timestamp}.summary.json"
+    readonly checkpoint_hash_before="$(sha256sum "${resume_checkpoint}" | cut -d' ' -f1)"
+    cleanup_preflight() {
+        rm -f "${preflight_checkpoint}" "${preflight_checkpoint}.metrics.json"
+        rmdir "${preflight_work_dir}" 2>/dev/null || true
+    }
+    trap cleanup_preflight EXIT
+    printf 'RunPod pipeline: running one disposable CUDA trainer step...\n' >&2
+    LLM_LAB_CUDA_MATH=f32 LLM_LAB_CUDA_NUMERICS=strict "${cli}" model train \
+        "${dataset}" \
+        1 \
+        --resume "${resume_checkpoint}" \
+        --checkpoint "${preflight_checkpoint}" \
+        --checkpoint-every 1 \
+        --log "${preflight_log}" \
+        > "${preflight_summary}"
+    readonly checkpoint_hash_after="$(sha256sum "${resume_checkpoint}" | cut -d' ' -f1)"
+    if [[ "${checkpoint_hash_before}" != "${checkpoint_hash_after}" ]]; then
+        printf 'RunPod pipeline: preflight changed the source checkpoint; aborting.\n' >&2
+        exit 3
+    fi
+    cleanup_preflight
+    trap - EXIT
+    write_marker "${preflight_marker}" "${build_key}"
+    printf 'RunPod pipeline: CUDA trainer preflight passed; source checkpoint unchanged.\n' >&2
+fi
+
+if [[ "${profile_cuda}" == "1" ]]; then
+    readonly profile_key="${build_key}:${cuda_math}:${cuda_numerics}:${resume_batch_size}:${resume_gradient_accumulation}:$(sha256sum "${project_dir}/utils/benchmarks/profile_model.py" | cut -d' ' -f1)"
+    if ! marker_matches "${profile_marker}" "${profile_key}"; then
+        readonly profile_file="${profile_dir}/cuda-profile-$(date -u +%Y%m%dT%H%M%SZ).txt"
+        printf 'RunPod pipeline: profiling one representative CUDA training update...\n' >&2
+        profile_arguments=(--benchmark "${benchmark}")
+        if [[ "${resume_batch_size}" != "0" ]]; then
+            profile_arguments+=(--batch "${resume_batch_size}")
+        fi
+        if [[ "${resume_gradient_accumulation}" != "0" ]]; then
+            profile_arguments+=(--gradient-accumulation "${resume_gradient_accumulation}")
+        fi
+        python3 "${project_dir}/utils/benchmarks/profile_model.py" \
+            "${profile_arguments[@]}" > "${profile_file}"
+        write_marker "${profile_marker}" "${profile_key}"
+        printf 'RunPod pipeline: CUDA profile saved to %s\n' "${profile_file}" >&2
+    else
+        printf 'RunPod pipeline: CUDA profile already completed for this image; skipped.\n' >&2
+    fi
+fi
+
+if [[ "${run_mode}" == "profile-only" ]]; then
+    printf 'RunPod pipeline: profile-only completed; container is idle. Stop the Pod to stop GPU charges.\n' >&2
+    exec sleep infinity
+fi
+
+resume_overrides=()
+if [[ "${resume_batch_size}" != "0" ]]; then
+    resume_overrides+=(--batch-size "${resume_batch_size}")
+fi
+if [[ "${resume_gradient_accumulation}" != "0" ]]; then
+    resume_overrides+=(--gradient-accumulation "${resume_gradient_accumulation}")
+fi
+
+"${cli}" model train \
+    "${dataset}" \
+    "${train_steps}" \
+    --resume "${resume_checkpoint}" \
+    --checkpoint "${checkpoint_output}" \
+    "${resume_overrides[@]}" \
+    --checkpoint-every "${checkpoint_every}" \
+    --validation "${validation_dataset}" \
+    --validation-every "${validation_every}" \
+    --validation-batches "${validation_batches}" \
+    --best-checkpoint "${best_checkpoint}" \
+    --log "${training_log}"
+
+printf 'RunPod pipeline: training session completed; container is idle. Stop the Pod to stop GPU charges.\n' >&2
+exec sleep infinity

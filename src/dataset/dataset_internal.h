@@ -31,13 +31,19 @@ struct lm_dataset {
     uint32_t model_vocabulary_size;
     token_id end_of_document_token;
     lm_dataset_split split;
+    unsigned char tokenizer_checksum[TOKENIZER_SHA256_DIGEST_SIZE];
 };
 
 struct lm_batcher {
     lm_dataset *dataset;
     size_t batch_size;
     size_t context_length;
+    lm_batcher_sampling sampling;
     uint64_t random_state;
+    uint64_t epoch;
+    uint64_t sample_index;
+    uint64_t next_offset;
+    uint64_t stride;
     token_id *window;
 };
 
@@ -52,7 +58,7 @@ lm_dataset_status lm_dataset_writer_append(lm_dataset_writer *writer, const toke
                                            size_t token_count, token_id end_of_document_token);
 lm_dataset_status
 lm_dataset_writers_publish(lm_dataset_writer writers[LM_DATASET_SPLIT_COUNT],
-                           uint32_t tokenizer_vocabulary_size,
+                           uint32_t model_vocabulary_size, uint32_t tokenizer_vocabulary_size,
                            const unsigned char tokenizer_checksum[TOKENIZER_SHA256_DIGEST_SIZE]);
 void lm_dataset_writers_abort(lm_dataset_writer writers[LM_DATASET_SPLIT_COUNT]);
 

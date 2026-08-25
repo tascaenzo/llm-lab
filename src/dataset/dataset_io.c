@@ -141,7 +141,7 @@ lm_dataset_status lm_dataset_writer_append(lm_dataset_writer *writer, const toke
     return status;
 }
 
-static lm_dataset_status writer_finish(lm_dataset_writer *writer,
+static lm_dataset_status writer_finish(lm_dataset_writer *writer, uint32_t model_vocabulary_size,
                                        uint32_t tokenizer_vocabulary_size,
                                        const unsigned char tokenizer_checksum[32]) {
     if (writer->token_count < 2U || writer->document_count == 0U ||
@@ -156,7 +156,7 @@ static lm_dataset_status writer_finish(lm_dataset_writer *writer,
     lm_dataset_store_u32(header + 8U, LM_DATASET_FORMAT_VERSION);
     lm_dataset_store_u32(header + 12U, LM_DATASET_HEADER_SIZE);
     lm_dataset_store_u32(header + 16U, tokenizer_vocabulary_size);
-    lm_dataset_store_u32(header + 20U, tokenizer_vocabulary_size + 1U);
+    lm_dataset_store_u32(header + 20U, model_vocabulary_size);
     lm_dataset_store_u32(header + 24U, tokenizer_vocabulary_size);
     lm_dataset_store_u32(header + 28U, (uint32_t)writer->split);
     lm_dataset_store_u64(header + 32U, writer->token_count);
@@ -179,14 +179,16 @@ static lm_dataset_status writer_finish(lm_dataset_writer *writer,
 
 lm_dataset_status
 lm_dataset_writers_publish(lm_dataset_writer writers[LM_DATASET_SPLIT_COUNT],
-                           uint32_t tokenizer_vocabulary_size,
+                           uint32_t model_vocabulary_size, uint32_t tokenizer_vocabulary_size,
                            const unsigned char tokenizer_checksum[TOKENIZER_SHA256_DIGEST_SIZE]) {
-    if (tokenizer_vocabulary_size == UINT32_MAX) {
+    if (tokenizer_vocabulary_size == UINT32_MAX ||
+        model_vocabulary_size < tokenizer_vocabulary_size + 1U) {
         return LM_DATASET_OVERFLOW;
     }
     lm_dataset_status status = LM_DATASET_OK;
     for (size_t index = 0U; index < LM_DATASET_SPLIT_COUNT && status == LM_DATASET_OK; ++index) {
-        status = writer_finish(&writers[index], tokenizer_vocabulary_size, tokenizer_checksum);
+        status = writer_finish(&writers[index], model_vocabulary_size, tokenizer_vocabulary_size,
+                               tokenizer_checksum);
     }
     for (size_t index = 0U; index < LM_DATASET_SPLIT_COUNT && status == LM_DATASET_OK; ++index) {
         if (rename(writers[index].temporary_path, writers[index].final_path) != 0) {
@@ -236,7 +238,7 @@ static lm_dataset_status validate_header(const unsigned char header[LM_DATASET_H
     if (memcmp(header, dataset_magic, sizeof(dataset_magic)) != 0 ||
         version != LM_DATASET_FORMAT_VERSION || header_size != LM_DATASET_HEADER_SIZE ||
         tokenizer_vocabulary_size == UINT32_MAX ||
-        model_vocabulary_size != tokenizer_vocabulary_size + 1U ||
+        model_vocabulary_size < tokenizer_vocabulary_size + 1U ||
         end_of_document_token != tokenizer_vocabulary_size || split >= LM_DATASET_SPLIT_COUNT ||
         token_count < 2U || document_count == 0U ||
         token_count > UINT64_MAX / LM_DATASET_TOKEN_SIZE ||
@@ -251,6 +253,8 @@ static lm_dataset_status validate_header(const unsigned char header[LM_DATASET_H
     dataset->model_vocabulary_size = model_vocabulary_size;
     dataset->end_of_document_token = end_of_document_token;
     dataset->split = (lm_dataset_split)split;
+    memcpy(dataset->tokenizer_checksum, header + TOKENIZER_CHECKSUM_OFFSET,
+           sizeof(dataset->tokenizer_checksum));
     return LM_DATASET_OK;
 }
 

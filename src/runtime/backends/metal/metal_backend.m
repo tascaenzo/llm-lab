@@ -16,6 +16,7 @@ static const char *const metal_pipeline_names[LLM_METAL_PIPELINE_COUNT] = {
     "llm_reduce_sum_last_f32",
     "llm_reduce_max_last_f32",
     "llm_reduce_mean_square_last_f32",
+    "llm_accumulate_sum_squares_f32",
     "llm_matmul_f32",
     "llm_matmul_f32_tiled32",
     "llm_matmul_f32_simdgroup",
@@ -122,6 +123,7 @@ static const llm_backend_ops *metal_backend_ops(void) {
         .reduce_sum_last_f32 = llm_metal_reduce_sum_last_f32,
         .reduce_max_last_f32 = llm_metal_reduce_max_last_f32,
         .reduce_mean_square_last_f32 = llm_metal_reduce_mean_square_last_f32,
+        .accumulate_sum_squares_f32 = llm_metal_accumulate_sum_squares_f32,
         .matmul_f32 = llm_metal_matmul_f32,
         .matmul_ex_f32 = llm_metal_matmul_ex_f32,
         .gather_rows_f32 = llm_metal_gather_rows_f32,
@@ -349,11 +351,14 @@ llm_status llm_backend_metal_reset_metrics(llm_backend *backend) {
     llm_metal_context *context = backend->context;
     const double compilation_seconds = context->metrics.pipeline_compilation_seconds;
     const size_t active_count = context->metrics.active_buffer_count;
+    const size_t active_bytes = context->metrics.active_buffer_bytes;
     const size_t cached_count = context->metrics.cached_buffer_count;
     const size_t cached_bytes = context->metrics.cached_buffer_bytes;
     context->metrics = (llm_metal_backend_metrics){0};
     context->metrics.pipeline_compilation_seconds = compilation_seconds;
     context->metrics.active_buffer_count = active_count;
+    context->metrics.active_buffer_bytes = active_bytes;
+    context->metrics.peak_active_buffer_bytes = active_bytes;
     context->metrics.cached_buffer_count = cached_count;
     context->metrics.cached_buffer_bytes = cached_bytes;
     return LLM_OK;

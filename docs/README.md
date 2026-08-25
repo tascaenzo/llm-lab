@@ -11,14 +11,17 @@ prima la pagina wiki e poi la specifica corrispondente.
 
 1. [Toolchain](TOOLCHAIN.md)
 2. [Corpus](corpus.md)
-3. [Tokenizer](tokenizer.md)
-4. [Dataset autoregressivo](dataset.md)
-5. [Runtime tensoriale](runtime-tensoriale.md)
-6. [Runtime v1: training minimo su Apple Silicon](runtime-v1-architecture.md)
-7. [Modello Minimal: prima rete addestrabile](model-minimal.md)
-8. [Backend CPU](backend-cpu.md)
-9. [Backend Metal](backend-metal.md)
-10. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
+3. [Corpus multi-sorgente](corpus-multi-sorgente.md)
+4. [Tokenizer](tokenizer.md)
+5. [Dataset autoregressivo](dataset.md)
+6. [Runtime tensoriale](runtime-tensoriale.md)
+7. [Runtime v1: training minimo su Apple Silicon](runtime-v1-architecture.md)
+8. [Modello Minimal: prima rete addestrabile](model-minimal.md)
+9. [Italiano-Base-75M: primo decoder utilizzabile](italiano-base-75m.md)
+10. [Backend CPU](backend-cpu.md)
+11. [Backend Metal](backend-metal.md)
+12. [Backend CUDA](backend-cuda.md)
+13. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

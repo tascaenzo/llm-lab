@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "model/model.h"
 #include "test_support.h"
@@ -53,7 +54,8 @@ static int test_forward_and_gradients(void) {
     const uint32_t input_values[] = {0U, 2U};
     const uint32_t target_values[] = {1U, 0U};
     TEST_ASSERT(llm_tensor_write(backend, &inputs, input_values, sizeof(input_values)) == LLM_OK);
-    TEST_ASSERT(llm_tensor_write(backend, &targets, target_values, sizeof(target_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &targets, target_values, sizeof(target_values)) ==
+                LLM_OK);
     TEST_ASSERT(lm_model_forward(model, &inputs, &logits) == LLM_OK);
     float actual_logits[6] = {0};
     TEST_ASSERT(llm_tensor_read(backend, &logits, actual_logits, sizeof(actual_logits)) == LLM_OK);
@@ -175,19 +177,25 @@ static int test_transformer_is_causal(void) {
     llm_tensor first_logits = {0};
     llm_tensor second_logits = {0};
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &first_input) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &second_input) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &first_logits) == LLM_OK);
-    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &second_logits) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &second_input) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &first_logits) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &second_logits) ==
+                LLM_OK);
     const uint32_t original[] = {1U, 2U, 3U};
     const uint32_t changed_future[] = {1U, 2U, 4U};
     TEST_ASSERT(llm_tensor_write(backend, &first_input, original, sizeof(original)) == LLM_OK);
-    TEST_ASSERT(llm_tensor_write(backend, &second_input, changed_future, sizeof(changed_future)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &second_input, changed_future, sizeof(changed_future)) ==
+                LLM_OK);
     TEST_ASSERT(lm_model_forward(model, &first_input, &first_logits) == LLM_OK);
     TEST_ASSERT(lm_model_forward(model, &second_input, &second_logits) == LLM_OK);
     float first_values[15] = {0};
     float second_values[15] = {0};
-    TEST_ASSERT(llm_tensor_read(backend, &first_logits, first_values, sizeof(first_values)) == LLM_OK);
-    TEST_ASSERT(llm_tensor_read(backend, &second_logits, second_values, sizeof(second_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &first_logits, first_values, sizeof(first_values)) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &second_logits, second_values, sizeof(second_values)) ==
+                LLM_OK);
     for (size_t index = 0U; index < 10U; ++index) {
         TEST_ASSERT(close_enough(first_values[index], second_values[index], 1.0e-6F));
     }
@@ -200,9 +208,208 @@ static int test_transformer_is_causal(void) {
     return EXIT_SUCCESS;
 }
 
+static int test_scalable_transformer_smoke(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+    const lm_model_config config = {.vocabulary_size = 7U,
+                                    .context_length = 3U,
+                                    .hidden_size = 4U,
+                                    .layer_count = 2U,
+                                    .head_count = 2U,
+                                    .feed_forward_size = 8U,
+                                    .seed = UINT64_C(123)};
+    lm_model *model = NULL;
+    TEST_ASSERT(lm_model_create(backend, &config, &model) == LLM_OK);
+    TEST_ASSERT(lm_model_parameter_count(model) == 21U);
+    TEST_ASSERT(strcmp(lm_model_parameter_name(model, 2U), "layers.0.attention_norm_weight") == 0);
+    TEST_ASSERT(strcmp(lm_model_parameter_name(model, 20U), "final_norm_weight") == 0);
+
+    const size_t input_shape[] = {1U, 3U};
+    const size_t logits_shape[] = {3U, 7U};
+    const size_t targets_shape[] = {3U};
+    llm_tensor inputs = {0};
+    llm_tensor logits = {0};
+    llm_tensor targets = {0};
+    llm_tensor loss = {0};
+    llm_tensor logits_gradient = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &inputs) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 1U, targets_shape, &targets) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &loss) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits_gradient) ==
+                LLM_OK);
+    const uint32_t input_values[] = {1U, 2U, 3U};
+    const uint32_t target_values[] = {2U, 3U, 4U};
+    TEST_ASSERT(llm_tensor_write(backend, &inputs, input_values, sizeof(input_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &targets, target_values, sizeof(target_values)) ==
+                LLM_OK);
+    TEST_ASSERT(lm_model_forward(model, &inputs, &logits) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_forward(backend, &logits, &targets, &loss) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_backward(backend, &logits, &targets, &logits_gradient) == LLM_OK);
+    TEST_ASSERT(lm_model_zero_grad(model) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    float loss_value = 0.0F;
+    TEST_ASSERT(llm_tensor_read(backend, &loss, &loss_value, sizeof(loss_value)) == LLM_OK);
+    TEST_ASSERT(isfinite(loss_value) != 0);
+    for (size_t index = 0U; index < lm_model_parameter_count(model); ++index) {
+        const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
+        TEST_ASSERT(gradient != NULL);
+        TEST_ASSERT(gradient->element_count <= SIZE_MAX / sizeof(float));
+        float *values = malloc(gradient->element_count * sizeof(*values));
+        TEST_ASSERT(values != NULL);
+        TEST_ASSERT(llm_tensor_read(backend, gradient, values,
+                                    gradient->element_count * sizeof(*values)) == LLM_OK);
+        TEST_ASSERT(isfinite(values[0]) != 0);
+        free(values);
+    }
+    const float epsilon = 1.0e-3F;
+    for (size_t parameter_index = 0U; parameter_index < lm_model_parameter_count(model);
+         ++parameter_index) {
+        llm_tensor *weight = lm_model_parameter_value(model, parameter_index);
+        const llm_tensor *gradient = lm_model_parameter_gradient(model, parameter_index);
+        TEST_ASSERT(weight != NULL && gradient != NULL);
+        TEST_ASSERT(weight->element_count == gradient->element_count);
+        TEST_ASSERT(weight->element_count <= SIZE_MAX / sizeof(float));
+        float *values = malloc(weight->element_count * sizeof(*values));
+        float *gradients = malloc(gradient->element_count * sizeof(*gradients));
+        TEST_ASSERT(values != NULL && gradients != NULL);
+        TEST_ASSERT(llm_tensor_read(backend, weight, values,
+                                    weight->element_count * sizeof(*values)) == LLM_OK);
+        TEST_ASSERT(llm_tensor_read(backend, gradient, gradients,
+                                    gradient->element_count * sizeof(*gradients)) == LLM_OK);
+        size_t checked_index = 0U;
+        for (size_t index = 1U; index < gradient->element_count; ++index) {
+            if (fabsf(gradients[index]) > fabsf(gradients[checked_index]))
+                checked_index = index;
+        }
+        const float original = values[checked_index];
+        values[checked_index] = original + epsilon;
+        TEST_ASSERT(llm_tensor_write(backend, weight, values,
+                                     weight->element_count * sizeof(*values)) == LLM_OK);
+        TEST_ASSERT(lm_model_forward(model, &inputs, &logits) == LLM_OK);
+        TEST_ASSERT(llm_cross_entropy_forward(backend, &logits, &targets, &loss) == LLM_OK);
+        float positive_loss = 0.0F;
+        TEST_ASSERT(llm_tensor_read(backend, &loss, &positive_loss, sizeof(positive_loss)) ==
+                    LLM_OK);
+        values[checked_index] = original - epsilon;
+        TEST_ASSERT(llm_tensor_write(backend, weight, values,
+                                     weight->element_count * sizeof(*values)) == LLM_OK);
+        TEST_ASSERT(lm_model_forward(model, &inputs, &logits) == LLM_OK);
+        TEST_ASSERT(llm_cross_entropy_forward(backend, &logits, &targets, &loss) == LLM_OK);
+        float negative_loss = 0.0F;
+        TEST_ASSERT(llm_tensor_read(backend, &loss, &negative_loss, sizeof(negative_loss)) ==
+                    LLM_OK);
+        const float numerical = (positive_loss - negative_loss) / (2.0F * epsilon);
+        TEST_ASSERT(isfinite(numerical) != 0);
+        TEST_ASSERT(close_enough(gradients[checked_index], numerical,
+                                 3.0e-3F + fabsf(numerical) * 5.0e-2F));
+        values[checked_index] = original;
+        TEST_ASSERT(llm_tensor_write(backend, weight, values,
+                                     weight->element_count * sizeof(*values)) == LLM_OK);
+        free(gradients);
+        free(values);
+    }
+    lm_model_config invalid = config;
+    invalid.hidden_size = 5U;
+    lm_model *invalid_model = NULL;
+    TEST_ASSERT(lm_model_create(backend, &invalid, &invalid_model) == LLM_INVALID_ARGUMENT);
+
+    llm_tensor_destroy(&logits_gradient);
+    llm_tensor_destroy(&loss);
+    llm_tensor_destroy(&targets);
+    llm_tensor_destroy(&logits);
+    llm_tensor_destroy(&inputs);
+    lm_model_destroy(model);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Two backward passes without an intervening zero_grad must leave exactly
+ * twice the gradient of a single pass, for every parameter. This is what a
+ * gradient accumulation step relies on, and it fails as soon as one layer
+ * overwrites its parameter gradient instead of accumulating into it.
+ */
+static int test_backward_accumulates_every_parameter(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+    const lm_model_config config = {.vocabulary_size = 7U,
+                                    .context_length = 3U,
+                                    .hidden_size = 4U,
+                                    .layer_count = 2U,
+                                    .head_count = 2U,
+                                    .feed_forward_size = 8U,
+                                    .seed = UINT64_C(321)};
+    lm_model *model = NULL;
+    TEST_ASSERT(lm_model_create(backend, &config, &model) == LLM_OK);
+    const size_t input_shape[] = {1U, 3U};
+    const size_t logits_shape[] = {3U, 7U};
+    const size_t targets_shape[] = {3U};
+    llm_tensor inputs = {0};
+    llm_tensor logits = {0};
+    llm_tensor targets = {0};
+    llm_tensor logits_gradient = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &inputs) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 1U, targets_shape, &targets) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits_gradient) ==
+                LLM_OK);
+    const uint32_t input_values[] = {1U, 2U, 3U};
+    const uint32_t target_values[] = {2U, 3U, 4U};
+    TEST_ASSERT(llm_tensor_write(backend, &inputs, input_values, sizeof(input_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &targets, target_values, sizeof(target_values)) ==
+                LLM_OK);
+    TEST_ASSERT(lm_model_forward(model, &inputs, &logits) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_backward(backend, &logits, &targets, &logits_gradient) == LLM_OK);
+
+    const size_t parameter_count = lm_model_parameter_count(model);
+    TEST_ASSERT(lm_model_zero_grad(model) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    float **single = calloc(parameter_count, sizeof(*single));
+    TEST_ASSERT(single != NULL);
+    for (size_t index = 0U; index < parameter_count; ++index) {
+        const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
+        TEST_ASSERT(gradient != NULL && gradient->element_count <= SIZE_MAX / sizeof(float));
+        single[index] = malloc(gradient->element_count * sizeof(**single));
+        TEST_ASSERT(single[index] != NULL);
+        TEST_ASSERT(llm_tensor_read(backend, gradient, single[index],
+                                    gradient->element_count * sizeof(**single)) == LLM_OK);
+    }
+
+    TEST_ASSERT(lm_model_zero_grad(model) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    TEST_ASSERT(lm_model_backward(model, &inputs, &logits_gradient) == LLM_OK);
+    for (size_t index = 0U; index < parameter_count; ++index) {
+        const llm_tensor *gradient = lm_model_parameter_gradient(model, index);
+        float *accumulated = malloc(gradient->element_count * sizeof(*accumulated));
+        TEST_ASSERT(accumulated != NULL);
+        TEST_ASSERT(llm_tensor_read(backend, gradient, accumulated,
+                                    gradient->element_count * sizeof(*accumulated)) == LLM_OK);
+        for (size_t element = 0U; element < gradient->element_count; ++element) {
+            const float expected = 2.0F * single[index][element];
+            TEST_ASSERT(
+                close_enough(accumulated[element], expected, 1.0e-6F + fabsf(expected) * 1.0e-5F));
+        }
+        free(accumulated);
+        free(single[index]);
+    }
+    free(single);
+
+    llm_tensor_destroy(&logits_gradient);
+    llm_tensor_destroy(&targets);
+    llm_tensor_destroy(&logits);
+    llm_tensor_destroy(&inputs);
+    lm_model_destroy(model);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
 int main(void) {
-    if (test_forward_and_gradients() != EXIT_SUCCESS || test_seed_is_reproducible() != EXIT_SUCCESS ||
-        test_transformer_is_causal() != EXIT_SUCCESS) {
+    if (test_forward_and_gradients() != EXIT_SUCCESS ||
+        test_seed_is_reproducible() != EXIT_SUCCESS ||
+        test_transformer_is_causal() != EXIT_SUCCESS ||
+        test_scalable_transformer_smoke() != EXIT_SUCCESS ||
+        test_backward_accumulates_every_parameter() != EXIT_SUCCESS) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

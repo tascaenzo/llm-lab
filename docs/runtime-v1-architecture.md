@@ -1,6 +1,7 @@
 # Runtime v1 — contratto minimo per il training
 
-**Stato:** contratto CPU congelato; implementazione CPU completa; Metal da portare a parita'.
+**Stato:** contratto CPU congelato; CPU e Metal implementano il contratto v1.
+La suite di parita' resta il gate obbligatorio per ogni modifica Metal.
 **Target:** macOS su Apple Silicon e Linux per il riferimento CPU. Windows non e' supportato.
 **Dtype supportati:** F32 per dati numerici e U32 per indici. F16, BF16 e F8 sono
 valori ABI riservati e devono produrre `LLM_UNSUPPORTED_DTYPE`.
@@ -154,17 +155,12 @@ precisione ridotta.
 
 ## 10. Requisiti per il backend Metal
 
-Metal deve implementare la stessa vtable e superare la suite condivisa
-`backend_contract_suite.c`. In particolare:
+Metal implementa la stessa vtable e deve superare la suite condivisa
+`backend_contract_suite.c` su hardware Apple reale. Per ogni modifica:
 
-1. aggiungere matmul transpose e accumulate;
-2. aggiungere SiLU e RMSNorm forward/backward;
-3. aggiungere RoPE full-sequence forward/backward;
-4. aggiungere attention GQA causale full-sequence forward/backward;
-5. aggiungere AdamW;
-6. mantenere ogni operazione sul device, senza fallback CPU;
-7. verificare forme limite e dimensioni non multiple dei tile;
-8. confrontare output e gradienti col riferimento CPU entro tolleranze
+1. mantenere ogni operazione sul device, senza fallback CPU;
+2. verificare forme limite e dimensioni non multiple dei tile;
+3. confrontare output e gradienti col riferimento CPU entro tolleranze
    dichiarate.
 
 Le metriche e il batching Metal gia' pubblici sono diagnostica/esecuzione del
@@ -180,9 +176,9 @@ La CPU soddisfa il contratto quando:
 - AddressSanitizer e UndefinedBehaviorSanitizer non rilevano errori;
 - benchmark smoke usa soltanto operazioni/dtype del contratto.
 
-Si puo' iniziare Metal quando questi punti sono verdi e documenti/header
-coincidono. Metal e' completo solo quando la stessa suite viene eseguita su un
-device Apple reale e il training step non contiene read/write host intermedi.
+Una modifica Metal e' pronta solo quando la stessa suite viene eseguita su un
+device Apple reale, il training step non contiene read/write host intermedi e
+documenti, header e test coincidono.
 
 Funzionalita' future richiedono prima una modifica esplicita di questo
 documento, degli header e della suite condivisa; non devono apparire

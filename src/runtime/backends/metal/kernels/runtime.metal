@@ -60,12 +60,17 @@ struct AdamwParameters {
     float gradient_scale;
     float inverse_first_bias;
     float inverse_second_bias;
+    uint zero_gradient;
 };
 
 constant uint llm_simd_width = 32;
 
 inline float llm_threadgroup_sum(float value, threadgroup float *partial, uint thread_index,
                                  uint lane, uint simdgroup, uint threads_per_group) {
+    /* A single SIMD group reduces in one hardware instruction, with no barrier. */
+    if (threads_per_group <= llm_simd_width) {
+        return simd_sum(value);
+    }
     const float simd_value = simd_sum(value);
     if (lane == 0) {
         partial[simdgroup] = simd_value;
@@ -88,6 +93,10 @@ inline float llm_threadgroup_sum(float value, threadgroup float *partial, uint t
 
 inline float llm_threadgroup_max(float value, threadgroup float *partial, uint thread_index,
                                  uint lane, uint simdgroup, uint threads_per_group) {
+    /* A single SIMD group reduces in one hardware instruction, with no barrier. */
+    if (threads_per_group <= llm_simd_width) {
+        return simd_max(value);
+    }
     const float simd_value = simd_max(value);
     if (lane == 0) {
         partial[simdgroup] = simd_value;
@@ -189,6 +198,7 @@ inline float llm_sigmoid(float value) {
 }
 
 inline void llm_atomic_add_float(device atomic_uint *destination, float value);
+inline void llm_atomic_add_float(device atomic_float *destination, float value);
 
 kernel void llm_silu_f32(device const float *input [[buffer(0)]],
                          device float *output [[buffer(1)]],
@@ -208,20 +218,17 @@ kernel void llm_silu_backward_f32(device const float *input [[buffer(0)]],
     const uint base = vector_index * 4;
     for (uint index = base; index < min(base + 4, parameters.count); ++index) {
         const float sigmoid = llm_sigmoid(input[index]);
-        input_gradient[index] = output_gradient[index] * sigmoid *
-                                (1.0f + input[index] * (1.0f - sigmoid));
+        input_gradient[index] =
+            output_gradient[index] * sigmoid * (1.0f + input[index] * (1.0f - sigmoid));
     }
 }
 
-kernel void llm_rms_norm_f32(device const float *input [[buffer(0)]],
-                             device const float *weight [[buffer(1)]],
-                             device float *output [[buffer(2)]],
-                             constant RmsNormParameters &parameters [[buffer(3)]],
-                             uint row [[threadgroup_position_in_grid]],
-                             uint thread_index [[thread_index_in_threadgroup]],
-                             uint lane [[thread_index_in_simdgroup]],
-                             uint simdgroup [[simdgroup_index_in_threadgroup]],
-                             uint threads_per_group [[threads_per_threadgroup]]) {
+kernel void llm_rms_norm_f32(
+    device const float *input [[buffer(0)]], device const float *weight [[buffer(1)]],
+    device float *output [[buffer(2)]], constant RmsNormParameters &parameters [[buffer(3)]],
+    uint row [[threadgroup_position_in_grid]], uint thread_index [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]], uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.outer_count) {
         return;
     }
@@ -232,8 +239,8 @@ kernel void llm_rms_norm_f32(device const float *input [[buffer(0)]],
         const float value = input[offset + column];
         square_sum += value * value;
     }
-    square_sum = llm_threadgroup_sum(square_sum, partial, thread_index, lane, simdgroup,
-                                     threads_per_group);
+    square_sum =
+        llm_threadgroup_sum(square_sum, partial, thread_index, lane, simdgroup, threads_per_group);
     const float inverse_rms = rsqrt(square_sum / float(parameters.row_width) + parameters.epsilon);
     for (uint column = thread_index; column < parameters.row_width; column += threads_per_group) {
         output[offset + column] = input[offset + column] * inverse_rms * weight[column];
@@ -244,9 +251,9 @@ kernel void llm_rms_norm_backward_f32(
     device const float *input [[buffer(0)]], device const float *weight [[buffer(1)]],
     device const float *output_gradient [[buffer(2)]], device float *input_gradient [[buffer(3)]],
     device atomic_uint *weight_gradient [[buffer(4)]],
-    constant RmsNormParameters &parameters [[buffer(5)]],
-    uint row [[threadgroup_position_in_grid]], uint thread_index [[thread_index_in_threadgroup]],
-    uint lane [[thread_index_in_simdgroup]], uint simdgroup [[simdgroup_index_in_threadgroup]],
+    constant RmsNormParameters &parameters [[buffer(5)]], uint row [[threadgroup_position_in_grid]],
+    uint thread_index [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.outer_count) {
         return;
@@ -260,17 +267,17 @@ kernel void llm_rms_norm_backward_f32(
         square_sum += x * x;
         projected_gradient += output_gradient[offset + column] * weight[column] * x;
     }
-    square_sum = llm_threadgroup_sum(square_sum, partial, thread_index, lane, simdgroup,
-                                     threads_per_group);
+    square_sum =
+        llm_threadgroup_sum(square_sum, partial, thread_index, lane, simdgroup, threads_per_group);
     projected_gradient = llm_threadgroup_sum(projected_gradient, partial, thread_index, lane,
                                              simdgroup, threads_per_group);
     const float inverse_rms = rsqrt(square_sum / float(parameters.row_width) + parameters.epsilon);
-    const float correction = projected_gradient * inverse_rms * inverse_rms * inverse_rms /
-                             float(parameters.row_width);
+    const float correction =
+        projected_gradient * inverse_rms * inverse_rms * inverse_rms / float(parameters.row_width);
     for (uint column = thread_index; column < parameters.row_width; column += threads_per_group) {
         const uint index = offset + column;
-        input_gradient[index] = output_gradient[index] * weight[column] * inverse_rms -
-                                input[index] * correction;
+        input_gradient[index] =
+            output_gradient[index] * weight[column] * inverse_rms - input[index] * correction;
         llm_atomic_add_float(weight_gradient + column,
                              output_gradient[index] * input[index] * inverse_rms);
     }
@@ -321,86 +328,11 @@ inline uint llm_attention_offset(uint batch, uint sequence, uint head, uint sequ
     return ((batch * sequence_length + sequence) * head_count + head) * head_dimension;
 }
 
-kernel void llm_attention_forward_f32(device const float *query [[buffer(0)]],
-                                      device const float *key [[buffer(1)]],
-                                      device const float *value [[buffer(2)]],
-                                      device float *output [[buffer(3)]],
-                                      constant AttentionParameters &parameters [[buffer(4)]],
-                                      threadgroup float *probabilities [[threadgroup(0)]],
-                                      uint query_row [[threadgroup_position_in_grid]],
-                                      uint thread_index [[thread_index_in_threadgroup]],
-                                      uint lane [[thread_index_in_simdgroup]],
-                                      uint simdgroup [[simdgroup_index_in_threadgroup]],
-                                      uint threads_per_group [[threads_per_threadgroup]]) {
-    const uint rows_per_batch = parameters.sequence_length * parameters.query_head_count;
-    const uint batch = query_row / rows_per_batch;
-    const uint within_batch = query_row % rows_per_batch;
-    const uint query_position = within_batch / parameters.query_head_count;
-    const uint query_head = within_batch % parameters.query_head_count;
-    const uint heads_per_group = parameters.query_head_count / parameters.key_value_head_count;
-    const uint key_value_head = query_head / heads_per_group;
-    const uint query_index = llm_attention_offset(batch, query_position, query_head,
-                                                  parameters.sequence_length,
-                                                  parameters.query_head_count,
-                                                  parameters.head_dimension);
-    const device float *query_row_values = query + query_index;
-    threadgroup float partial[32];
-    for (uint key_position = 0; key_position <= query_position; ++key_position) {
-        const uint key_index = llm_attention_offset(batch, key_position, key_value_head,
-                                                    parameters.sequence_length,
-                                                    parameters.key_value_head_count,
-                                                    parameters.head_dimension);
-        float dot = 0.0f;
-        for (uint dimension = thread_index; dimension < parameters.head_dimension;
-             dimension += threads_per_group) {
-            dot += query_row_values[dimension] * key[key_index + dimension];
-        }
-        dot = llm_threadgroup_sum(dot, partial, thread_index, lane, simdgroup,
-                                  threads_per_group);
-        if (thread_index == 0) {
-            probabilities[key_position] = dot * parameters.scale;
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-    }
-    if (thread_index == 0) {
-        float maximum = -INFINITY;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            maximum = max(maximum, probabilities[key_position]);
-        }
-        float denominator = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            const float probability = exp(probabilities[key_position] - maximum);
-            probabilities[key_position] = probability;
-            denominator += probability;
-        }
-        const float inverse_denominator = 1.0f / denominator;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            probabilities[key_position] *= inverse_denominator;
-        }
-    }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
-    for (uint dimension = thread_index; dimension < parameters.head_dimension;
-         dimension += threads_per_group) {
-        float result = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            const uint key_index = llm_attention_offset(batch, key_position, key_value_head,
-                                                        parameters.sequence_length,
-                                                        parameters.key_value_head_count,
-                                                        parameters.head_dimension);
-            result += probabilities[key_position] * value[key_index + dimension];
-        }
-        output[query_index + dimension] = result;
-    }
-}
-
-kernel void llm_attention_backward_f32(
+kernel void llm_attention_forward_f32(
     device const float *query [[buffer(0)]], device const float *key [[buffer(1)]],
-    device const float *value [[buffer(2)]], device const float *output_gradient [[buffer(3)]],
-    device float *query_gradient [[buffer(4)]], device atomic_uint *key_gradient [[buffer(5)]],
-    device atomic_uint *value_gradient [[buffer(6)]],
-    constant AttentionParameters &parameters [[buffer(7)]],
-    threadgroup float *scratch [[threadgroup(0)]],
-    uint query_row [[threadgroup_position_in_grid]],
+    device const float *value [[buffer(2)]], device float *output [[buffer(3)]],
+    constant AttentionParameters &parameters [[buffer(4)]],
+    threadgroup float *scratch [[threadgroup(0)]], uint query_row [[threadgroup_position_in_grid]],
     uint thread_index [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
     uint simdgroup [[simdgroup_index_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]]) {
@@ -411,118 +343,173 @@ kernel void llm_attention_backward_f32(
     const uint query_head = within_batch % parameters.query_head_count;
     const uint heads_per_group = parameters.query_head_count / parameters.key_value_head_count;
     const uint key_value_head = query_head / heads_per_group;
-    const uint query_index = llm_attention_offset(batch, query_position, query_head,
-                                                  parameters.sequence_length,
-                                                  parameters.query_head_count,
-                                                  parameters.head_dimension);
+    const uint query_index =
+        llm_attention_offset(batch, query_position, query_head, parameters.sequence_length,
+                             parameters.query_head_count, parameters.head_dimension);
     const device float *query_row_values = query + query_index;
-    const device float *output_gradient_row = output_gradient + query_index;
-    threadgroup float partial[32];
-    threadgroup float *probabilities = scratch;
-    threadgroup float *probability_gradients = scratch + parameters.sequence_length;
-    threadgroup float *weighted_probability_gradient =
-        scratch + 2 * parameters.sequence_length;
+    threadgroup float *partial = scratch;
+    threadgroup float *accumulator = scratch + 32;
+    for (uint dimension = thread_index; dimension < parameters.head_dimension;
+         dimension += threads_per_group) {
+        accumulator[dimension] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float running_maximum = -INFINITY;
+    float running_sum = 0.0f;
     for (uint key_position = 0; key_position <= query_position; ++key_position) {
-        const uint key_index = llm_attention_offset(batch, key_position, key_value_head,
-                                                    parameters.sequence_length,
-                                                    parameters.key_value_head_count,
-                                                    parameters.head_dimension);
+        const uint key_index =
+            llm_attention_offset(batch, key_position, key_value_head, parameters.sequence_length,
+                                 parameters.key_value_head_count, parameters.head_dimension);
         float dot = 0.0f;
         for (uint dimension = thread_index; dimension < parameters.head_dimension;
              dimension += threads_per_group) {
             dot += query_row_values[dimension] * key[key_index + dimension];
         }
-        dot = llm_threadgroup_sum(dot, partial, thread_index, lane, simdgroup,
-                                  threads_per_group);
-        if (thread_index == 0) {
-            probabilities[key_position] = dot * parameters.scale;
+        const float score =
+            llm_threadgroup_sum(dot, partial, thread_index, lane, simdgroup, threads_per_group) *
+            parameters.scale;
+        const float new_maximum = max(running_maximum, score);
+        const float previous_scale =
+            running_sum == 0.0f ? 0.0f : exp(running_maximum - new_maximum);
+        const float score_scale = exp(score - new_maximum);
+        running_sum = running_sum * previous_scale + score_scale;
+        for (uint dimension = thread_index; dimension < parameters.head_dimension;
+             dimension += threads_per_group) {
+            accumulator[dimension] = accumulator[dimension] * previous_scale +
+                                     score_scale * value[key_index + dimension];
         }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+        running_maximum = new_maximum;
     }
-    if (thread_index == 0) {
-        float maximum = -INFINITY;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            maximum = max(maximum, probabilities[key_position]);
-        }
-        float denominator = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            const float probability = exp(probabilities[key_position] - maximum);
-            probabilities[key_position] = probability;
-            denominator += probability;
-        }
-        const float inverse_denominator = 1.0f / denominator;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            probabilities[key_position] *= inverse_denominator;
-        }
+    for (uint dimension = thread_index; dimension < parameters.head_dimension;
+         dimension += threads_per_group) {
+        output[query_index + dimension] = accumulator[dimension] / running_sum;
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+}
+
+kernel void llm_attention_backward_f32(
+    device const float *query [[buffer(0)]], device const float *key [[buffer(1)]],
+    device const float *value [[buffer(2)]], device const float *output_gradient [[buffer(3)]],
+    device float *query_gradient [[buffer(4)]], device atomic_float *key_gradient [[buffer(5)]],
+    device atomic_float *value_gradient [[buffer(6)]],
+    constant AttentionParameters &parameters [[buffer(7)]],
+    threadgroup float *scratch [[threadgroup(0)]], uint query_row [[threadgroup_position_in_grid]],
+    uint thread_index [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]]) {
+    const uint rows_per_batch = parameters.sequence_length * parameters.query_head_count;
+    const uint batch = query_row / rows_per_batch;
+    const uint within_batch = query_row % rows_per_batch;
+    const uint query_position = within_batch / parameters.query_head_count;
+    const uint query_head = within_batch % parameters.query_head_count;
+    const uint heads_per_group = parameters.query_head_count / parameters.key_value_head_count;
+    const uint key_value_head = query_head / heads_per_group;
+    const uint query_index =
+        llm_attention_offset(batch, query_position, query_head, parameters.sequence_length,
+                             parameters.query_head_count, parameters.head_dimension);
+    const device float *query_row_values = query + query_index;
+    const device float *output_gradient_row = output_gradient + query_index;
+    threadgroup float partial[32];
+    threadgroup float *probabilities = scratch;
+    threadgroup float *probability_gradients = scratch + parameters.sequence_length;
     for (uint key_position = 0; key_position <= query_position; ++key_position) {
-        const uint key_index = llm_attention_offset(batch, key_position, key_value_head,
-                                                    parameters.sequence_length,
-                                                    parameters.key_value_head_count,
-                                                    parameters.head_dimension);
+        const uint key_index =
+            llm_attention_offset(batch, key_position, key_value_head, parameters.sequence_length,
+                                 parameters.key_value_head_count, parameters.head_dimension);
+        float dot = 0.0f;
         float probability_gradient = 0.0f;
         for (uint dimension = thread_index; dimension < parameters.head_dimension;
              dimension += threads_per_group) {
+            dot += query_row_values[dimension] * key[key_index + dimension];
             probability_gradient += output_gradient_row[dimension] * value[key_index + dimension];
         }
+        dot = llm_threadgroup_sum(dot, partial, thread_index, lane, simdgroup, threads_per_group);
         probability_gradient = llm_threadgroup_sum(probability_gradient, partial, thread_index,
                                                    lane, simdgroup, threads_per_group);
         if (thread_index == 0) {
+            probabilities[key_position] = dot * parameters.scale;
             probability_gradients[key_position] = probability_gradient;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
-    if (thread_index == 0) {
-        *weighted_probability_gradient = 0.0f;
-        for (uint key_position = 0; key_position <= query_position; ++key_position) {
-            *weighted_probability_gradient +=
-                probabilities[key_position] * probability_gradients[key_position];
-        }
+    /*
+     * The softmax runs across the whole threadgroup instead of on thread zero.
+     * Each thread owns the key positions congruent to its index, so the three
+     * passes never share an element, and both reductions broadcast their result.
+     */
+    float maximum = -INFINITY;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        maximum = max(maximum, probabilities[key_position]);
+    }
+    maximum =
+        llm_threadgroup_max(maximum, partial, thread_index, lane, simdgroup, threads_per_group);
+    float denominator = 0.0f;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        const float probability = exp(probabilities[key_position] - maximum);
+        probabilities[key_position] = probability;
+        denominator += probability;
+    }
+    denominator =
+        llm_threadgroup_sum(denominator, partial, thread_index, lane, simdgroup, threads_per_group);
+    const float inverse_denominator = 1.0f / denominator;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        probabilities[key_position] *= inverse_denominator;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
+    float weighted_probability_gradient = 0.0f;
+    for (uint key_position = thread_index; key_position <= query_position;
+         key_position += threads_per_group) {
+        weighted_probability_gradient +=
+            probabilities[key_position] * probability_gradients[key_position];
+    }
+    weighted_probability_gradient = llm_threadgroup_sum(
+        weighted_probability_gradient, partial, thread_index, lane, simdgroup, threads_per_group);
     for (uint dimension = thread_index; dimension < parameters.head_dimension;
          dimension += threads_per_group) {
         float query_value_gradient = 0.0f;
-    for (uint key_position = 0; key_position <= query_position; ++key_position) {
-        const uint key_index = llm_attention_offset(batch, key_position, key_value_head,
-                                                    parameters.sequence_length,
-                                                    parameters.key_value_head_count,
-                                                    parameters.head_dimension);
-        const float score_gradient =
-            probabilities[key_position] *
-            (probability_gradients[key_position] - *weighted_probability_gradient);
-        query_value_gradient += parameters.scale * score_gradient * key[key_index + dimension];
-        llm_atomic_add_float(key_gradient + key_index + dimension,
-                             parameters.scale * score_gradient * query_row_values[dimension]);
-        llm_atomic_add_float(value_gradient + key_index + dimension,
-                             probabilities[key_position] * output_gradient_row[dimension]);
-    }
+        for (uint key_position = 0; key_position <= query_position; ++key_position) {
+            const uint key_index = llm_attention_offset(
+                batch, key_position, key_value_head, parameters.sequence_length,
+                parameters.key_value_head_count, parameters.head_dimension);
+            const float score_gradient =
+                probabilities[key_position] *
+                (probability_gradients[key_position] - weighted_probability_gradient);
+            query_value_gradient += parameters.scale * score_gradient * key[key_index + dimension];
+            llm_atomic_add_float(key_gradient + key_index + dimension,
+                                 parameters.scale * score_gradient * query_row_values[dimension]);
+            llm_atomic_add_float(value_gradient + key_index + dimension,
+                                 probabilities[key_position] * output_gradient_row[dimension]);
+        }
         query_gradient[query_index + dimension] = query_value_gradient;
     }
 }
 
 kernel void llm_adamw_update_f32(device float *parameter [[buffer(0)]],
-                                  device const float *gradient [[buffer(1)]],
-                                  device float *first_moment [[buffer(2)]],
-                                  device float *second_moment [[buffer(3)]],
-                                  constant AdamwParameters &options [[buffer(4)]],
-                                  uint index [[thread_position_in_grid]]) {
+                                 device float *gradient [[buffer(1)]],
+                                 device float *first_moment [[buffer(2)]],
+                                 device float *second_moment [[buffer(3)]],
+                                 constant AdamwParameters &options [[buffer(4)]],
+                                 uint index [[thread_position_in_grid]]) {
     if (index >= options.count) {
         return;
     }
     const float scaled_gradient = gradient[index] * options.gradient_scale;
-    const float first = options.beta1 * first_moment[index] +
-                        (1.0f - options.beta1) * scaled_gradient;
+    const float first =
+        options.beta1 * first_moment[index] + (1.0f - options.beta1) * scaled_gradient;
     const float second = options.beta2 * second_moment[index] +
                          (1.0f - options.beta2) * scaled_gradient * scaled_gradient;
     const float corrected_first = first * options.inverse_first_bias;
     const float corrected_second = second * options.inverse_second_bias;
-    parameter[index] -= options.learning_rate *
-                        (corrected_first / (sqrt(corrected_second) + options.epsilon) +
-                         options.weight_decay * parameter[index]);
+    parameter[index] -=
+        options.learning_rate * (corrected_first / (sqrt(corrected_second) + options.epsilon) +
+                                 options.weight_decay * parameter[index]);
     first_moment[index] = first;
     second_moment[index] = second;
+    if (options.zero_gradient != 0) {
+        gradient[index] = 0.0f;
+    }
 }
 
 inline void llm_atomic_add_float(device atomic_uint *destination, float value) {
@@ -532,6 +519,13 @@ inline void llm_atomic_add_float(device atomic_uint *destination, float value) {
         desired = as_type<uint>(as_type<float>(expected) + value);
     } while (!atomic_compare_exchange_weak_explicit(destination, &expected, desired,
                                                     memory_order_relaxed, memory_order_relaxed));
+}
+
+/* Apple GPUs support native floating-point atomics. Attention updates K/V from
+ * many causal query rows, so using the hardware operation avoids the heavily
+ * contended compare-and-swap retry loop used by the generic fallback above. */
+inline void llm_atomic_add_float(device atomic_float *destination, float value) {
+    atomic_fetch_add_explicit(destination, value, memory_order_relaxed);
 }
 
 kernel void llm_reduce_sum_last_f32(device const float *input [[buffer(0)]],
@@ -613,6 +607,28 @@ kernel void llm_reduce_mean_square_last_f32(device const float *input [[buffer(0
     sum = llm_threadgroup_sum(sum, partial, thread_index, lane, simdgroup, threads_per_group);
     if (thread_index == 0) {
         output[row] = sum / float(parameters.reduction_size);
+    }
+}
+
+kernel void llm_accumulate_sum_squares_f32(device const float *input [[buffer(0)]],
+                                           device atomic_float *accumulator [[buffer(1)]],
+                                           constant ElementwiseParameters &parameters [[buffer(2)]],
+                                           uint group [[threadgroup_position_in_grid]],
+                                           uint thread_index [[thread_index_in_threadgroup]],
+                                           uint lane [[thread_index_in_simdgroup]],
+                                           uint simdgroup [[simdgroup_index_in_threadgroup]],
+                                           uint threads_per_group [[threads_per_threadgroup]]) {
+    threadgroup float partial[32];
+    const uint begin = group * 4096u;
+    const uint end = min(begin + 4096u, parameters.count);
+    float sum = 0.0f;
+    for (uint index = begin + thread_index; index < end; index += threads_per_group) {
+        const float value = input[index];
+        sum += value * value;
+    }
+    sum = llm_threadgroup_sum(sum, partial, thread_index, lane, simdgroup, threads_per_group);
+    if (thread_index == 0) {
+        llm_atomic_add_float(accumulator, sum);
     }
 }
 

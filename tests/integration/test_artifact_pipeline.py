@@ -30,7 +30,10 @@ def main():
         manifest = {
             "schema": "llm-lab-test-corpus-v1",
             "name": "fixture-corpus",
-            "outputs": {"tokenizer_input": [str(path) for path in inputs]},
+            "outputs": {
+                "tokenizer_input": [str(path) for path in inputs],
+                "tokenizer_input_split": "train",
+            },
         }
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         model_path = temporary_root / "artifact.llmtok"
@@ -62,6 +65,8 @@ def main():
             raise AssertionError("checksum del trainer non coerente")
         if metadata["corpus"]["manifest_sha256"] != sha256(manifest_path):
             raise AssertionError("checksum del manifest non coerente")
+        if metadata["corpus"]["tokenizer_input_split"] != "train":
+            raise AssertionError("split tokenizer non registrato")
         if metadata["corpus"]["snapshot"] != manifest:
             raise AssertionError("snapshot del corpus non coerente")
         if metadata["evaluation"]["round_trip"] is not True:

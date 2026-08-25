@@ -18,14 +18,17 @@ Questa fase serve per il tokenizer. Quando addestreremo un language model,
 serviranno inoltre una selezione del corpus piu' ampia e split separati di training,
 validazione e test.
 
-## Corpus Wikipedia
+## Corpus multi-sorgente
 
-Partiamo da due fonti con provenienza chiara:
+Il primo baseline era Wikipedia; il corpus da usare per il pretraining del 75M
+e' ora una miscela tracciabile di fonti con registri diversi:
 
 1. **Wikipedia in italiano**: testo enciclopedico contemporaneo. Usiamo il dump
    ufficiale `pages-articles`, non lo scraping delle pagine web.
-2. **Wikisource in italiano**: testi letterari e storici. Lo aggiungeremo dopo
-   avere completato e verificato la pipeline su Wikipedia.
+2. **Wikisource in italiano**: testi letterari e storici, estratti dal namespace
+   `Pagina:` e controllati a campione.
+3. **FineWeb-2 italiano**: italiano contemporaneo e registri informali, con
+   provenienza per URL, filtri e deduplicazione incrociata.
 
 Wikipedia rende disponibile il dump aggiornato in un URL stabile. Al momento della
 scrittura, il file completo compresso e' circa 4 GiB: non e' un download da avviare
@@ -33,8 +36,10 @@ per caso. Wikisource ammette testi di pubblico dominio o con licenza libera
 compatibile con CC BY-SA; la licenza effettiva resta comunque un dato da registrare
 per ogni sorgente del corpus.
 
-Non includiamo inizialmente raccolte web aggregate: rendono meno semplice sapere
-da quale sito provenga ogni testo e con quale licenza possa essere riutilizzato.
+FineWeb-2 non elimina l'obbligo di audit: viene incluso per evitare un modello
+che parli solo in registro enciclopedico, ma il manifesto conserva URL, filtri,
+checksum e quote effettive. Gutenberg entra solo attraverso una allowlist dei
+diritti verificata per l'Italia.
 
 Riferimenti:
 
@@ -89,9 +94,12 @@ un tokenizer byte-level. Le decisioni di pulizia eliminano markup e rumore, non
 riscrivono arbitrariamente l'italiano.
 
 Il corpus corrente si chiama `italiano-wikipedia-v1`: identifica una configurazione
-precisa, non “l'ultima Wikipedia disponibile”. Manteniamo un solo corpus e un solo
-tokenizer finche' il progetto non richiedera' esplicitamente il confronto tra
-versioni diverse.
+precisa, non “l'ultima Wikipedia disponibile”.
+
+Wikipedia resta il normalizzatore di riferimento. La composizione multi-sorgente
+del corpus 75M — fonti, quote, deduplicazione incrociata e slot riservati nel
+vocabolario — e' specificata in [corpus-multi-sorgente.md](corpus-multi-sorgente.md).
+Da li' passa anche l'esecuzione dell'intera catena.
 
 ## Procedura completa: `italiano-wikipedia-v1`
 
@@ -147,7 +155,8 @@ data/derived/italiano-wikipedia-v1/tokenizer-input/
 ```
 
 `documents.jsonl` conserva una riga JSON per pagina con ID, titolo, URL, licenza e
-testo. I file `part-*.txt` contengono solo testo e sono l'unico input del trainer.
+testo. I file `part-*.txt` contengono soltanto documenti dello split train,
+calcolato con la stessa FNV-1a usata dal dataset, e sono l'unico input del trainer.
 La dimensione delle parti non cambia il vocabolario: serve solo a non creare un
 singolo file troppo grande.
 
@@ -166,14 +175,23 @@ o elimina manualmente quella destinazione incompleta, oppure usa un nuovo `--nam
 
 ### 3. Addestrare il vocabolario reale a 32k
 
+Per un corpus storico che contiene parti create prima dello split train-only,
+si deriva un manifest corretto senza riprocessare il dump:
+
+```sh
+python3 utils/corpus/prepare_tokenizer_corpus.py \
+  --corpus-manifest data/clean/italiano-wikipedia-v1/manifest.json \
+  --output-manifest data/derived/italiano-wikipedia-v1/tokenizer-train-manifest.json
+```
+
 Lo script seguente legge le parti indicate dal manifesto, esegue `llm-lab` e crea
 sia il modello sia il suo manifesto di provenienza:
 
 ```sh
 python3 utils/corpus/train_tokenizer.py \
-  --corpus-manifest data/clean/italiano-wikipedia-v1/manifest.json \
+  --corpus-manifest data/derived/italiano-wikipedia-v1/tokenizer-train-manifest.json \
   --trainer build/debug/llm-lab \
-  --output artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  --output artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   --vocab-size 32000
 ```
 
@@ -185,8 +203,8 @@ Il risultato e':
 
 ```text
 artifacts/tokenizers/
-  italiano-wikipedia-v1.llmtok
-  italiano-wikipedia-v1.llmtok.json
+  italiano-wikipedia-v2.llmtok
+  italiano-wikipedia-v2.llmtok.json
 ```
 
 Il file `.json` registra snapshot e checksum del corpus, comando portabile,
@@ -208,7 +226,7 @@ Apri il tester interattivo passando il file prodotto:
 
 ```sh
 ./build/debug/tokenizer_experiment \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok
 ```
 
 Prova frasi italiane, osserva gli ID e verifica che la decodifica restituisca gli
@@ -223,9 +241,9 @@ tokenizer versionato:
 mkdir -p data/derived/italiano-wikipedia-v1/lm
 
 ./build/debug/llm-lab dataset prepare \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   data/clean/italiano-wikipedia-v1/documents.jsonl \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2
 ```
 
 Il comando produce gli stream `train`, `validation` e `test` senza modificare il

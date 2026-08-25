@@ -129,8 +129,11 @@ def main() -> int:
         corpus_manifest = json.loads(args.corpus_manifest.read_text(encoding="utf-8"))
         corpus_name = corpus_manifest.get("name")
         tokenizer_inputs = corpus_manifest.get("outputs", {}).get("tokenizer_input")
+        tokenizer_input_split = corpus_manifest.get("outputs", {}).get("tokenizer_input_split")
         if not isinstance(corpus_name, str) or not isinstance(tokenizer_inputs, list) or not tokenizer_inputs:
             raise RuntimeError("manifest del corpus incompleto")
+        if tokenizer_input_split != "train":
+            raise RuntimeError("il tokenizer richiede input dichiarati come split train-only")
 
         input_paths = [project_root / path for path in tokenizer_inputs]
         if any(not path.is_file() for path in input_paths):
@@ -216,6 +219,7 @@ def main() -> int:
                 "manifest": project_relative(args.corpus_manifest, project_root),
                 "manifest_sha256": sha256_file(args.corpus_manifest),
                 "tokenizer_input": [project_relative(path, project_root) for path in input_paths],
+                "tokenizer_input_split": tokenizer_input_split,
                 "snapshot": corpus_manifest,
             },
             "command": recorded_command,

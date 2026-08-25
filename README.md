@@ -23,6 +23,9 @@ Il backend CPU parallelo e' spiegato nella
 Il primo backend GPU Metal e' introdotto nella
 [wiki](wiki/12-backend-metal.md) e specificato in
 [docs/backend-metal.md](docs/backend-metal.md).
+Il backend CUDA, usato per proseguire il training su GPU in cloud partendo da un
+checkpoint prodotto sul Mac, e' specificato in
+[docs/backend-cuda.md](docs/backend-cuda.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 
@@ -30,19 +33,19 @@ Per studiare l'intero percorso e il ruolo di ogni file consulta la
 
 La toolchain, il corpus e il tokenizer Byte-level BPE sono pronti. Il modulo
 dataset divide i documenti in training, validation e test, crea artefatti binari
-`.llmdat` e fornisce batch input/target al Modello Minimal. E' una rete CPU
-reale, piccola e backend-agnostic: embedding, blocco causale, output head,
-cross-entropy, backward esplicito e AdamW. Il runtime tensoriale
+`.llmdat` e fornisce batch input/target al Modello Minimal. E' una rete reale,
+piccola e backend-agnostic, eseguita su CPU e Metal: embedding, blocco causale,
+output head, cross-entropy, backward esplicito e AdamW. Il runtime tensoriale
 CPU di riferimento implementa tensori FP32/U32, memoria, operazioni elementwise,
 riduzioni, matmul, gather/scatter, softmax, cross-entropy e le primitive F32 di
 training: matmul trasposta, accumulo, SiLU, RMSNorm, RoPE, attention GQA causale
 con backward e AdamW. Il backend Metal dispone di pool dei buffer, batch
-asincroni espliciti, metriche e primitive F32 di base; il prossimo incremento
-porta tutte le primitive di training sul device fino alla parita' con la suite
-contrattuale CPU. Il runtime v1 accetta soltanto F32/U32: F16/BF16 sono
+asincroni espliciti, metriche e tutte le primitive F32 richieste dal decoder
+scalabile multi-layer, multi-head e SwiGLU di
+[Italiano-Base-75M](docs/italiano-base-75m.md). Il runtime v1 accetta soltanto F32/U32: F16/BF16 sono
 riservati e cast o mixed precision non fanno parte del contratto corrente.
-Le primitive Metal mancanti vengono completate dopo il Modello Minimal, guidate dalle forme e
-dai colli di bottiglia del modello reale. I sorgenti specifici dell'hardware
+Le prossime ottimizzazioni Metal saranno guidate dalle forme e dai colli di
+bottiglia del modello reale. I sorgenti specifici dell'hardware
 restano separati sotto `src/runtime/backends/`, cosi' CPU e Metal non entrano
 nel codice del modello.
 
@@ -65,11 +68,12 @@ supportati con un solo comando:
 
 ```sh
 cmake --build --preset release --target runtime_benchmark_report
-./build/release/utils/benchmarks/runtime_benchmark_report
+./build/release/utils/benchmarks/runtime_benchmark_report --backend all
 ```
 
 Sono disponibili anche `--quick` per un controllo breve e `--full` per misure
-piu' lunghe e stabili.
+piu' lunghe e stabili. Senza `--backend`, benchmark e report usano il backend
+predefinito del progetto descritto sotto.
 
 La suite rappresentativa per validare le prestazioni dopo una modifica dura
 indicativamente 40–70 secondi, mostra l'avanzamento di ogni test e termina con
@@ -84,7 +88,7 @@ Baseline e confronto automatico sono descritti nella
 
 ## Requisiti
 
-- CMake 3.24 o superiore;
+- CMake 3.22 o superiore;
 - Ninja;
 - compilatore C con supporto C23: Clang o GCC recente;
 - Git (solo per clonare il progetto).
@@ -112,6 +116,38 @@ make test
 make check-format
 ```
 
+## Configurazione locale e backend
+
+Copia il file di esempio nella root e scegli il backend della macchina:
+
+```sh
+cp .env.example .env
+# Nel file: metal su Apple Silicon, cuda su NVIDIA, cpu senza acceleratore.
+```
+
+`llm-lab`, i benchmark e le utility di profiling caricano automaticamente il
+`.env`. Per usare un file diverso imposta `LLM_LAB_ENV_FILE=/percorso/file`.
+La precedenza e' intenzionalmente unica in tutti i flussi:
+
+```text
+--backend nel comando > variabile esportata > .env > cpu
+```
+
+I valori validi per `LLM_LAB_BACKEND` sono `cpu`, `metal` e `cuda`; i benchmark
+accettano anche `all`. Un backend configurato ma non disponibile produce un
+errore, senza fallback silenzioso sulla CPU. Per forzare una singola esecuzione:
+
+```sh
+./build/release/llm-lab model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt 100 \
+  --backend cpu
+```
+
+Il `.env` e' ignorato da Git; `.env.example` resta invece versionato e senza
+segreti. Iperparametri e percorsi dell'esperimento rimangono nel comando o nel
+checkpoint, mentre il backend dipendente dalla macchina sta nel `.env`. Le
+variabili del deploy RunPod stanno separatamente in `deploy/runpod/.env`:
+consulta `deploy/runpod/README.md` per quella pipeline.
+
 ## Addestrare un tokenizer
 
 Dopo la build, il comando seguente addestra un modello BPE e lo salva in un file portabile:
@@ -126,7 +162,7 @@ Per aprire il laboratorio interattivo:
 
 ```sh
 ./build/debug/tokenizer_experiment \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok
 ```
 
 Il modello binario viene caricato una sola volta. Dal menu puoi convertire testo in
@@ -137,7 +173,7 @@ Per misurare compressione, velocita' e round-trip su un campione deterministico:
 
 ```sh
 ./build/release/llm-lab tokenizer evaluate \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   1048576 corpus/italiano.txt
 ```
 
@@ -150,9 +186,9 @@ scrive tre stream binari:
 
 ```sh
 ./build/debug/llm-lab dataset prepare \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok \
   data/clean/italiano-wikipedia-v1/documents.jsonl \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2
 ```
 
 La directory che contiene il prefisso di output deve gia' esistere. Il report JSON
@@ -169,18 +205,22 @@ L'opzione `--layers 0` e' disponibile soltanto come baseline diagnostico.
 
 ```sh
 ./build/debug/llm-lab model train \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1.train.llmdat \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2.train.llmdat \
   100 --batch-size 2 --context 32 --hidden 64 \
   --learning-rate 0.001 --seed 1
 ```
 
-Il comando stampa loss e configurazione in JSON. Per conservare il risultato,
+Il comando stampa loss e configurazione in JSON. Il sampler `shuffled`
+percorre blocchi non sovrapposti, quindi un'epoca corrisponde davvero a un
+passaggio sui token del corpus. Per conservare il risultato,
 aggiungi `--checkpoint artifacts/models/m1.llmckpt`; per continuare da quel
 file usa `--resume artifacts/models/m1.llmckpt --checkpoint ...`. Il checkpoint
 salva pesi, momenti AdamW, step, configurazione e stato del batcher, cosi' la
-sequenza dei batch prosegue identica. La valutazione su validation e'
-disponibile con `model evaluate`; scheduler, clipping e checkpoint periodici
-restano fuori dalla milestone corrente. I contratti tecnici sono in
+sequenza dei batch prosegue identica. Un run lungo si ferma con `Ctrl-C`:
+il comando completa lo step in corso, salva il checkpoint e riporta
+`"interrupted":true`, quindi il lavoro fatto non va perso. Il trainer include scheduler, clipping,
+sampler riproducibile e checkpoint periodici; la valutazione su validation e'
+disponibile con model evaluate. I contratti tecnici sono in
 [Modello Minimal](docs/model-minimal.md).
 
 Prima del primo aggiornamento il comando valida tutto il `.llmdat` (checksum e
@@ -192,7 +232,7 @@ Per provare un checkpoint con sampling riproducibile:
 
 ```sh
 ./build/debug/llm-lab model generate artifacts/models/m1-step-10000.llmckpt \
-  artifacts/tokenizers/italiano-wikipedia-v1.llmtok 32 "La capitale d'Italia" \
+  artifacts/tokenizers/italiano-wikipedia-v2.llmtok 32 "La capitale d'Italia" \
   --temperature 0.8 --top-k 40 --repetition-penalty 1.1 --seed 1
 ```
 
@@ -202,6 +242,11 @@ I valori mostrati sono anche i default. `--temperature` controlla la variabilita
 risultato riproducibile. L'output UTF-8 valido viene scritto direttamente; solo
 byte isolati o caratteri di controllo vengono mostrati come escape.
 
+Il checkpoint canonico `italiano-base-75m`, addestrato sul dataset
+`italiano-v3`, deve essere generato con
+`artifacts/tokenizers/italiano-v3.llmtok`. Tokenizer diversi possono avere la
+stessa dimensione del vocabolario senza condividere la mappa ID → testo.
+
 Il Modello Minimal ha un solo blocco causale: questa prova verifica il percorso checkpoint →
 token → logits → testo, ma un modello piccolo e addestrato per pochi step non
 produce ancora articoli o dialoghi affidabili.
@@ -210,8 +255,20 @@ Per misurare invece il checkpoint sullo split non visto:
 
 ```sh
 ./build/debug/llm-lab model evaluate \
-  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v1.validation.llmdat \
+  data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2.validation.llmdat \
   artifacts/models/m1-step-10000.llmckpt 100 --batch-size 2 --seed 1
+```
+
+Per distinguere una loss bassa da una reale capacita' di predire il token
+successivo, `model diagnose` aggiunge top-1/5/20/100, rango medio, MRR e un
+campione teacher-forced decodificato. Verifica inoltre l'identita' SHA-256 del
+tokenizer registrata nel dataset:
+
+```sh
+./build/release/llm-lab model diagnose \
+  data/derived/italiano-v3/lm/italiano-v3.validation.llmdat \
+  artifacts/models/italiano-base-75m/best.llmckpt \
+  artifacts/tokenizers/italiano-v3.llmtok 16 --batch-size 1 --backend metal
 ```
 
 Il Modello Minimal e' volutamente un riferimento ristretto: al momento accetta

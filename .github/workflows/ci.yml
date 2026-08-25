@@ -7,7 +7,30 @@ on:
 permissions:
   contents: read
 
+env:
+  # CI must not depend on a runner-specific accelerator default. Tests that
+  # exercise Metal or CUDA select those backends explicitly.
+  LLM_LAB_BACKEND: cpu
+
 jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned: the style is stable across clang-format 17 to 21, but pinning
+      # keeps the gate from moving under the repository on a runner upgrade.
+      - name: Install clang-format
+        run: pip install clang-format==20.1.8
+
+      - name: Check formatting
+        run: >
+          clang-format --dry-run --Werror
+          $(find apps src include tests utils -type f
+          \( -name '*.c' -o -name '*.h' -o -name '*.m' -o -name '*.cu' -o -name '*.metal' \))
+
   unit-tests:
     name: ${{ matrix.os }} / Debug
     runs-on: ${{ matrix.os }}
@@ -22,22 +45,53 @@ jobs:
       - name: Configure
         run: cmake --preset debug -DLLM_LAB_BUILD_BENCHMARKS=ON
 
-      - name: Build unit-test targets
-        run: >
-          cmake --build --preset debug --parallel --target
-          encode_decode model_io pretokenizer training dataset_test
-          runtime_test runtime_operations_test runtime_language_operations_test
-          runtime_cpu_backend_test runtime_cpu_transformer_test
-          runtime_metal_backend_test
-          runtime_benchmark runtime_benchmark_report
+      # Building every target keeps the CLI, the model library and the
+      # benchmark tools compiled on both platforms, so no test target can
+      # silently stop being built.
+      - name: Build all targets
+        run: cmake --build --preset debug --parallel
 
-      - name: Run unit tests
+      # No -R filter: every registered test runs, including model.unit
+      # (gradient checks) and the integration.* CLI flows.
+      - name: Run all tests
+        run: ctest --test-dir build/debug --output-on-failure
+
+  cuda-build:
+    name: Ubuntu / CUDA build
+    runs-on: ubuntu-latest
+    # The official devel image already carries nvcc, cudart and cuBLAS headers.
+    # It needs no GPU: nvcc compiles for a target architecture, it does not run
+    # the result. This job is therefore a compile gate only, and the numerical
+    # verification of runtime.cuda_backend still has to happen on real hardware.
+    container: nvidia/cuda:12.6.2-devel-ubuntu24.04
+
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends cmake ninja-build git python3
+
+      - uses: actions/checkout@v4
+
+      # One architecture keeps the job short; the default list exists for real
+      # builds where the training host is not known in advance.
+      #
+      # No LLM_LAB_WARNINGS_AS_ERRORS: llm_lab_set_warnings excludes the CUDA
+      # language because nvcc rejects those C dialect flags, so -Werror would
+      # never reach a .cu file. All it did here was turn on a retroactive lint
+      # of the C sources under GCC, which no other job does.
+      - name: Configure with the CUDA backend
         run: >
-          ctest --test-dir build/debug --output-on-failure
-          -R '^(tokenizer\.|dataset\.unit$|runtime\.|benchmark\.|python\.unit$)'
+          cmake -S . -B build/cuda -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DLLM_LAB_ENABLE_CUDA=ON
+          -DCMAKE_CUDA_ARCHITECTURES=80
+
+      - name: Build all targets
+        run: cmake --build build/cuda --parallel
 
   runtime-sanitizers:
-    name: Ubuntu / Runtime sanitizers
+    name: Ubuntu / Sanitizers
     runs-on: ubuntu-latest
 
     steps:
@@ -50,14 +104,17 @@ jobs:
           -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
 
-      - name: Build runtime tests
+      - name: Build instrumented tests
         run: >
           cmake --build build/sanitizers --parallel --target
           runtime_test runtime_operations_test runtime_language_operations_test
           runtime_cpu_backend_test runtime_cpu_transformer_test
-          runtime_metal_backend_test
+          runtime_metal_backend_test runtime_cuda_backend_test model_test dataset_test
+          encode_decode model_io pretokenizer training
 
-      - name: Run runtime tests
+      # The C unit suites all run instrumented: the model and dataset code owns
+      # most of the manual allocation and pointer arithmetic in the project.
+      - name: Run instrumented tests
         run: >
           ctest --test-dir build/sanitizers --output-on-failure
-          -R '^runtime\.'
+          -R '^(runtime\.|model\.|dataset\.|tokenizer\.)'

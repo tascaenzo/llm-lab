@@ -1,9 +1,9 @@
 #include <math.h>
 #include <stdlib.h>
 
+#include "backend_contract_suite.h"
 #include "runtime/backend.h"
 #include "runtime/operations.h"
-#include "backend_contract_suite.h"
 #include "test_support.h"
 
 static int close_with_tolerance(float left, float right, float tolerance) {
@@ -59,6 +59,25 @@ static int test_matmul_ex_and_accumulate(llm_backend *backend) {
     llm_tensor_destroy(&output);
     llm_tensor_destroy(&right);
     llm_tensor_destroy(&left);
+    return EXIT_SUCCESS;
+}
+
+static int test_accumulate_sum_squares(llm_backend *backend) {
+    const size_t shape[] = {4097U};
+    llm_tensor input = {0};
+    llm_tensor accumulator = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 1U, shape, &input) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &accumulator) == LLM_OK);
+    TEST_ASSERT(llm_tensor_fill_f32(backend, &input, 2.0F) == LLM_OK);
+    TEST_ASSERT(llm_tensor_fill_f32(backend, &accumulator, 3.0F) == LLM_OK);
+    TEST_ASSERT(llm_accumulate_sum_squares(backend, &input, &accumulator) == LLM_OK);
+    float actual = 0.0F;
+    TEST_ASSERT(llm_tensor_read(backend, &accumulator, &actual, sizeof(actual)) == LLM_OK);
+    TEST_ASSERT(actual == 16391.0F);
+    TEST_ASSERT(llm_accumulate_sum_squares(backend, &input, &input) == LLM_INVALID_ARGUMENT);
+
+    llm_tensor_destroy(&accumulator);
+    llm_tensor_destroy(&input);
     return EXIT_SUCCESS;
 }
 
@@ -232,8 +251,7 @@ static int test_rope_forward_backward(llm_backend *backend) {
     llm_tensor invalid_cosine = {0};
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, invalid_table_shape,
                                   &invalid_cosine) == LLM_OK);
-    TEST_ASSERT(llm_rope(backend, &input, &invalid_cosine, &sine, &rotated) ==
-                LLM_INVALID_SHAPE);
+    TEST_ASSERT(llm_rope(backend, &input, &invalid_cosine, &sine, &rotated) == LLM_INVALID_SHAPE);
     llm_tensor_destroy(&invalid_cosine);
     llm_tensor_destroy(&sine);
     llm_tensor_destroy(&cosine);
@@ -368,12 +386,12 @@ static int test_attention_gradients(llm_backend *backend) {
     const size_t mismatched_shape[] = {1U, 3U, 1U, 2U};
     llm_tensor mismatched_key = {0};
     llm_tensor mismatched_value = {0};
-    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, mismatched_shape,
-                                  &mismatched_key) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, mismatched_shape, &mismatched_key) ==
+                LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, mismatched_shape,
                                   &mismatched_value) == LLM_OK);
-    TEST_ASSERT(llm_attention_forward(backend, &query, &mismatched_key, &mismatched_value,
-                                      &options, &output) == LLM_INVALID_SHAPE);
+    TEST_ASSERT(llm_attention_forward(backend, &query, &mismatched_key, &mismatched_value, &options,
+                                      &output) == LLM_INVALID_SHAPE);
     llm_tensor_destroy(&mismatched_value);
     llm_tensor_destroy(&mismatched_key);
 
@@ -414,17 +432,21 @@ static int test_adamw(llm_backend *backend) {
         .weight_decay = 0.1F,
         .gradient_scale = 0.5F,
         .step = 1ULL,
+        .zero_gradient = 1,
     };
     TEST_ASSERT(llm_adamw_update(backend, &parameter, &gradient, &first_moment, &second_moment,
                                  &options) == LLM_OK);
     float actual_parameter[2] = {0};
     float actual_first[2] = {0};
     float actual_second[2] = {0};
+    float actual_gradient[2] = {NAN, NAN};
     TEST_ASSERT(llm_tensor_read(backend, &parameter, actual_parameter, sizeof(actual_parameter)) ==
                 LLM_OK);
     TEST_ASSERT(llm_tensor_read(backend, &first_moment, actual_first, sizeof(actual_first)) ==
                 LLM_OK);
     TEST_ASSERT(llm_tensor_read(backend, &second_moment, actual_second, sizeof(actual_second)) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &gradient, actual_gradient, sizeof(actual_gradient)) ==
                 LLM_OK);
     TEST_ASSERT(close_with_tolerance(actual_parameter[0], 0.989F, 1.0e-5F));
     TEST_ASSERT(close_with_tolerance(actual_parameter[1], -1.988F, 1.0e-5F));
@@ -432,6 +454,7 @@ static int test_adamw(llm_backend *backend) {
     TEST_ASSERT(close_with_tolerance(actual_first[1], -0.2F, 1.0e-6F));
     TEST_ASSERT(close_with_tolerance(actual_second[0], 0.001F, 1.0e-6F));
     TEST_ASSERT(close_with_tolerance(actual_second[1], 0.004F, 1.0e-6F));
+    TEST_ASSERT(actual_gradient[0] == 0.0F && actual_gradient[1] == 0.0F);
 
     llm_tensor_destroy(&second_moment);
     llm_tensor_destroy(&first_moment);
@@ -442,6 +465,7 @@ static int test_adamw(llm_backend *backend) {
 
 int runtime_backend_contract_suite(llm_backend *backend) {
     if (backend == NULL || test_matmul_ex_and_accumulate(backend) != EXIT_SUCCESS ||
+        test_accumulate_sum_squares(backend) != EXIT_SUCCESS ||
         test_silu_gradient(backend) != EXIT_SUCCESS ||
         test_rms_norm_gradients(backend) != EXIT_SUCCESS ||
         test_rope_forward_backward(backend) != EXIT_SUCCESS ||

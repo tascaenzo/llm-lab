@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "dataset_internal.h"
 
@@ -30,6 +31,20 @@ static lm_dataset_status sha256_file(const char *path, unsigned char checksum[32
     return status;
 }
 
+lm_dataset_status lm_dataset_tokenizer_matches(const lm_dataset *dataset,
+                                               const char *tokenizer_path, int *out_matches) {
+    if (dataset == NULL || tokenizer_path == NULL || out_matches == NULL) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    *out_matches = 0;
+    unsigned char checksum[TOKENIZER_SHA256_DIGEST_SIZE] = {0};
+    const lm_dataset_status status = sha256_file(tokenizer_path, checksum);
+    if (status == LM_DATASET_OK) {
+        *out_matches = memcmp(checksum, dataset->tokenizer_checksum, sizeof(checksum)) == 0 ? 1 : 0;
+    }
+    return status;
+}
+
 static lm_dataset_status file_size_and_rewind(FILE *file, uint64_t *out_size) {
     if (fseek(file, 0L, SEEK_END) != 0) {
         return LM_DATASET_IO_ERROR;
@@ -54,6 +69,15 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
     const char *tokenizer_path, const char *documents_jsonl_path, const char *output_prefix,
     lm_dataset_progress_callback progress_callback, void *progress_context,
     lm_dataset_prepare_report *out_report) {
+    return lm_dataset_prepare_jsonl_reserved(tokenizer_path, documents_jsonl_path, output_prefix,
+                                             0U, progress_callback, progress_context, out_report);
+}
+
+lm_dataset_status
+lm_dataset_prepare_jsonl_reserved(const char *tokenizer_path, const char *documents_jsonl_path,
+                                  const char *output_prefix, uint32_t reserved_token_count,
+                                  lm_dataset_progress_callback progress_callback,
+                                  void *progress_context, lm_dataset_prepare_report *out_report) {
     if (tokenizer_path == NULL || documents_jsonl_path == NULL || output_prefix == NULL ||
         out_report == NULL) {
         return LM_DATASET_INVALID_ARGUMENT;
@@ -67,10 +91,12 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
                                                                : LM_DATASET_TOKENIZER_ERROR;
     }
     const uint32_t vocabulary_size = tokenizer_vocabulary_size(tokenizer);
-    if (vocabulary_size == UINT32_MAX) {
+    if (vocabulary_size == UINT32_MAX || reserved_token_count > UINT32_MAX - vocabulary_size - 1U) {
         tokenizer_destroy(tokenizer);
         return LM_DATASET_OVERFLOW;
     }
+    /* <EOD> sits at the tokenizer size; the reserved identifiers follow it. */
+    const uint32_t model_vocabulary_size = vocabulary_size + 1U + reserved_token_count;
 
     unsigned char tokenizer_checksum[32] = {0};
     lm_dataset_status status = sha256_file(tokenizer_path, tokenizer_checksum);
@@ -97,7 +123,8 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
         status = LM_DATASET_IO_ERROR;
     }
     if (status == LM_DATASET_OK) {
-        status = lm_dataset_writers_publish(writers, vocabulary_size, tokenizer_checksum);
+        status = lm_dataset_writers_publish(writers, model_vocabulary_size, vocabulary_size,
+                                            tokenizer_checksum);
     }
     if (status == LM_DATASET_OK) {
         for (size_t index = 0U; index < LM_DATASET_SPLIT_COUNT; ++index) {
@@ -105,7 +132,8 @@ lm_dataset_status lm_dataset_prepare_jsonl_with_progress(
             out_report->token_counts[index] = writers[index].token_count;
         }
         out_report->tokenizer_vocabulary_size = vocabulary_size;
-        out_report->model_vocabulary_size = vocabulary_size + 1U;
+        out_report->model_vocabulary_size = model_vocabulary_size;
+        out_report->reserved_token_count = reserved_token_count;
         out_report->end_of_document_token = vocabulary_size;
         for (size_t index = 0U; index < LM_DATASET_SPLIT_COUNT; ++index) {
             writers[index].published = 0;
@@ -125,9 +153,44 @@ static uint64_t next_random(uint64_t *state) {
     return value * UINT64_C(2685821657736338717);
 }
 
-lm_dataset_status lm_batcher_create(lm_dataset *dataset, size_t batch_size, size_t context_length,
-                                    uint64_t seed, lm_batcher **out_batcher) {
+static uint64_t greatest_common_divisor(uint64_t left, uint64_t right) {
+    while (right != 0U) {
+        const uint64_t remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    return left;
+}
+
+static void batcher_start_epoch(lm_batcher *batcher, uint64_t possible_offsets) {
+    batcher->sample_index = 0U;
+    if (possible_offsets == 1U) {
+        batcher->next_offset = 0U;
+        batcher->stride = 0U;
+        return;
+    }
+    batcher->next_offset = next_random(&batcher->random_state) % possible_offsets;
+    do {
+        batcher->stride = 1U + next_random(&batcher->random_state) % (possible_offsets - 1U);
+    } while (greatest_common_divisor(batcher->stride, possible_offsets) != 1U);
+}
+
+static uint64_t batcher_sample_count(const lm_batcher *batcher) {
+    if (batcher->sampling == LM_BATCHER_SHUFFLED_BLOCKS) {
+        return (batcher->dataset->token_count - UINT64_C(1)) / (uint64_t)batcher->context_length;
+    }
+    return batcher->dataset->token_count - (uint64_t)batcher->context_length;
+}
+
+lm_dataset_status lm_batcher_create_with_sampling(lm_dataset *dataset, size_t batch_size,
+                                                  size_t context_length, uint64_t seed,
+                                                  lm_batcher_sampling sampling,
+                                                  lm_batcher **out_batcher) {
     if (dataset == NULL || batch_size == 0U || context_length == 0U || out_batcher == NULL) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    if (sampling != LM_BATCHER_RANDOM_WINDOWS && sampling != LM_BATCHER_SHUFFLED_WINDOWS &&
+        sampling != LM_BATCHER_SHUFFLED_BLOCKS) {
         return LM_DATASET_INVALID_ARGUMENT;
     }
     *out_batcher = NULL;
@@ -151,9 +214,19 @@ lm_dataset_status lm_batcher_create(lm_dataset *dataset, size_t batch_size, size
     batcher->dataset = dataset;
     batcher->batch_size = batch_size;
     batcher->context_length = context_length;
+    batcher->sampling = sampling;
     batcher->random_state = seed == 0U ? UINT64_C(0x9e3779b97f4a7c15) : seed;
+    if (sampling != LM_BATCHER_RANDOM_WINDOWS) {
+        batcher_start_epoch(batcher, batcher_sample_count(batcher));
+    }
     *out_batcher = batcher;
     return LM_DATASET_OK;
+}
+
+lm_dataset_status lm_batcher_create(lm_dataset *dataset, size_t batch_size, size_t context_length,
+                                    uint64_t seed, lm_batcher **out_batcher) {
+    return lm_batcher_create_with_sampling(dataset, batch_size, context_length, seed,
+                                           LM_BATCHER_RANDOM_WINDOWS, out_batcher);
 }
 
 void lm_batcher_destroy(lm_batcher *batcher) {
@@ -184,6 +257,38 @@ lm_dataset_status lm_batcher_set_random_state(lm_batcher *batcher, uint64_t stat
     return LM_DATASET_OK;
 }
 
+lm_dataset_status lm_batcher_get_state(const lm_batcher *batcher, lm_batcher_state *out_state) {
+    if (batcher == NULL || out_state == NULL) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    *out_state = (lm_batcher_state){.random_state = batcher->random_state,
+                                    .epoch = batcher->epoch,
+                                    .sample_index = batcher->sample_index,
+                                    .next_offset = batcher->next_offset,
+                                    .stride = batcher->stride};
+    return LM_DATASET_OK;
+}
+
+lm_dataset_status lm_batcher_set_state(lm_batcher *batcher, const lm_batcher_state *state) {
+    if (batcher == NULL || state == NULL || state->random_state == 0U) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    const uint64_t possible_samples = batcher_sample_count(batcher);
+    if (batcher->sampling != LM_BATCHER_RANDOM_WINDOWS &&
+        (state->sample_index >= possible_samples || state->next_offset >= possible_samples ||
+         (possible_samples > 1U &&
+          (state->stride == 0U || state->stride >= possible_samples ||
+           greatest_common_divisor(state->stride, possible_samples) != 1U)))) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    batcher->random_state = state->random_state;
+    batcher->epoch = state->epoch;
+    batcher->sample_index = state->sample_index;
+    batcher->next_offset = state->next_offset;
+    batcher->stride = state->stride;
+    return LM_DATASET_OK;
+}
+
 lm_dataset_status lm_batcher_next(lm_batcher *batcher, token_id *out_inputs,
                                   token_id *out_targets) {
     if (batcher == NULL || out_inputs == NULL || out_targets == NULL) {
@@ -191,8 +296,26 @@ lm_dataset_status lm_batcher_next(lm_batcher *batcher, token_id *out_inputs,
     }
     const uint64_t possible_offsets =
         batcher->dataset->token_count - (uint64_t)batcher->context_length;
+    const uint64_t possible_samples = batcher_sample_count(batcher);
     for (size_t row = 0U; row < batcher->batch_size; ++row) {
-        const uint64_t offset = next_random(&batcher->random_state) % possible_offsets;
+        uint64_t offset = 0U;
+        if (batcher->sampling == LM_BATCHER_RANDOM_WINDOWS) {
+            offset = next_random(&batcher->random_state) % possible_offsets;
+        } else {
+            offset = batcher->next_offset;
+            if (batcher->sampling == LM_BATCHER_SHUFFLED_BLOCKS) {
+                offset *= (uint64_t)batcher->context_length;
+            }
+            ++batcher->sample_index;
+            if (batcher->sample_index == possible_samples) {
+                ++batcher->epoch;
+                batcher_start_epoch(batcher, possible_samples);
+            } else if (batcher->next_offset >= possible_samples - batcher->stride) {
+                batcher->next_offset -= possible_samples - batcher->stride;
+            } else {
+                batcher->next_offset += batcher->stride;
+            }
+        }
         lm_dataset_status status = lm_dataset_read_tokens(
             batcher->dataset, offset, batcher->context_length + 1U, batcher->window);
         if (status != LM_DATASET_OK) {

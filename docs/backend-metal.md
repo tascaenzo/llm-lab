@@ -1,9 +1,9 @@
 # Backend Metal
 
-**Stato (2026-08-13):** il codice Metal copre il contratto training v1,
-inclusi RMSNorm, RoPE, attention causale GQA e AdamW. Una sessione del Modello
-Minimal di 2.000.000 step su Apple Silicon ha prodotto un checkpoint riproducibile; la
-parita' contrattuale completa e il profiling per forma restano i gate aperti.
+**Stato (2026-08-17):** il codice Metal copre il contratto training v1,
+inclusi RMSNorm, RoPE, attention causale GQA e AdamW. La suite contrattuale e
+la parita' CPU/Metal restano gate obbligatori per ogni modifica; il profiling
+per forma guida le ottimizzazioni, non la correttezza.
 **Piattaforma:** macOS su Apple Silicon. Nessun fallback CPU.
 
 ## Confine
@@ -32,10 +32,17 @@ inoltrata alla CPU.
 
 ## Primitive presenti
 
-Attualmente Metal copre lifecycle/memoria, batch asincroni, elementwise di
-base, `accumulate`, riduzioni, gather/scatter-add, softmax, cross-entropy,
-SiLU forward/backward e GEMM F32. `matmul_ex` usa internamente
-`MPSMatrixMultiplication` per le trasposizioni; l'API pubblica resta invariata.
+Metal copre lifecycle/memoria, batch asincroni, elementwise di base,
+`accumulate`, riduzioni, gather/scatter-add, softmax, cross-entropy, SiLU,
+RMSNorm, RoPE, attention causale GQA e AdamW, inclusi i backward richiesti dal
+contratto. `matmul_ex` usa internamente `MPSMatrixMultiplication` per le
+trasposizioni; l'API pubblica resta invariata.
+
+Il percorso trainer usa inoltre due fusioni condivise con CUDA: la norma globale dei gradienti
+accumula direttamente la somma dei quadrati con un solo dispatch per parametro, e AdamW azzera il
+gradiente nello stesso kernel dopo averlo consumato. Per il modello 75M questo elimina 333
+operazioni di riduzione/scalatura e 111 azzeramenti separati per update (444 dispatch in totale),
+oltre ai relativi buffer intermedi.
 
 La build Release e i test Metal sono stati eseguiti fuori dal sandbox su Apple
 M4 reale: il test MPS `matmul_ex` seguito da un kernel Metal nello stesso batch
@@ -49,8 +56,7 @@ restano verificabili.
 
 ## Gate di parita' e ottimizzazione
 
-Il codice copre le primitive che seguono; prima di dichiarare Metal un backend
-di training completo occorre ancora ottenere l'evidenza esecutiva su hardware:
+Ogni modifica Metal deve mantenere l'evidenza esecutiva su hardware:
 
 1. esecuzione completa della suite contrattuale condivisa su Metal;
 2. confronto esplicito CPU/Metal per output e gradienti del blocco minimal;
@@ -58,10 +64,9 @@ di training completo occorre ancora ottenere l'evidenza esecutiva su hardware:
 4. benchmark e ottimizzazione sulle forme del primo modello.
 
 Il trainer raggruppa un intero step Metal in un command buffer, evitando
-sincronizzazioni tra forward, backward e AdamW; resta soltanto la lettura della
-loss al termine dello step. Non aggiungere CUDA: l'API backend resta portabile,
-ma senza hardware e CI CUDA non ci sarebbe una validazione affidabile della
-parita' numerica.
+sincronizzazioni tra forward, backward e AdamW; restano soltanto le letture necessarie di loss e
+norma del gradiente. Le ottimizzazioni comuni devono mantenere la suite contrattuale su CPU, Metal
+e CUDA; quelle specifiche del vendor restano confinate nel rispettivo backend.
 
 ## Risultato del Modello Minimal — sessione di training Metal
 
@@ -120,6 +125,45 @@ parallele o scatter-add con indici duplicati; la suite usa tolleranze per
 operazione. NaN/Inf nelle opzioni vengono rifiutati dalla facciata comune.
 Softmax, cross-entropy e AdamW devono rispettare gli stessi errori numerici CPU.
 
+### Profilo per operazione
+
+Un update di training e' una sequenza fissa e nota di operazioni, quindi il suo
+profilo e' la somma di ogni forma misurata per il numero di volte che compare.
+`utils/benchmarks/profile_model.py` enumera quelle forme con le molteplicita'
+lette da `src/model` e le misura con `runtime_benchmark`:
+
+```sh
+python3 utils/benchmarks/profile_model.py \
+  --benchmark build/release/utils/benchmarks/runtime_benchmark
+```
+
+Serve a scegliere cosa ottimizzare guardando i numeri invece del sorgente. La
+prima esecuzione sul modello canonico ha corretto quattro priorita' che leggendo
+il codice sembravano ovvie: l'output head e la cross-entropy, sospettati di
+valere meta' dello step, pesano rispettivamente l'8,9% e l'1,6%, mentre
+l'attention vale il 62,5% pur essendo il 4,1% delle operazioni aritmetiche.
+
+Va rilanciato dopo ogni ottimizzazione: dice se il guadagno e' arrivato dove ci
+si aspettava, e quando il collo di bottiglia si e' spostato altrove.
+
+Il forward attention ora usa una softmax online: score e somma pesata di V vengono aggiornati in
+un solo passaggio causale, senza materializzare la riga delle probabilita'. Il backward calcola
+insieme QK e il gradiente rispetto alle probabilita'. Sulla forma reale `B4 S512 H8 D64`, il
+benchmark appaiato su Apple M4 ha ridotto il tempo GPU combinato forward+backward da circa
+`33,31 ms` a `29,11 ms` per chiamata (circa `12,6%`); la suite del modello completa passa sulla GPU
+reale.
+
+### Riproducibilita' per backend
+
+Su Metal alcune riduzioni sommano con atomiche float in ordine non
+deterministico: gradiente del peso di RMSNorm, gradienti di K e V
+dell'attention, scatter-add dell'embedding, norma globale dei gradienti e riduzione della loss. Il seed rende
+quindi riproducibile la *sequenza dei batch*, non il valore esatto dei numeri: due
+run Metal identici possono differire negli ultimi bit e divergere lentamente. La
+build CPU resta deterministica a parita' di numero di thread. Chi ha bisogno di
+un risultato bit-a-bit ripetibile deve usare la CPU o attendere riduzioni
+deterministiche a due stadi.
+
 ## Gate di completamento
 
 Metal e' pronto per il training solo quando:
@@ -131,5 +175,5 @@ Metal e' pronto per il training solo quando:
 - sanitizer/CTest host e validazione Metal sono verdi;
 - il benchmark misura solo F32/U32 e non riapre scope futuri.
 
-Fino a quel punto e' corretto iniziare lo sviluppo Metal, ma non dichiarare il
-runtime Metal completo.
+Il runtime Metal e' parte del percorso di training v1; una modifica che non
+supera questi gate non e' pronta per un run lungo.

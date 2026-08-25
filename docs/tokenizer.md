@@ -444,7 +444,7 @@ dalla pipeline di produzione degli artefatti.
 Per un esperimento rapido sul modello gia' addestrato:
 
 ```sh
-tokenizer_experiment artifacts/tokenizers/italiano-wikipedia-v1.llmtok
+tokenizer_experiment artifacts/tokenizers/italiano-wikipedia-v2.llmtok
 ```
 
 Il tester riceve il percorso `.llmtok` come unico argomento, carica il modello una

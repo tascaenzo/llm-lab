@@ -111,6 +111,49 @@ static int verify_batcher(const char *train_path) {
         }
     }
 
+    lm_batcher *shuffled = NULL;
+    TEST_ASSERT(lm_batcher_create_with_sampling(dataset, 1U, 4U, UINT64_C(42),
+                                                LM_BATCHER_SHUFFLED_BLOCKS,
+                                                &shuffled) == LM_DATASET_OK);
+    const uint64_t possible_blocks = (lm_dataset_token_count(dataset) - 1U) / 4U;
+    TEST_ASSERT(possible_blocks <= SIZE_MAX);
+    unsigned char *seen = calloc((size_t)possible_blocks, sizeof(*seen));
+    TEST_ASSERT(seen != NULL);
+    token_id shuffled_inputs[4] = {0};
+    token_id shuffled_targets[4] = {0};
+    for (uint64_t index = 0U; index < possible_blocks; ++index) {
+        lm_batcher_state state = {0};
+        TEST_ASSERT(lm_batcher_get_state(shuffled, &state) == LM_DATASET_OK);
+        TEST_ASSERT(state.next_offset < possible_blocks);
+        TEST_ASSERT(seen[state.next_offset] == 0U);
+        seen[state.next_offset] = 1U;
+        TEST_ASSERT(lm_batcher_next(shuffled, shuffled_inputs, shuffled_targets) == LM_DATASET_OK);
+    }
+    for (uint64_t index = 0U; index < possible_blocks; ++index) {
+        TEST_ASSERT(seen[index] != 0U);
+    }
+    lm_batcher_state saved_state = {0};
+    TEST_ASSERT(lm_batcher_get_state(shuffled, &saved_state) == LM_DATASET_OK);
+    lm_batcher *restored = NULL;
+    TEST_ASSERT(lm_batcher_create_with_sampling(dataset, 1U, 4U, UINT64_C(42),
+                                                LM_BATCHER_SHUFFLED_BLOCKS,
+                                                &restored) == LM_DATASET_OK);
+    TEST_ASSERT(lm_batcher_set_state(restored, &saved_state) == LM_DATASET_OK);
+    token_id restored_inputs[4] = {0};
+    token_id restored_targets[4] = {0};
+    TEST_ASSERT(lm_batcher_next(shuffled, shuffled_inputs, shuffled_targets) == LM_DATASET_OK);
+    TEST_ASSERT(lm_batcher_next(restored, restored_inputs, restored_targets) == LM_DATASET_OK);
+    TEST_ASSERT(memcmp(shuffled_inputs, restored_inputs, sizeof(shuffled_inputs)) == 0);
+    TEST_ASSERT(memcmp(shuffled_targets, restored_targets, sizeof(shuffled_targets)) == 0);
+    lm_batcher_destroy(restored);
+    lm_batcher *legacy = NULL;
+    TEST_ASSERT(lm_batcher_create_with_sampling(dataset, 1U, 4U, UINT64_C(42),
+                                                LM_BATCHER_SHUFFLED_WINDOWS,
+                                                &legacy) == LM_DATASET_OK);
+    TEST_ASSERT(lm_batcher_next(legacy, shuffled_inputs, shuffled_targets) == LM_DATASET_OK);
+    lm_batcher_destroy(legacy);
+    free(seen);
+    lm_batcher_destroy(shuffled);
     lm_batcher_destroy(first);
     lm_batcher_destroy(second);
     lm_dataset_close(dataset);
@@ -199,6 +242,36 @@ int main(void) {
 
     TEST_ASSERT(lm_dataset_prepare_jsonl(model_path, LLM_LAB_TEST_DOCUMENTS_PATH, output_prefix,
                                          &report) == LM_DATASET_OUTPUT_EXISTS);
+
+    /*
+     * Reserved identifiers widen the model vocabulary above <EOD> without
+     * appearing in the data, so a later fine-tuning stage can add role tokens
+     * without resizing the embedding and invalidating every checkpoint.
+     */
+    char reserved_prefix[512] = {0};
+    TEST_ASSERT(snprintf(reserved_prefix, sizeof(reserved_prefix), "%s/dataset-reserved",
+                         LLM_LAB_TEST_BINARY_DIR) > 0);
+    cleanup_outputs(reserved_prefix);
+    lm_dataset_prepare_report reserved_report = {0};
+    TEST_ASSERT(lm_dataset_prepare_jsonl_reserved(model_path, LLM_LAB_TEST_DOCUMENTS_PATH,
+                                                  reserved_prefix, 7U, NULL, NULL,
+                                                  &reserved_report) == LM_DATASET_OK);
+    TEST_ASSERT(reserved_report.reserved_token_count == 7U);
+    TEST_ASSERT(reserved_report.end_of_document_token == reserved_report.tokenizer_vocabulary_size);
+    TEST_ASSERT(reserved_report.model_vocabulary_size ==
+                reserved_report.tokenizer_vocabulary_size + 1U + 7U);
+
+    char reserved_train[512] = {0};
+    TEST_ASSERT(
+        snprintf(reserved_train, sizeof(reserved_train), "%s.train.llmdat", reserved_prefix) > 0);
+    lm_dataset *reserved_dataset = NULL;
+    TEST_ASSERT(lm_dataset_open(reserved_train, &reserved_dataset) == LM_DATASET_OK);
+    TEST_ASSERT(lm_dataset_model_vocabulary_size(reserved_dataset) ==
+                reserved_report.model_vocabulary_size);
+    TEST_ASSERT(lm_dataset_end_of_document_token(reserved_dataset) ==
+                reserved_report.end_of_document_token);
+    lm_dataset_close(reserved_dataset);
+    cleanup_outputs(reserved_prefix);
 
     (void)remove(model_path);
     (void)remove(corrupt_path);

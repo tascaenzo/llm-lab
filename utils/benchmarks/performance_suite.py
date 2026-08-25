@@ -11,7 +11,12 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from compare_results import compare, load_results, result_key
+try:
+    from .compare_results import compare, load_results, result_key
+    from .project_environment import configured_backend
+except ImportError:  # Direct script execution.
+    from compare_results import compare, load_results, result_key
+    from project_environment import configured_backend
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -164,6 +169,11 @@ def parse_arguments() -> argparse.Namespace:
         )
     )
     parser.add_argument("--benchmark", type=Path, default=DEFAULT_BENCHMARK)
+    parser.add_argument(
+        "--backend",
+        choices=("cpu", "metal", "cuda", "all"),
+        help="backend to measure; overrides LLM_LAB_BACKEND",
+    )
     parser.add_argument("--output", type=Path, help="save the current JSONL result")
     parser.add_argument("--baseline", type=Path, help="compare against this JSONL baseline")
     parser.add_argument(
@@ -179,16 +189,24 @@ def parse_arguments() -> argparse.Namespace:
         help="changes inside this range are reported as stable (default: 3)",
     )
     parser.add_argument("--smoke", action="store_true", help=argparse.SUPPRESS)
-    return parser.parse_args()
+    arguments = parser.parse_args()
+    if arguments.backend is None:
+        try:
+            arguments.backend = configured_backend(
+                PROJECT_ROOT, default="cpu", allowed=("cpu", "metal", "cuda", "all")
+            )
+        except ValueError as error:
+            parser.error(str(error))
+    return arguments
 
 
-def common_arguments(smoke: bool) -> List[str]:
+def common_arguments(smoke: bool, backend: str) -> List[str]:
     if smoke:
         return [
             "--format",
             "jsonl",
             "--backend",
-            "all",
+            backend,
             "--threads",
             "auto",
             "--warmup",
@@ -202,7 +220,7 @@ def common_arguments(smoke: bool) -> List[str]:
         "--format",
         "jsonl",
         "--backend",
-        "all",
+        backend,
         "--threads",
         "auto",
         "--warmup",
@@ -223,13 +241,17 @@ def selected_operations(arguments: Sequence[str]) -> set[str]:
 
 
 def expected_result_count(
-    scenarios: Sequence[Tuple[str, Sequence[str]]], metal_available: bool
+    scenarios: Sequence[Tuple[str, Sequence[str]]], backend: str,
+    metal_available: bool, cuda_available: bool
 ) -> int:
     total = 0
     for _, arguments in scenarios:
         operations = selected_operations(arguments)
-        total += len(operations)
-        if metal_available:
+        if backend in ("cpu", "all"):
+            total += len(operations)
+        if backend in ("metal", "all") and metal_available:
+            total += len(operations & METAL_OPERATIONS)
+        if backend in ("cuda", "all") and cuda_available:
             total += len(operations & METAL_OPERATIONS)
     return total
 
@@ -269,10 +291,10 @@ def print_progress(record: Dict[str, Any], completed: int, total: int) -> None:
 
 
 def run_scenarios(
-    benchmark: Path, scenarios: Sequence[Tuple[str, Sequence[str]]], smoke: bool
+    benchmark: Path, scenarios: Sequence[Tuple[str, Sequence[str]]], smoke: bool, backend: str
 ) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
-    common = common_arguments(smoke)
+    common = common_arguments(smoke, backend)
     completed_results = 0
     expected_results: Optional[int] = None
     for index, (name, arguments) in enumerate(scenarios, start=1):
@@ -297,14 +319,18 @@ def run_scenarios(
                 records.append(record)
                 if record.get("type") == "metadata" and expected_results is None:
                     expected_results = expected_result_count(
-                        scenarios, bool(record.get("metal_available", False))
+                        scenarios,
+                        backend,
+                        bool(record.get("metal_available", False)),
+                        bool(record.get("cuda_available", False)),
                     )
                     metal = "disponibile" if record.get("metal_available") else "non disponibile"
+                    cuda = "disponibile" if record.get("cuda_available") else "non disponibile"
                     print(
                         f'Sistema: {record.get("os", "?")} / '
                         f'{record.get("architecture", "?")} | '
                         f'CPU: {record.get("detected_hardware_threads", "?")} thread | '
-                        f"Metal: {metal} | Test previsti: {expected_results}",
+                        f"Metal: {metal} | CUDA: {cuda} | Test previsti: {expected_results}",
                         flush=True,
                     )
                 elif record.get("type") == "result":
@@ -423,25 +449,29 @@ def print_matmul_summary(results: Sequence[Dict[str, Any]]) -> None:
     if not order:
         return
     print("\nMatmul principali")
-    print(f'{"Scenario":<25} {"Tipo":<5} {"Forma":<18} {"CPU":>14} {"Metal":>14} {"Vincitore":>15}')
-    print("-" * 96)
+    print(
+        f'{"Scenario":<25} {"Tipo":<5} {"Forma":<18} {"CPU":>14} '
+        f'{"Metal":>14} {"CUDA":>14} {"Vincitore":>15}'
+    )
+    print("-" * 111)
     for scenario, dtype, shape in order:
         backends = groups[(scenario, dtype, shape)]
         cpu = backends.get("cpu")
         metal = backends.get("metal")
+        cuda = backends.get("cuda")
         cpu_text = f'{float(cpu["throughput"]):.1f} GFLOP/s' if cpu else "-"
         metal_text = f'{float(metal["throughput"]):.1f} GFLOP/s' if metal else "-"
-        if cpu is not None and metal is not None:
-            ratio = float(metal["throughput"]) / float(cpu["throughput"])
-            winner = f"Metal {ratio:.2f}x" if ratio >= 1.0 else f"CPU {1.0 / ratio:.2f}x"
-        elif metal is not None:
-            winner = "Metal"
-        else:
-            winner = "CPU"
+        cuda_text = f'{float(cuda["throughput"]):.1f} GFLOP/s' if cuda else "-"
+        candidates = [record for record in (cpu, metal, cuda) if record is not None]
+        winner = (
+            str(max(candidates, key=lambda item: float(item["throughput"]))["backend"]).upper()
+            if candidates
+            else "-"
+        )
         label = scenario[len("matmul-") :]
         print(
             f"{label:<25} {dtype:<5} {shape:<18} {cpu_text:>14} "
-            f"{metal_text:>14} {winner:>15}"
+            f"{metal_text:>14} {cuda_text:>14} {winner:>15}"
         )
 
 
@@ -458,11 +488,19 @@ def print_final_summary(
     )
     cpu_count = sum(record.get("backend") == "cpu" for record in results)
     metal_count = sum(record.get("backend") == "metal" for record in results)
+    cuda_count = sum(record.get("backend") == "cuda" for record in results)
     metal_devices = sorted(
         {
             str(record.get("device"))
             for record in results
             if record.get("backend") == "metal" and record.get("device")
+        }
+    )
+    cuda_devices = sorted(
+        {
+            str(record.get("device"))
+            for record in results
+            if record.get("backend") == "cuda" and record.get("device")
         }
     )
     unstable_count = sum(
@@ -479,6 +517,7 @@ def print_final_summary(
     print(f'Esito: {"REGRESSIONE RILEVATA" if has_failure else "COMPLETATO"}')
     print(
         f'Test completati: {len(results)} | CPU: {cpu_count} | Metal: {metal_count} '
+        f'| CUDA: {cuda_count} '
         f"| Durata: {elapsed_seconds:.1f} secondi"
     )
     print(
@@ -486,7 +525,9 @@ def print_final_summary(
         f'| CPU: {metadata.get("detected_hardware_threads", "?")} thread'
     )
     if metal_devices:
-        print(f'GPU: {", ".join(metal_devices)}')
+        print(f'GPU Metal: {", ".join(metal_devices)}')
+    if cuda_devices:
+        print(f'GPU CUDA: {", ".join(cuda_devices)}')
     print(
         f"Stabilita': {len(results) - unstable_count}/{len(results)} risultati con "
         "variabilita' entro il 10%"
@@ -532,10 +573,12 @@ def main() -> int:
     scenarios = SMOKE_SCENARIOS if arguments.smoke else SCENARIOS
     started = time.monotonic()
     comparison_report = None
-    print("Suite prestazionale rappresentativa CPU/Metal")
+    print(f"Suite prestazionale rappresentativa — backend {arguments.backend}")
     print("La barra avanza quando un singolo test viene realmente completato.")
     try:
-        records = run_scenarios(arguments.benchmark, scenarios, arguments.smoke)
+        records = run_scenarios(
+            arguments.benchmark, scenarios, arguments.smoke, arguments.backend
+        )
         if arguments.output is not None:
             write_jsonl(arguments.output, records)
 

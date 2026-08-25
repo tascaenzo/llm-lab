@@ -23,6 +23,8 @@ typedef struct llm_adamw_options {
     float weight_decay;
     float gradient_scale;
     unsigned long long step;
+    /** Clears the gradient in the same optimizer kernel after consuming it. */
+    int zero_gradient;
 } llm_adamw_options;
 
 /** Adds two distinct FP32 tensors with identical shapes. */
@@ -46,6 +48,10 @@ llm_status llm_reduce_max_last(llm_backend *backend, const llm_tensor *input, ll
 /** Reduces the last FP32 dimension to the mean of its squared values. */
 llm_status llm_reduce_mean_square_last(llm_backend *backend, const llm_tensor *input,
                                        llm_tensor *output);
+
+/** Adds the sum of all squared FP32 input values to a scalar accumulator. */
+llm_status llm_accumulate_sum_squares(llm_backend *backend, const llm_tensor *input,
+                                      llm_tensor *accumulator);
 
 /** Computes a two-dimensional FP32 matrix product: [M,K] x [K,N] -> [M,N]. */
 llm_status llm_matmul(llm_backend *backend, const llm_tensor *left, const llm_tensor *right,
@@ -77,7 +83,13 @@ llm_status llm_silu_backward(llm_backend *backend, const llm_tensor *input,
 llm_status llm_rms_norm(llm_backend *backend, const llm_tensor *input, const llm_tensor *weight,
                         float epsilon, llm_tensor *output);
 
-/** Computes input and weight gradients for weighted RMS normalization. */
+/**
+ * Computes input and weight gradients for weighted RMS normalization.
+ *
+ * Both outputs are overwritten, weight_gradient included: it is a reduction
+ * over every row, not an accumulator. Callers that accumulate gradients across
+ * micro-batches must pass a workspace and add it into the parameter gradient.
+ */
 llm_status llm_rms_norm_backward(llm_backend *backend, const llm_tensor *input,
                                  const llm_tensor *weight, const llm_tensor *output_gradient,
                                  float epsilon, llm_tensor *input_gradient,
@@ -116,7 +128,7 @@ llm_status llm_cross_entropy_backward(llm_backend *backend, const llm_tensor *lo
                                       const llm_tensor *targets, llm_tensor *logits_gradient);
 
 /** Updates an FP32 parameter and its two FP32 AdamW moment tensors in place. */
-llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, const llm_tensor *gradient,
+llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, llm_tensor *gradient,
                             llm_tensor *first_moment, llm_tensor *second_moment,
                             const llm_adamw_options *options);
 
