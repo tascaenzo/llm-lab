@@ -430,8 +430,7 @@ __global__ void attention_forward_kernel(const float *query, const float *key, c
             running_sum == 0.0f ? 0.0f : expf(running_maximum - new_maximum);
         const float score_scale = expf(score - new_maximum);
         running_sum = running_sum * previous_scale + score_scale;
-        for (size_t dimension = threadIdx.x; dimension < head_dimension;
-             dimension += blockDim.x) {
+        for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             accumulator[dimension] = accumulator[dimension] * previous_scale +
                                      score_scale * value[key_index + dimension];
         }
@@ -477,8 +476,7 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
         float probability_gradient = 0.0f;
         for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
             dot += query_row_values[dimension] * key[key_index + dimension];
-            probability_gradient +=
-                output_gradient_row[dimension] * value[key_index + dimension];
+            probability_gradient += output_gradient_row[dimension] * value[key_index + dimension];
         }
         dot = block_sum(dot, partial);
         probability_gradient = block_sum(probability_gradient, partial);
@@ -628,8 +626,8 @@ __global__ void cross_entropy_backward_kernel(const float *logits, const uint32_
 __global__ void adamw_kernel(float *parameter, float *gradient, float *first_moment,
                              float *second_moment, size_t count, float learning_rate, float beta1,
                              float beta2, float epsilon, float weight_decay, float gradient_scale,
-                             float inverse_first_bias, float inverse_second_bias,
-                             int zero_gradient, int *flags) {
+                             float inverse_first_bias, float inverse_second_bias, int zero_gradient,
+                             int *flags) {
     for (size_t index = grid_index(); index < count; index += grid_stride()) {
         const float old_parameter = parameter[index];
         const float scaled_gradient = gradient[index] * gradient_scale;
@@ -639,9 +637,8 @@ __global__ void adamw_kernel(float *parameter, float *gradient, float *first_mom
         const float corrected_first = first * inverse_first_bias;
         const float corrected_second = second * inverse_second_bias;
         const float updated =
-            old_parameter -
-            learning_rate * (corrected_first / (sqrtf(corrected_second) + epsilon) +
-                             weight_decay * old_parameter);
+            old_parameter - learning_rate * (corrected_first / (sqrtf(corrected_second) + epsilon) +
+                                             weight_decay * old_parameter);
         if (isfinite(old_parameter) == 0 || isfinite(scaled_gradient) == 0 ||
             isfinite(first) == 0 || isfinite(second) == 0 || isfinite(updated) == 0) {
             atomicExch(&flags[LLM_CUDA_FLAG_NON_FINITE], 1);
@@ -760,8 +757,8 @@ void llm_cuda_launch_reduce_mean_square_last(cudaStream_t stream, const float *i
 
 void llm_cuda_launch_accumulate_sum_squares(cudaStream_t stream, const float *input,
                                             float *accumulator, size_t value_count) {
-    accumulate_sum_squares_kernel<<<sum_squares_blocks(value_count), LLM_CUDA_ELEMENTWISE_BLOCK,
-                                    0, stream>>>(input, accumulator, value_count);
+    accumulate_sum_squares_kernel<<<sum_squares_blocks(value_count), LLM_CUDA_ELEMENTWISE_BLOCK, 0,
+                                    stream>>>(input, accumulator, value_count);
 }
 
 void llm_cuda_launch_softmax_last(cudaStream_t stream, const float *input, float *output,

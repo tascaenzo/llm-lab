@@ -602,8 +602,8 @@ llm_status llm_metal_attention_forward_f32(void *opaque_context, const float *qu
         [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:3U];
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4U];
         status = metal_dispatch_attention_groups(context, LLM_METAL_PIPELINE_ATTENTION_FORWARD,
-                                                  command_buffer, encoder, query_rows,
-                                                  head_dimension, 32U + head_dimension);
+                                                 command_buffer, encoder, query_rows,
+                                                 head_dimension, 32U + head_dimension);
         if (status != LLM_OK || context->batch_active != 0) {
             return status;
         }
@@ -807,16 +807,14 @@ llm_status llm_metal_accumulate_sum_squares_f32(void *opaque_context, const floa
         [encoder setBuffer:metal_buffer_handle(input) offset:0U atIndex:0U];
         [encoder setBuffer:metal_buffer_handle(accumulator) offset:0U atIndex:1U];
         [encoder setBytes:&parameters length:sizeof(parameters) atIndex:2U];
-        const size_t group_count =
-            (value_count + LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP - 1U) /
-            LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP;
+        const size_t group_count = (value_count + LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP - 1U) /
+                                   LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP;
         status = metal_dispatch_row_groups(context, pipeline, command_buffer, encoder, group_count,
                                            LLM_METAL_SUM_SQUARES_VALUES_PER_GROUP);
         if (status != LLM_OK || context->batch_active != 0) {
             return status;
         }
-        return metal_buffer_values_are_finite(accumulator, 1U) != 0 ? LLM_OK
-                                                                    : LLM_NUMERICAL_ERROR;
+        return metal_buffer_values_are_finite(accumulator, 1U) != 0 ? LLM_OK : LLM_NUMERICAL_ERROR;
     }
 }
 

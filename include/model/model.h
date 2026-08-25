@@ -112,8 +112,9 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
                                       lm_model **out_model, lm_trainer **out_trainer);
 
 /** Restores a checkpoint with a batch-equivalent execution configuration. */
-llm_status lm_trainer_load_checkpoint_with_options(
-    llm_backend *backend, lm_dataset *dataset, const char *path,
-    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer);
+llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_dataset *dataset,
+                                                   const char *path,
+                                                   const lm_trainer_resume_options *options,
+                                                   lm_model **out_model, lm_trainer **out_trainer);
 
 #endif

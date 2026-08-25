@@ -305,9 +305,10 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
     return status;
 }
 
-llm_status lm_trainer_load_checkpoint_with_options(
-    llm_backend *backend, lm_dataset *dataset, const char *path,
-    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer) {
+llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_dataset *dataset,
+                                                   const char *path,
+                                                   const lm_trainer_resume_options *options,
+                                                   lm_model **out_model, lm_trainer **out_trainer) {
     if (backend == NULL || path == NULL || out_model == NULL ||
         (dataset != NULL &&
          (out_trainer == NULL || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
@@ -368,8 +369,7 @@ llm_status lm_trainer_load_checkpoint_with_options(
         if (resumed_batch_size == 0U || resumed_accumulation == 0U ||
             saved_batch_size > SIZE_MAX / saved_accumulation ||
             resumed_batch_size > SIZE_MAX / resumed_accumulation ||
-            saved_batch_size * saved_accumulation !=
-                resumed_batch_size * resumed_accumulation) {
+            saved_batch_size * saved_accumulation != resumed_batch_size * resumed_accumulation) {
             status = LLM_INVALID_ARGUMENT;
         } else {
             trainer_config.batch_size = resumed_batch_size;

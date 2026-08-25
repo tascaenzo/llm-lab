@@ -1901,8 +1901,8 @@ static void diagnostic_print_tokens(const char *label, const tokenizer *active_t
         const size_t first = index;
         while (index < count && tokens[index] < tokenizer_size)
             ++index;
-        const token_sequence sequence = {
-            .ids = (token_id *)(tokens + first), .length = index - first};
+        const token_sequence sequence = {.ids = (token_id *)(tokens + first),
+                                         .length = index - first};
         unsigned char *bytes = NULL;
         size_t byte_count = 0U;
         if (tokenizer_decode(active_tokenizer, &sequence, &bytes, &byte_count) != TOKENIZER_OK) {
@@ -2055,8 +2055,8 @@ static int run_model_diagnose(int argc, char **argv) {
         }
         status = llm_backend_begin_batch(backend);
         if (status == LLM_OK)
-            status = llm_tensor_write(backend, &inputs, host_inputs,
-                                      token_count * sizeof(*host_inputs));
+            status =
+                llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
         if (status == LLM_OK)
             status = llm_tensor_write(backend, &targets, host_targets,
                                       token_count * sizeof(*host_targets));
@@ -2105,46 +2105,43 @@ static int run_model_diagnose(int argc, char **argv) {
     }
 
     if (status == LLM_OK && config.context_length >= 2U) {
-        const size_t prompt_count = config.context_length < 256U ? config.context_length / 2U : 128U;
+        const size_t prompt_count =
+            config.context_length < 256U ? config.context_length / 2U : 128U;
         const size_t available = config.context_length - prompt_count;
         const size_t continuation_count = available < 64U ? available : 64U;
         diagnostic_print_tokens("Sample reale, prompt: ", active_tokenizer, end_of_document,
                                 sample_inputs, prompt_count);
-        diagnostic_print_tokens("Sample reale, continuazione: ", active_tokenizer,
-                                end_of_document, sample_targets + prompt_count - 1U,
-                                continuation_count);
+        diagnostic_print_tokens("Sample reale, continuazione: ", active_tokenizer, end_of_document,
+                                sample_targets + prompt_count - 1U, continuation_count);
         diagnostic_print_tokens("Teacher-forced top-1: ", active_tokenizer, end_of_document,
                                 sample_predictions + prompt_count - 1U, continuation_count);
     }
     if (status == LLM_OK && diagnostics.token_count != 0U) {
         const double mean_loss = diagnostics.loss_sum / (double)batches;
-        printf("{\"schema\":\"llm-lab-model-diagnostics-v1\",\"batches\":%zu,"
-               "\"batch_size\":%zu,\"tokens\":%" PRIu64 ",\"loss\":%.8f,"
-               "\"perplexity\":%.8f,\"top_1_accuracy\":%.8f,"
-               "\"top_5_accuracy\":%.8f,\"top_20_accuracy\":%.8f,"
-               "\"top_100_accuracy\":%.8f,\"mean_rank\":%.8f,\"mrr\":%.8f,"
-               "\"regular_tokens\":%" PRIu64 ",\"regular_top_1_accuracy\":%.8f,"
-               "\"regular_top_5_accuracy\":%.8f,\"regular_top_20_accuracy\":%.8f,"
-               "\"regular_top_100_accuracy\":%.8f,\"end_of_document_tokens\":%" PRIu64
-               ",\"backend\":\"%s\",\"device\":\"%s\"}\n",
-               batches, batch_size, diagnostics.token_count, mean_loss, exp(mean_loss),
-               diagnostic_fraction(diagnostics.top_1_count, diagnostics.token_count),
-               diagnostic_fraction(diagnostics.top_5_count, diagnostics.token_count),
-               diagnostic_fraction(diagnostics.top_20_count, diagnostics.token_count),
-               diagnostic_fraction(diagnostics.top_100_count, diagnostics.token_count),
-               diagnostics.rank_sum / (double)diagnostics.token_count,
-               diagnostics.reciprocal_rank_sum / (double)diagnostics.token_count,
-               diagnostics.regular_token_count,
-               diagnostic_fraction(diagnostics.regular_top_1_count,
-                                   diagnostics.regular_token_count),
-               diagnostic_fraction(diagnostics.regular_top_5_count,
-                                   diagnostics.regular_token_count),
-               diagnostic_fraction(diagnostics.regular_top_20_count,
-                                   diagnostics.regular_token_count),
-               diagnostic_fraction(diagnostics.regular_top_100_count,
-                                   diagnostics.regular_token_count),
-               diagnostics.end_of_document_count, backend_choice_name(backend_choice),
-               backend_choice_device_name(backend_choice, backend));
+        printf(
+            "{\"schema\":\"llm-lab-model-diagnostics-v1\",\"batches\":%zu,"
+            "\"batch_size\":%zu,\"tokens\":%" PRIu64 ",\"loss\":%.8f,"
+            "\"perplexity\":%.8f,\"top_1_accuracy\":%.8f,"
+            "\"top_5_accuracy\":%.8f,\"top_20_accuracy\":%.8f,"
+            "\"top_100_accuracy\":%.8f,\"mean_rank\":%.8f,\"mrr\":%.8f,"
+            "\"regular_tokens\":%" PRIu64 ",\"regular_top_1_accuracy\":%.8f,"
+            "\"regular_top_5_accuracy\":%.8f,\"regular_top_20_accuracy\":%.8f,"
+            "\"regular_top_100_accuracy\":%.8f,\"end_of_document_tokens\":%" PRIu64
+            ",\"backend\":\"%s\",\"device\":\"%s\"}\n",
+            batches, batch_size, diagnostics.token_count, mean_loss, exp(mean_loss),
+            diagnostic_fraction(diagnostics.top_1_count, diagnostics.token_count),
+            diagnostic_fraction(diagnostics.top_5_count, diagnostics.token_count),
+            diagnostic_fraction(diagnostics.top_20_count, diagnostics.token_count),
+            diagnostic_fraction(diagnostics.top_100_count, diagnostics.token_count),
+            diagnostics.rank_sum / (double)diagnostics.token_count,
+            diagnostics.reciprocal_rank_sum / (double)diagnostics.token_count,
+            diagnostics.regular_token_count,
+            diagnostic_fraction(diagnostics.regular_top_1_count, diagnostics.regular_token_count),
+            diagnostic_fraction(diagnostics.regular_top_5_count, diagnostics.regular_token_count),
+            diagnostic_fraction(diagnostics.regular_top_20_count, diagnostics.regular_token_count),
+            diagnostic_fraction(diagnostics.regular_top_100_count, diagnostics.regular_token_count),
+            diagnostics.end_of_document_count, backend_choice_name(backend_choice),
+            backend_choice_device_name(backend_choice, backend));
     } else if (status != LLM_OK) {
         fprintf(stderr, "Model diagnostics failed: %s\n", llm_status_string(status));
     }
