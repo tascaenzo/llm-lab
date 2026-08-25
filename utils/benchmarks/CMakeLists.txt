@@ -2,14 +2,14 @@ add_executable(runtime_benchmark
     runtime/benchmark_cpu.c
     runtime/benchmark_suite.c)
 target_compile_features(runtime_benchmark PRIVATE c_std_23)
-target_link_libraries(runtime_benchmark PRIVATE runtime)
+target_link_libraries(runtime_benchmark PRIVATE runtime project_environment)
 llm_lab_set_warnings(runtime_benchmark)
 
 add_executable(runtime_benchmark_report
     runtime/benchmark_report.c
     runtime/benchmark_suite.c)
 target_compile_features(runtime_benchmark_report PRIVATE c_std_23)
-target_link_libraries(runtime_benchmark_report PRIVATE runtime)
+target_link_libraries(runtime_benchmark_report PRIVATE runtime project_environment)
 llm_lab_set_warnings(runtime_benchmark_report)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -40,6 +40,7 @@ if(BUILD_TESTING)
         NAME benchmark.cpu.jsonl_smoke
         COMMAND runtime_benchmark
             --backend cpu
+            --batched
             --format jsonl
             --operations add
             --threads 1
@@ -52,7 +53,7 @@ if(BUILD_TESTING)
     add_test(
         NAME benchmark.runtime.metal_smoke
         COMMAND runtime_benchmark
-            --backend metal
+            --backend all
             --operations matmul
             --rows 16
             --columns 16
@@ -64,7 +65,7 @@ if(BUILD_TESTING)
 
     add_test(
         NAME benchmark.runtime.report_smoke
-        COMMAND runtime_benchmark_report --quick)
+        COMMAND runtime_benchmark_report --quick --backend cpu)
     set_tests_properties(benchmark.runtime.report_smoke PROPERTIES TIMEOUT 120)
 
     add_test(
@@ -72,6 +73,36 @@ if(BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/performance_suite.py
             --smoke
+            --backend cpu
             --benchmark $<TARGET_FILE:runtime_benchmark>)
     set_tests_properties(benchmark.runtime.performance_suite_smoke PROPERTIES TIMEOUT 120)
+
+    add_test(
+        NAME benchmark.runtime.environment_default
+        COMMAND runtime_benchmark
+            --format jsonl
+            --operations add
+            --threads 1
+            --elements 256
+            --warmup 1
+            --iterations 1
+            --sample-ms 1)
+    set_tests_properties(benchmark.runtime.environment_default PROPERTIES
+        TIMEOUT 60
+        ENVIRONMENT "LLM_LAB_BACKEND=cpu")
+
+    add_test(
+        NAME benchmark.runtime.explicit_backend_override
+        COMMAND runtime_benchmark
+            --backend cpu
+            --format jsonl
+            --operations add
+            --threads 1
+            --elements 256
+            --warmup 1
+            --iterations 1
+            --sample-ms 1)
+    set_tests_properties(benchmark.runtime.explicit_backend_override PROPERTIES
+        TIMEOUT 60
+        ENVIRONMENT "LLM_LAB_BACKEND=invalid")
 endif()

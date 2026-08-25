@@ -1,0 +1,11 @@
+.git
+.github
+build
+data
+artifacts
+out
+*.llmckpt
+*.llmdat
+*.llmtok
+__pycache__
+*.py[cod]

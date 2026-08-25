@@ -23,6 +23,9 @@ Il backend CPU parallelo e' spiegato nella
 Il primo backend GPU Metal e' introdotto nella
 [wiki](wiki/12-backend-metal.md) e specificato in
 [docs/backend-metal.md](docs/backend-metal.md).
+Il backend CUDA, usato per proseguire il training su GPU in cloud partendo da un
+checkpoint prodotto sul Mac, e' specificato in
+[docs/backend-cuda.md](docs/backend-cuda.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 
@@ -65,11 +68,12 @@ supportati con un solo comando:
 
 ```sh
 cmake --build --preset release --target runtime_benchmark_report
-./build/release/utils/benchmarks/runtime_benchmark_report
+./build/release/utils/benchmarks/runtime_benchmark_report --backend all
 ```
 
 Sono disponibili anche `--quick` per un controllo breve e `--full` per misure
-piu' lunghe e stabili.
+piu' lunghe e stabili. Senza `--backend`, benchmark e report usano il backend
+predefinito del progetto descritto sotto.
 
 La suite rappresentativa per validare le prestazioni dopo una modifica dura
 indicativamente 40–70 secondi, mostra l'avanzamento di ogni test e termina con
@@ -84,7 +88,7 @@ Baseline e confronto automatico sono descritti nella
 
 ## Requisiti
 
-- CMake 3.24 o superiore;
+- CMake 3.22 o superiore;
 - Ninja;
 - compilatore C con supporto C23: Clang o GCC recente;
 - Git (solo per clonare il progetto).
@@ -111,6 +115,38 @@ make run
 make test
 make check-format
 ```
+
+## Configurazione locale e backend
+
+Copia il file di esempio nella root e scegli il backend della macchina:
+
+```sh
+cp .env.example .env
+# Nel file: metal su Apple Silicon, cuda su NVIDIA, cpu senza acceleratore.
+```
+
+`llm-lab`, i benchmark e le utility di profiling caricano automaticamente il
+`.env`. Per usare un file diverso imposta `LLM_LAB_ENV_FILE=/percorso/file`.
+La precedenza e' intenzionalmente unica in tutti i flussi:
+
+```text
+--backend nel comando > variabile esportata > .env > cpu
+```
+
+I valori validi per `LLM_LAB_BACKEND` sono `cpu`, `metal` e `cuda`; i benchmark
+accettano anche `all`. Un backend configurato ma non disponibile produce un
+errore, senza fallback silenzioso sulla CPU. Per forzare una singola esecuzione:
+
+```sh
+./build/release/llm-lab model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt 100 \
+  --backend cpu
+```
+
+Il `.env` e' ignorato da Git; `.env.example` resta invece versionato e senza
+segreti. Iperparametri e percorsi dell'esperimento rimangono nel comando o nel
+checkpoint, mentre il backend dipendente dalla macchina sta nel `.env`. Le
+variabili del deploy RunPod stanno separatamente in `deploy/runpod/.env`:
+consulta `deploy/runpod/README.md` per quella pipeline.
 
 ## Addestrare un tokenizer
 
@@ -206,6 +242,11 @@ I valori mostrati sono anche i default. `--temperature` controlla la variabilita
 risultato riproducibile. L'output UTF-8 valido viene scritto direttamente; solo
 byte isolati o caratteri di controllo vengono mostrati come escape.
 
+Il checkpoint canonico `italiano-base-75m`, addestrato sul dataset
+`italiano-v3`, deve essere generato con
+`artifacts/tokenizers/italiano-v3.llmtok`. Tokenizer diversi possono avere la
+stessa dimensione del vocabolario senza condividere la mappa ID → testo.
+
 Il Modello Minimal ha un solo blocco causale: questa prova verifica il percorso checkpoint →
 token → logits → testo, ma un modello piccolo e addestrato per pochi step non
 produce ancora articoli o dialoghi affidabili.
@@ -216,6 +257,18 @@ Per misurare invece il checkpoint sullo split non visto:
 ./build/debug/llm-lab model evaluate \
   data/derived/italiano-wikipedia-v1/lm/italiano-wikipedia-v2.validation.llmdat \
   artifacts/models/m1-step-10000.llmckpt 100 --batch-size 2 --seed 1
+```
+
+Per distinguere una loss bassa da una reale capacita' di predire il token
+successivo, `model diagnose` aggiunge top-1/5/20/100, rango medio, MRR e un
+campione teacher-forced decodificato. Verifica inoltre l'identita' SHA-256 del
+tokenizer registrata nel dataset:
+
+```sh
+./build/release/llm-lab model diagnose \
+  data/derived/italiano-v3/lm/italiano-v3.validation.llmdat \
+  artifacts/models/italiano-base-75m/best.llmckpt \
+  artifacts/tokenizers/italiano-v3.llmtok 16 --batch-size 1 --backend metal
 ```
 
 Il Modello Minimal e' volutamente un riferimento ristretto: al momento accetta

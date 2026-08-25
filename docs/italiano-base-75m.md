@@ -122,6 +122,18 @@ secondi, presentando 4.096 token a circa 1.593 token/s e registrando 3,87 GiB
 di buffer attivi/picco. E' una misura di fattibilita', non una previsione
 garantita del throughput di un run lungo.
 
+Il 20 agosto 2026 il medesimo checkpoint e' stato ripreso senza conversioni su
+una RTX 4090 CUDA: 1.000 update, dallo step 86.044 allo step 87.044, hanno
+confermato checkpoint, validation e best-checkpoint operativi sul nuovo
+backend. Rispetto al piano di 624.362 update, il run e' arrivato al 13,94%.
+La velocita' osservata nel run lungo e' stata circa 5,72 step/s contro
+circa 0,64 step/s sul Mac mini M4 con Metal: un vantaggio operativo di circa
+8,9x. Alla fine della sessione la validation era loss `2.88134766` e perplexity
+`17.83829688`; il confronto con il valore Metal precedente non e' un benchmark
+paritario, perche' il modello aveva nel frattempo ricevuto ulteriori update.
+I dettagli della verifica CUDA e della comparazione sono in
+[Backend CUDA](backend-cuda.md).
+
 La configurazione iniziale e':
 
 ```text
@@ -173,8 +185,10 @@ essere ripreso con --resume; il formato v4 conserva anche accumulo, scheduler,
 sampler a blocchi e clipping. I checkpoint precedenti restano leggibili e i v3
 mantengono il sampler storico per una ripresa esatta.
 
-A circa 2 secondi per update, 624.362 update sono circa quindici giorni di GPU
-continua: la cadenza dei checkpoint e' la finestra di lavoro che un crash puo'
+A circa 1,75 secondi per update su RTX 4090 (circa 5,72 step/s), 624.362 update
+richiedono circa 1,3 giorni di GPU continua; sul Mac mini M4 a circa 0,64
+step/s il medesimo ordine di grandezza e' circa 11,3 giorni. La cadenza dei
+checkpoint e' la finestra di lavoro che un crash puo'
 distruggere. Con --checkpoint-every 2000 quella finestra vale circa settanta
 minuti e ogni scrittura costa circa 859 MiB (valori piu' i due momenti AdamW),
 quindi il costo in I/O resta trascurabile rispetto al rischio. `SIGINT` e `SIGTERM`
@@ -208,8 +222,13 @@ validation e registrano i nuovi checkpoint best.
 
 ## Dati e allineamento conversazionale
 
-Il pretraining usa il tokenizer train-only `italiano-wikipedia-v2` e mantiene
-gli split documentali di `italiano-wikipedia-v1` invariati.
+Il pretraining usa il tokenizer train-only `italiano-v3.llmtok` e gli split
+documentali del corpus multi-sorgente `italiano-v3`. Un tokenizer diverso puo'
+avere lo stesso numero di ID ma assegnare loro byte completamente differenti:
+in quel caso loss e training restano validi, ma la generazione decodificata
+diventa illeggibile. Le diagnostiche confrontano percio' lo SHA-256 del
+tokenizer con quello registrato nell'header `.llmdat`, non soltanto la dimensione
+del vocabolario.
 Un corpus generale aggiuntivo puo' essere introdotto solo con manifest che
 registri origine, licenza, filtri, deduplicazione, identificatori e split.
 Il trainer del tokenizer rifiuta manifest che non dichiarano esplicitamente

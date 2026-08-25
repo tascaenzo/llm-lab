@@ -17,6 +17,34 @@ llm_device_type llm_backend_device(const llm_backend *backend) {
     return backend == NULL ? LLM_DEVICE_NONE : backend->device;
 }
 
+llm_status llm_backend_begin_batch(llm_backend *backend) {
+    if (backend == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    switch (backend->device) {
+    case LLM_DEVICE_METAL:
+        return llm_backend_metal_begin_batch(backend);
+    case LLM_DEVICE_CUDA:
+        return llm_backend_cuda_begin_batch(backend);
+    default:
+        return LLM_OK;
+    }
+}
+
+llm_status llm_backend_end_batch(llm_backend *backend) {
+    if (backend == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    switch (backend->device) {
+    case LLM_DEVICE_METAL:
+        return llm_backend_metal_end_batch(backend);
+    case LLM_DEVICE_CUDA:
+        return llm_backend_cuda_end_batch(backend);
+    default:
+        return LLM_OK;
+    }
+}
+
 llm_status llm_backend_synchronize(llm_backend *backend) {
     if (backend == NULL || backend->ops == NULL || backend->ops->synchronize == NULL) {
         return LLM_INVALID_ARGUMENT;

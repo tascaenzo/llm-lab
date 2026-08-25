@@ -12,6 +12,7 @@
 #endif
 
 #include "benchmark_suite.h"
+#include "project_environment.h"
 #include "runtime/runtime.h"
 
 typedef enum report_profile {
@@ -27,21 +28,29 @@ typedef struct machine_information {
     size_t cpu_threads;
     int metal_available;
     char metal_device[128];
+    int cuda_available;
+    char cuda_device[128];
 } machine_information;
 
 typedef struct report_summary {
     size_t successful_results;
     size_t failed_results;
-    size_t successful_by_backend[2];
-    size_t failed_by_backend[2];
+    size_t successful_by_backend[RUNTIME_BENCHMARK_BACKEND_COUNT];
+    size_t failed_by_backend[RUNTIME_BENCHMARK_BACKEND_COUNT];
     int has_fastest_matmul;
     double fastest_matmul_seconds;
     runtime_benchmark_backend fastest_matmul_backend;
     double cpu_f32_matmul_seconds;
     double metal_f32_matmul_seconds;
-    double matmul_seconds[2];
-    double matmul_throughput[2];
+    double matmul_seconds[RUNTIME_BENCHMARK_BACKEND_COUNT];
+    double matmul_throughput[RUNTIME_BENCHMARK_BACKEND_COUNT];
 } report_summary;
+
+typedef struct report_selection {
+    int backends[RUNTIME_BENCHMARK_BACKEND_COUNT];
+    int backend_was_explicit;
+    int allow_unavailable;
+} report_selection;
 
 static const char *operating_system_name(void) {
 #if defined(__APPLE__)
@@ -166,6 +175,18 @@ static void detect_runtime_devices(machine_information *information) {
     if (information->metal_device[0] == '\0') {
         copy_text(information->metal_device, sizeof(information->metal_device), "unavailable");
     }
+    information->cuda_available = llm_backend_cuda_is_available();
+    if (information->cuda_available != 0) {
+        llm_backend *cuda = NULL;
+        if (llm_backend_cuda_create(&cuda) == LLM_OK) {
+            copy_text(information->cuda_device, sizeof(information->cuda_device),
+                      llm_backend_cuda_device_name(cuda));
+            llm_backend_destroy(cuda);
+        }
+    }
+    if (information->cuda_device[0] == '\0') {
+        copy_text(information->cuda_device, sizeof(information->cuda_device), "unavailable");
+    }
 }
 
 static machine_information detect_machine(void) {
@@ -223,14 +244,29 @@ static cpu_benchmark_config profile_config(report_profile profile) {
 }
 
 static void print_usage(const char *program) {
-    printf("Usage: %s [--quick|--standard|--full]\n\n", program);
+    printf("Usage: %s [--quick|--standard|--full] [--backend NAME]\n\n", program);
     printf("  --quick     short functional performance report\n");
     printf("  --standard  balanced report (default)\n");
     printf("  --full      larger, slower workloads for stable measurements\n");
+    printf("  --backend   cpu, metal, cuda, or all; overrides LLM_LAB_BACKEND\n");
     printf("  --help      show this help\n");
 }
 
-static int parse_arguments(int argc, char **argv, report_profile *out_profile) {
+static int select_backends(const char *value, report_selection *selection) {
+    selection->allow_unavailable = strcmp(value, "all") == 0;
+    selection->backends[RUNTIME_BENCHMARK_CPU] =
+        strcmp(value, "cpu") == 0 || strcmp(value, "all") == 0;
+    selection->backends[RUNTIME_BENCHMARK_METAL] =
+        strcmp(value, "metal") == 0 || strcmp(value, "all") == 0;
+    selection->backends[RUNTIME_BENCHMARK_CUDA] =
+        strcmp(value, "cuda") == 0 || strcmp(value, "all") == 0;
+    return selection->backends[RUNTIME_BENCHMARK_CPU] != 0 ||
+           selection->backends[RUNTIME_BENCHMARK_METAL] != 0 ||
+           selection->backends[RUNTIME_BENCHMARK_CUDA] != 0;
+}
+
+static int parse_arguments(int argc, char **argv, report_profile *out_profile,
+                           report_selection *selection) {
     *out_profile = REPORT_PROFILE_STANDARD;
     for (int index = 1; index < argc; ++index) {
         if (strcmp(argv[index], "--quick") == 0) {
@@ -239,11 +275,30 @@ static int parse_arguments(int argc, char **argv, report_profile *out_profile) {
             *out_profile = REPORT_PROFILE_STANDARD;
         } else if (strcmp(argv[index], "--full") == 0) {
             *out_profile = REPORT_PROFILE_FULL;
+        } else if (strcmp(argv[index], "--backend") == 0) {
+            if (++index >= argc || select_backends(argv[index], selection) == 0) {
+                fprintf(stderr, "--backend expects cpu, metal, cuda, or all\n");
+                return 0;
+            }
+            selection->backend_was_explicit = 1;
         } else if (strcmp(argv[index], "--help") == 0) {
             print_usage(argv[0]);
             return 2;
         } else {
             fprintf(stderr, "unknown option: %s\n", argv[index]);
+            return 0;
+        }
+    }
+    if (selection->backend_was_explicit == 0) {
+        const char *backend = getenv("LLM_LAB_BACKEND");
+        if (backend == NULL || backend[0] == '\0') {
+            backend = "cpu";
+        }
+        if (select_backends(backend, selection) == 0) {
+            fprintf(stderr,
+                    "invalid LLM_LAB_BACKEND: %s (expected cpu, metal, cuda, or all); "
+                    "override it with --backend\n",
+                    backend);
             return 0;
         }
     }
@@ -262,6 +317,7 @@ static void print_machine(const machine_information *machine, report_profile pro
     printf("  Build:        %s\n", build_type_name());
     printf("  CPU:          %s (%zu thread logici)\n", machine->cpu_name, machine->cpu_threads);
     printf("  GPU Metal:    %s\n", machine->metal_device);
+    printf("  GPU CUDA:     %s\n", machine->cuda_device);
     printf("  Profilo:      %s | %zu warm-up | %zu campioni | minimo %.1f ms\n",
            profile_name(profile), config->warmup_iterations, config->measured_iterations,
            config->minimum_sample_seconds * 1000.0);
@@ -273,8 +329,11 @@ static void print_backend_header(const machine_information *machine,
     if (backend == RUNTIME_BENCHMARK_CPU) {
         printf("\nCPU — %s\n", machine->cpu_name);
         printf("Esecuzione con %zu thread logici.\n", machine->cpu_threads);
-    } else {
+    } else if (backend == RUNTIME_BENCHMARK_METAL) {
         printf("\nGPU Metal — %s\n", machine->metal_device);
+        printf("Tempo GPU e tempo end-to-end vengono mostrati separatamente.\n");
+    } else {
+        printf("\nGPU CUDA — %s\n", machine->cuda_device);
         printf("Tempo GPU e tempo end-to-end vengono mostrati separatamente.\n");
     }
     printf("%-25s %-5s %-17s %11s %11s %11s %20s\n", "Kernel", "Tipo", "Forma", "Mediana", "P95",
@@ -288,7 +347,8 @@ static void print_backend_header(const machine_information *machine,
 static void format_shape(cpu_benchmark_operation operation, const cpu_benchmark_config *config,
                          char *output, size_t capacity) {
     if (operation <= CPU_BENCHMARK_ACCUMULATE || operation == CPU_BENCHMARK_SILU ||
-        operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW) {
+        operation == CPU_BENCHMARK_SILU_BACKWARD || operation == CPU_BENCHMARK_ADAMW ||
+        operation == CPU_BENCHMARK_ACCUMULATE_SUM_SQUARES) {
         (void)snprintf(output, capacity, "%zu elementi", config->elements);
     } else if (operation == CPU_BENCHMARK_MATMUL ||
                operation == CPU_BENCHMARK_MATMUL_TRANSPOSE_LEFT ||
@@ -346,7 +406,7 @@ static int run_one(runtime_benchmark_backend backend, cpu_benchmark_operation op
         copy_text(throughput, sizeof(throughput), "unavailable");
     }
     char gpu_time[32];
-    if (backend == RUNTIME_BENCHMARK_METAL) {
+    if (backend != RUNTIME_BENCHMARK_CPU) {
         (void)snprintf(gpu_time, sizeof(gpu_time), "%.3f ms", result.gpu_median_seconds * 1000.0);
     } else {
         copy_text(gpu_time, sizeof(gpu_time), "-");
@@ -363,8 +423,8 @@ static int run_one(runtime_benchmark_backend backend, cpu_benchmark_operation op
 static void print_backend_summary(runtime_benchmark_backend backend,
                                   const report_summary *summary) {
     printf("Risultato %s: %zu kernel riusciti, %zu falliti.\n",
-           backend == RUNTIME_BENCHMARK_CPU ? "CPU" : "GPU Metal",
-           summary->successful_by_backend[backend], summary->failed_by_backend[backend]);
+           runtime_benchmark_backend_name(backend), summary->successful_by_backend[backend],
+           summary->failed_by_backend[backend]);
     if (summary->matmul_seconds[backend] > 0.0) {
         printf("  Matmul f32 : %8.3f GFLOP/s (%8.3f ms)\n", summary->matmul_throughput[backend],
                summary->matmul_seconds[backend] * 1000.0);
@@ -401,7 +461,8 @@ static void print_summary(const machine_information *machine, const report_summa
             printf("Matmul FP32: la CPU e' %.2fx piu' veloce di Metal su questa forma.\n",
                    1.0 / speedup);
         }
-    } else if (machine->metal_available == 0) {
+    } else if (machine->metal_available == 0 &&
+               summary->successful_by_backend[RUNTIME_BENCHMARK_CUDA] == 0U) {
         printf("Metal non disponibile: sono stati misurati solo i kernel CPU portabili.\n");
     }
     printf("I risultati valgono per questa macchina e questo profilo; temperatura e carico "
@@ -409,8 +470,12 @@ static void print_summary(const machine_information *machine, const report_summa
 }
 
 int main(int argc, char **argv) {
+    if (llm_project_environment_load() == 0) {
+        return EXIT_FAILURE;
+    }
     report_profile profile = REPORT_PROFILE_STANDARD;
-    const int parse_status = parse_arguments(argc, argv, &profile);
+    report_selection selection = {0};
+    const int parse_status = parse_arguments(argc, argv, &profile, &selection);
     if (parse_status == 2) {
         return EXIT_SUCCESS;
     }
@@ -420,12 +485,28 @@ int main(int argc, char **argv) {
     }
 
     machine_information machine = detect_machine();
+    if (selection.allow_unavailable == 0 && selection.backends[RUNTIME_BENCHMARK_METAL] != 0 &&
+        machine.metal_available == 0) {
+        fprintf(stderr, "configured Metal backend is unavailable\n");
+        return EXIT_FAILURE;
+    }
+    if (selection.allow_unavailable == 0 && selection.backends[RUNTIME_BENCHMARK_CUDA] != 0 &&
+        machine.cuda_available == 0) {
+        fprintf(stderr, "configured CUDA backend is unavailable\n");
+        return EXIT_FAILURE;
+    }
     cpu_benchmark_config config = profile_config(profile);
+    config.batch_accelerator_operations = 1;
     report_summary summary = {0};
     print_machine(&machine, profile, &config);
-    run_backend(&machine, RUNTIME_BENCHMARK_CPU, &config, &summary);
-    if (machine.metal_available != 0) {
+    if (selection.backends[RUNTIME_BENCHMARK_CPU] != 0) {
+        run_backend(&machine, RUNTIME_BENCHMARK_CPU, &config, &summary);
+    }
+    if (selection.backends[RUNTIME_BENCHMARK_METAL] != 0 && machine.metal_available != 0) {
         run_backend(&machine, RUNTIME_BENCHMARK_METAL, &config, &summary);
+    }
+    if (selection.backends[RUNTIME_BENCHMARK_CUDA] != 0 && machine.cuda_available != 0) {
+        run_backend(&machine, RUNTIME_BENCHMARK_CUDA, &config, &summary);
     }
     print_summary(&machine, &summary);
     return summary.failed_results == 0U ? EXIT_SUCCESS : EXIT_FAILURE;

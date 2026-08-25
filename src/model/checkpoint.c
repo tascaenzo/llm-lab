@@ -305,8 +305,10 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
     return status;
 }
 
-llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
-                                      lm_model **out_model, lm_trainer **out_trainer) {
+llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_dataset *dataset,
+                                                   const char *path,
+                                                   const lm_trainer_resume_options *options,
+                                                   lm_model **out_model, lm_trainer **out_trainer) {
     if (backend == NULL || path == NULL || out_model == NULL ||
         (dataset != NULL &&
          (out_trainer == NULL || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
@@ -356,6 +358,24 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
         .sampling =
             version < 3U ? LM_BATCHER_RANDOM_WINDOWS : (lm_batcher_sampling)load_u32(header + 188U),
         .gradient_clip_norm = version < 3U ? 0.0F : load_f32(header + 224U)};
+    if (status == LLM_OK && options != NULL) {
+        const size_t saved_batch_size = trainer_config.batch_size;
+        const size_t saved_accumulation = trainer_config.gradient_accumulation_steps;
+        const size_t resumed_batch_size =
+            options->batch_size == 0U ? saved_batch_size : options->batch_size;
+        const size_t resumed_accumulation = options->gradient_accumulation_steps == 0U
+                                                ? saved_accumulation
+                                                : options->gradient_accumulation_steps;
+        if (resumed_batch_size == 0U || resumed_accumulation == 0U ||
+            saved_batch_size > SIZE_MAX / saved_accumulation ||
+            resumed_batch_size > SIZE_MAX / resumed_accumulation ||
+            saved_batch_size * saved_accumulation != resumed_batch_size * resumed_accumulation) {
+            status = LLM_INVALID_ARGUMENT;
+        } else {
+            trainer_config.batch_size = resumed_batch_size;
+            trainer_config.gradient_accumulation_steps = resumed_accumulation;
+        }
+    }
     const unsigned long long step = load_u64(header + 116U);
     const uint64_t batcher_state = load_u64(header + 124U);
     const uint64_t token_count = load_u64(header + 132U);
@@ -445,4 +465,10 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
     lm_trainer_destroy(trainer);
     lm_model_destroy(model);
     return status;
+}
+
+llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
+                                      lm_model **out_model, lm_trainer **out_trainer) {
+    return lm_trainer_load_checkpoint_with_options(backend, dataset, path, NULL, out_model,
+                                                   out_trainer);
 }
