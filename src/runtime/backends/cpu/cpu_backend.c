@@ -66,6 +66,7 @@ static const llm_backend_ops *cpu_backend_ops(void) {
         .reduce_sum_last_f32 = llm_cpu_execute_reduce_sum_last_f32,
         .reduce_max_last_f32 = llm_cpu_execute_reduce_max_last_f32,
         .reduce_mean_square_last_f32 = llm_cpu_execute_reduce_mean_square_last_f32,
+        .accumulate_sum_squares_f32 = llm_cpu_execute_accumulate_sum_squares_f32,
         .matmul_f32 = llm_cpu_execute_matmul_f32,
         .matmul_ex_f32 = llm_cpu_execute_matmul_ex_f32,
         .gather_rows_f32 = llm_cpu_execute_gather_rows_f32,

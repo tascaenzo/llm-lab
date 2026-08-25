@@ -1,6 +1,10 @@
 #ifndef LLM_LAB_RUNTIME_TYPES_H
 #define LLM_LAB_RUNTIME_TYPES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Status returned by every fallible runtime operation. */
 typedef enum llm_status {
     LLM_OK = 0,
@@ -42,5 +46,9 @@ typedef struct llm_tensor llm_tensor;
 
 /** Returns a stable human-readable description of a runtime status. */
 const char *llm_status_string(llm_status status);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

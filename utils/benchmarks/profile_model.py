@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Per-operation GPU profile of one Italiano-Base-75M training update.
+"""Per-operation backend profile of one Italiano-Base-75M training update.
 
 The runtime benchmark measures a single operation at a single shape. A training
 update is a fixed, known sequence of those operations, so the profile is the sum
@@ -18,14 +18,23 @@ import json
 import subprocess
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+try:
+    from .project_environment import configured_backend
+except ImportError:  # Direct script execution.
+    from project_environment import configured_backend
 
 
-def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabulary):
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabulary,
+                    gradient_accumulation=2):
     """Returns (stage, operation, dimension flags, calls per update) tuples."""
     rows = batch * sequence
     head_dim = hidden // heads
-    # Two micro-batches per update at the canonical gradient_accumulation_steps.
-    micro = 2
+    micro = gradient_accumulation
     matrix = lambda r, k, c: ["--rows", str(r), "--inner", str(k), "--columns", str(c)]
     vector = lambda n: ["--elements", str(n)]
     attn = ["--batch", str(batch), "--sequence", str(sequence),
@@ -86,21 +95,36 @@ def build_workloads(batch, sequence, hidden, heads, feed_forward, layers, vocabu
     add("embedding", "scatter_add", ["--rows", str(vocabulary), "--columns", str(hidden),
                                      "--elements", str(rows)], 1)
 
-    # ---- optimizer, once per update over every parameter element ----
-    parameters = 2 * vocabulary * hidden + hidden + layers * (
-        2 * hidden + 4 * hidden * hidden + 3 * hidden * feed_forward)
-    w.append(("optimizer", "adamw", vector(parameters), 1))
-    w.append(("optimizer", "zero", vector(parameters), 1))
-    # gradient norm: one reduction plus a scale and an accumulate per parameter
-    w.append(("optimizer", "reduce_mean_square", vector(parameters), 1))
+    # ---- gradients and optimizer, once per update -----------------------
+    # Keep the real parameter tensor boundaries. AdamW clears each gradient in
+    # the optimizer kernel, and the norm uses one fused sum-of-squares dispatch
+    # per tensor rather than four reductions and scalar operations.
+    parameter_shapes = [
+        (vocabulary, hidden, 1),          # token embedding
+        (hidden, vocabulary, 1),          # output head
+        (1, hidden, 2 * layers + 1),      # two norms/layer plus final norm
+        (hidden, hidden, 4 * layers),     # Q, K, V and attention output
+        (hidden, feed_forward, 2 * layers),
+        (feed_forward, hidden, layers),
+    ]
+    parameters = sum(rows * columns * count for rows, columns, count in parameter_shapes)
+    for rows, columns, count in parameter_shapes:
+        elements = rows * columns
+        w.append(("optimizer", "adamw", vector(elements), count))
+        w.append(("gradient_norm", "accumulate_sum_squares", vector(elements), count))
+    w.append(("gradient_norm", "fill", vector(1), 1))
     return w, parameters
 
 
-def measure(benchmark, operation, dims, iterations, sample_ms):
-    command = [benchmark, "--backend", "metal", "--operations", operation,
+def measure(benchmark, backend, operation, dims, iterations, sample_ms):
+    command = [benchmark, "--backend", backend, "--batched", "--operations", operation,
                "--warmup", "2", "--iterations", str(iterations),
                "--sample-ms", str(sample_ms), "--format", "jsonl"] + dims
-    output = subprocess.run(command, capture_output=True, text=True).stdout
+    completed = subprocess.run(command, capture_output=True, text=True)
+    if completed.returncode != 0:
+        print(completed.stderr, file=sys.stderr, end="")
+        return None
+    output = completed.stdout
     for line in output.splitlines():
         try:
             record = json.loads(line)
@@ -115,6 +139,7 @@ def measure(benchmark, operation, dims, iterations, sample_ms):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--benchmark", required=True)
+    parser.add_argument("--backend", choices=("cpu", "metal", "cuda"))
     parser.add_argument("--batch", type=int, default=4)
     parser.add_argument("--sequence", type=int, default=512)
     parser.add_argument("--hidden", type=int, default=512)
@@ -122,14 +147,23 @@ def main():
     parser.add_argument("--feed-forward", type=int, default=1608)
     parser.add_argument("--layers", type=int, default=12)
     parser.add_argument("--vocabulary", type=int, default=32008)
+    parser.add_argument("--gradient-accumulation", type=int, default=2)
     parser.add_argument("--iterations", type=int, default=5)
     parser.add_argument("--sample-ms", type=int, default=20)
     arguments = parser.parse_args()
+    if arguments.backend is None:
+        try:
+            arguments.backend = configured_backend(
+                PROJECT_ROOT, default="cpu", allowed=("cpu", "metal", "cuda")
+            )
+        except ValueError as error:
+            parser.error(str(error))
 
     workloads, parameters = build_workloads(
         arguments.batch, arguments.sequence, arguments.hidden, arguments.heads,
-        arguments.feed_forward, arguments.layers, arguments.vocabulary)
-    print(f"Modello: {parameters/1e6:.2f}M parametri, "
+        arguments.feed_forward, arguments.layers, arguments.vocabulary,
+        arguments.gradient_accumulation)
+    print(f"Backend: {arguments.backend} | modello: {parameters/1e6:.2f}M parametri, "
           f"{len(workloads)} forme distinte da misurare\n", file=sys.stderr)
 
     cache = {}
@@ -141,7 +175,7 @@ def main():
         if key not in cache:
             print(f"  [{index}/{len(workloads)}] {operation} {' '.join(dims)}",
                   file=sys.stderr)
-            cache[key] = measure(arguments.benchmark, operation, dims,
+            cache[key] = measure(arguments.benchmark, arguments.backend, operation, dims,
                                  arguments.iterations, arguments.sample_ms)
         seconds = cache[key]
         if seconds is None:
@@ -154,7 +188,9 @@ def main():
                      calls, seconds * 1e3, total * 1e3))
 
     grand_total = sum(by_stage.values())
-    print(f"\n{'='*78}\nPROFILO DI UN UPDATE — somma {grand_total*1e3:.1f} ms\n{'='*78}")
+    if grand_total <= 0.0:
+        raise SystemExit("Nessuna operazione misurata: verifica che il backend GPU sia disponibile.")
+    print(f"\n{'='*78}\nSTIMA GPU DI UN UPDATE — somma {grand_total*1e3:.1f} ms\n{'='*78}")
     print(f"\n{'Stadio':<14}{'ms':>10}{'%':>8}")
     for stage, seconds in sorted(by_stage.items(), key=lambda kv: -kv[1]):
         print(f"{stage:<14}{seconds*1e3:>10.1f}{seconds/grand_total*100:>7.1f}%")

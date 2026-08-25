@@ -137,6 +137,10 @@ batcher. Per continuare in modo riproducibile:
 
 La loss e la perplexity su validation sono il criterio numerico per decidere
 se un training migliora; la generazione serve come controllo qualitativo.
+I comandi `train`, `generate` ed `evaluate` risolvono il backend con la stessa
+precedenza: `--backend`, `LLM_LAB_BACKEND` esportato, `.env` nella directory
+corrente, infine CPU. L'evaluation non e' quindi piu' vincolata alla CPU e usa
+il batching nativo quando il backend scelto e' Metal o CUDA.
 La generazione usa sampling top-k riproducibile e penalizza le ripetizioni nella
 finestra di contesto; questi valori sono i default e possono essere regolati da
 riga di comando. Il testo UTF-8 valido viene stampato normalmente.

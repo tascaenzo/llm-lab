@@ -67,6 +67,23 @@ typedef struct cli_generation_options {
     uint64_t random_state;
 } cli_generation_options;
 
+typedef struct cli_next_token_diagnostics {
+    uint64_t token_count;
+    uint64_t regular_token_count;
+    uint64_t end_of_document_count;
+    uint64_t top_1_count;
+    uint64_t top_5_count;
+    uint64_t top_20_count;
+    uint64_t top_100_count;
+    uint64_t regular_top_1_count;
+    uint64_t regular_top_5_count;
+    uint64_t regular_top_20_count;
+    uint64_t regular_top_100_count;
+    double reciprocal_rank_sum;
+    double rank_sum;
+    double loss_sum;
+} cli_next_token_diagnostics;
+
 static double current_time_seconds(void) {
 #if defined(CLOCK_MONOTONIC)
     struct timespec monotonic = {0};
@@ -444,16 +461,18 @@ static void print_usage(const char *program) {
             " [--warmup-steps N] [--total-steps N] [--min-learning-rate LR] [--seed N]"
             " [--beta1 B] [--beta2 B] [--epsilon E] [--weight-decay W]"
             " [--sampling shuffled|random] [--gradient-clip N]"
-            " [--backend cpu|metal]"
+            " [--backend cpu|metal|cuda]"
             " [--checkpoint FILE] [--checkpoint-every N] [--resume FILE]"
             " [--validation FILE] [--validation-every N] [--validation-batches N]"
             " [--best-checkpoint FILE] [--log FILE]\n"
             "  %s model generate CHECKPOINT.llmckpt TOKENIZER.llmtok TOKENS PROMPT"
             " [--temperature T] [--top-k K] [--repetition-penalty P] [--seed N]"
-            " [--backend cpu|metal]\n"
-            "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt STEPS"
-            " [--batch-size B] [--seed N]\n",
-            program, program, program, program, program, program);
+            " [--backend cpu|metal|cuda]\n"
+            "  %s model evaluate VALIDATION.llmdat CHECKPOINT.llmckpt BATCHES"
+            " [--batch-size B] [--seed N] [--backend cpu|metal|cuda]\n"
+            "  %s model diagnose VALIDATION.llmdat CHECKPOINT.llmckpt TOKENIZER.llmtok BATCHES"
+            " [--batch-size B] [--seed N] [--backend cpu|metal|cuda]\n",
+            program, program, program, program, program, program, program);
 }
 
 static int parse_vocabulary_size(const char *text, uint32_t *out_size) {
@@ -772,6 +791,129 @@ static const char *model_sampling_name(lm_batcher_sampling sampling) {
     return "random";
 }
 
+typedef enum cli_backend_choice {
+    CLI_BACKEND_CPU = 0,
+    CLI_BACKEND_METAL,
+    CLI_BACKEND_CUDA
+} cli_backend_choice;
+
+/** Maps a --backend value to a choice. Returns 0 when the name is unknown. */
+static int parse_backend_choice(const char *value, cli_backend_choice *out_choice) {
+    if (strcmp(value, "cpu") == 0) {
+        *out_choice = CLI_BACKEND_CPU;
+        return 1;
+    }
+    if (strcmp(value, "metal") == 0) {
+        *out_choice = CLI_BACKEND_METAL;
+        return 1;
+    }
+    if (strcmp(value, "cuda") == 0) {
+        *out_choice = CLI_BACKEND_CUDA;
+        return 1;
+    }
+    return 0;
+}
+
+/** Resolves the default backend after options were parsed, so --backend can
+ * deliberately override even an invalid environment setting. */
+static int resolve_environment_backend(cli_backend_choice *out_choice) {
+    const char *value = getenv("LLM_LAB_BACKEND");
+    if (value == NULL || value[0] == '\0') {
+        *out_choice = CLI_BACKEND_CPU;
+        return 1;
+    }
+    if (parse_backend_choice(value, out_choice) != 0) {
+        return 1;
+    }
+    fprintf(stderr,
+            "Invalid LLM_LAB_BACKEND: %s (expected cpu, metal, or cuda); "
+            "override it with --backend.\n",
+            value);
+    return 0;
+}
+
+static const char *backend_choice_name(cli_backend_choice choice) {
+    if (choice == CLI_BACKEND_METAL)
+        return "metal";
+    if (choice == CLI_BACKEND_CUDA)
+        return "cuda";
+    return "cpu";
+}
+
+static llm_status create_backend_choice(cli_backend_choice choice, llm_backend **out_backend) {
+    if (choice == CLI_BACKEND_METAL)
+        return llm_backend_metal_create(out_backend);
+    if (choice == CLI_BACKEND_CUDA)
+        return llm_backend_cuda_create(out_backend);
+    return llm_backend_cpu_create(out_backend);
+}
+
+static const char *backend_choice_device_name(cli_backend_choice choice,
+                                              const llm_backend *backend) {
+    if (choice == CLI_BACKEND_METAL) {
+        const char *name = llm_backend_metal_device_name(backend);
+        return name != NULL ? name : "Metal";
+    }
+    if (choice == CLI_BACKEND_CUDA) {
+        const char *name = llm_backend_cuda_device_name(backend);
+        return name != NULL ? name : "CUDA";
+    }
+    return "CPU";
+}
+
+/** Portable accelerator counters written to each training JSONL event. */
+typedef struct cli_accelerator_metrics {
+    size_t active_buffer_count;
+    size_t active_buffer_bytes;
+    size_t peak_active_buffer_bytes;
+    size_t cached_buffer_count;
+    size_t cached_buffer_bytes;
+    unsigned long long dispatches;
+    unsigned long long synchronizations;
+    unsigned long long reused_buffer_allocations;
+    double total_gpu_seconds;
+    double last_gpu_seconds;
+} cli_accelerator_metrics;
+
+/** Reads the buffer-pool, synchronization and timing counters of an accelerator. */
+static void read_accelerator_metrics(cli_backend_choice choice, const llm_backend *backend,
+                                     cli_accelerator_metrics *out_metrics) {
+    *out_metrics = (cli_accelerator_metrics){0};
+    if (choice == CLI_BACKEND_METAL) {
+        llm_metal_backend_metrics metrics = {0};
+        if (llm_backend_metal_get_metrics(backend, &metrics) == LLM_OK) {
+            *out_metrics = (cli_accelerator_metrics){
+                .active_buffer_count = metrics.active_buffer_count,
+                .active_buffer_bytes = metrics.active_buffer_bytes,
+                .peak_active_buffer_bytes = metrics.peak_active_buffer_bytes,
+                .cached_buffer_count = metrics.cached_buffer_count,
+                .cached_buffer_bytes = metrics.cached_buffer_bytes,
+                .dispatches = metrics.kernel_dispatches,
+                .synchronizations = metrics.submitted_command_buffers,
+                .reused_buffer_allocations = metrics.reused_buffer_allocations,
+                .total_gpu_seconds = metrics.total_gpu_seconds,
+                .last_gpu_seconds = metrics.last_gpu_seconds,
+            };
+        }
+    } else if (choice == CLI_BACKEND_CUDA) {
+        llm_cuda_backend_metrics metrics = {0};
+        if (llm_backend_cuda_get_metrics(backend, &metrics) == LLM_OK) {
+            *out_metrics = (cli_accelerator_metrics){
+                .active_buffer_count = metrics.active_buffer_count,
+                .active_buffer_bytes = metrics.active_buffer_bytes,
+                .peak_active_buffer_bytes = metrics.peak_active_buffer_bytes,
+                .cached_buffer_count = metrics.cached_buffer_count,
+                .cached_buffer_bytes = metrics.cached_buffer_bytes,
+                .dispatches = metrics.kernel_launches,
+                .synchronizations = metrics.synchronizations,
+                .reused_buffer_allocations = metrics.reused_buffer_allocations,
+                .total_gpu_seconds = metrics.total_gpu_seconds,
+                .last_gpu_seconds = metrics.last_gpu_seconds,
+            };
+        }
+    }
+}
+
 static char *path_with_suffix(const char *path, const char *suffix) {
     if (path == NULL || suffix == NULL)
         return NULL;
@@ -857,6 +999,17 @@ static void install_model_training_signals(void) {
     (void)signal(SIGTERM, request_model_training_stop);
 }
 
+static int is_resume_forbidden_model_option(const char *option) {
+    return strcmp(option, "--context") == 0 || strcmp(option, "--hidden") == 0 ||
+           strcmp(option, "--layers") == 0 || strcmp(option, "--heads") == 0 ||
+           strcmp(option, "--ffn") == 0 || strcmp(option, "--learning-rate") == 0 ||
+           strcmp(option, "--warmup-steps") == 0 || strcmp(option, "--total-steps") == 0 ||
+           strcmp(option, "--min-learning-rate") == 0 || strcmp(option, "--beta1") == 0 ||
+           strcmp(option, "--beta2") == 0 || strcmp(option, "--epsilon") == 0 ||
+           strcmp(option, "--weight-decay") == 0 || strcmp(option, "--sampling") == 0 ||
+           strcmp(option, "--gradient-clip") == 0 || strcmp(option, "--seed") == 0;
+}
+
 static int run_model_train(int argc, char **argv) {
     size_t steps = 0U;
     lm_trainer_config trainer_config = {.batch_size = 2U,
@@ -885,8 +1038,11 @@ static int run_model_train(int argc, char **argv) {
     size_t checkpoint_every = 0U;
     size_t validation_every = 0U;
     size_t validation_batches = 100U;
-    int use_metal = 0;
-    int has_model_options = 0;
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
+    int batch_size_was_explicit = 0;
+    int accumulation_was_explicit = 0;
+    int has_resume_forbidden_model_options = 0;
     if (parse_positive_size(argv[4], &steps) == 0) {
         fprintf(stderr, "STEPS must be a positive integer supported by this system.\n");
         return 1;
@@ -901,49 +1057,36 @@ static int run_model_train(int argc, char **argv) {
         int parsed = 0;
         if (strcmp(option, "--batch-size") == 0) {
             parsed = parse_positive_size(value, &trainer_config.batch_size);
-            has_model_options = 1;
+            batch_size_was_explicit = parsed;
         } else if (strcmp(option, "--context") == 0) {
             parsed = parse_positive_size(value, &trainer_config.context_length);
-            has_model_options = 1;
         } else if (strcmp(option, "--hidden") == 0) {
             parsed = parse_positive_size(value, &hidden_size);
-            has_model_options = 1;
         } else if (strcmp(option, "--layers") == 0) {
             parsed = parse_size(value, &layer_count);
-            has_model_options = 1;
         } else if (strcmp(option, "--heads") == 0) {
             parsed = parse_positive_size(value, &head_count);
-            has_model_options = 1;
         } else if (strcmp(option, "--ffn") == 0) {
             parsed = parse_size(value, &feed_forward_size);
-            has_model_options = 1;
         } else if (strcmp(option, "--learning-rate") == 0) {
             parsed = parse_positive_float(value, &trainer_config.learning_rate);
-            has_model_options = 1;
         } else if (strcmp(option, "--gradient-accumulation") == 0) {
             parsed = parse_positive_size(value, &trainer_config.gradient_accumulation_steps);
-            has_model_options = 1;
+            accumulation_was_explicit = parsed;
         } else if (strcmp(option, "--warmup-steps") == 0) {
             parsed = parse_seed(value, &trainer_config.warmup_steps);
-            has_model_options = 1;
         } else if (strcmp(option, "--total-steps") == 0) {
             parsed = parse_seed(value, &trainer_config.total_steps);
-            has_model_options = 1;
         } else if (strcmp(option, "--min-learning-rate") == 0) {
             parsed = parse_positive_float(value, &trainer_config.minimum_learning_rate);
-            has_model_options = 1;
         } else if (strcmp(option, "--beta1") == 0) {
             parsed = parse_positive_float(value, &trainer_config.beta1);
-            has_model_options = 1;
         } else if (strcmp(option, "--beta2") == 0) {
             parsed = parse_positive_float(value, &trainer_config.beta2);
-            has_model_options = 1;
         } else if (strcmp(option, "--epsilon") == 0) {
             parsed = parse_positive_float(value, &trainer_config.epsilon);
-            has_model_options = 1;
         } else if (strcmp(option, "--weight-decay") == 0) {
             parsed = parse_positive_float(value, &trainer_config.weight_decay);
-            has_model_options = 1;
         } else if (strcmp(option, "--sampling") == 0) {
             if (strcmp(value, "shuffled") == 0) {
                 trainer_config.sampling = LM_BATCHER_SHUFFLED_BLOCKS;
@@ -952,20 +1095,13 @@ static int run_model_train(int argc, char **argv) {
                 trainer_config.sampling = LM_BATCHER_RANDOM_WINDOWS;
                 parsed = 1;
             }
-            has_model_options = 1;
         } else if (strcmp(option, "--gradient-clip") == 0) {
             parsed = parse_positive_float(value, &trainer_config.gradient_clip_norm);
-            has_model_options = 1;
         } else if (strcmp(option, "--seed") == 0) {
             parsed = parse_seed(value, &trainer_config.seed);
-            has_model_options = 1;
         } else if (strcmp(option, "--backend") == 0) {
-            if (strcmp(value, "cpu") == 0) {
-                parsed = 1;
-            } else if (strcmp(value, "metal") == 0) {
-                use_metal = 1;
-                parsed = 1;
-            }
+            parsed = parse_backend_choice(value, &backend_choice);
+            backend_was_explicit = parsed;
         } else if (strcmp(option, "--checkpoint") == 0 && checkpoint_path == NULL) {
             checkpoint_path = value;
             parsed = value[0] != '\0';
@@ -992,10 +1128,17 @@ static int run_model_train(int argc, char **argv) {
             fprintf(stderr, "Invalid model training option: %s %s\n", option, value);
             return 1;
         }
+        if (is_resume_forbidden_model_option(option) != 0) {
+            has_resume_forbidden_model_options = 1;
+        }
     }
-    if (resume_path != NULL && has_model_options != 0) {
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
+        return 1;
+    }
+    if (resume_path != NULL && has_resume_forbidden_model_options != 0) {
         fprintf(stderr,
-                "--resume restores model and trainer settings; do not override their options.\n");
+                "--resume restores model and trainer settings; only an equivalent --batch-size "
+                "and --gradient-accumulation override is allowed.\n");
         return 1;
     }
     if (checkpoint_every != 0U && checkpoint_path == NULL) {
@@ -1060,8 +1203,7 @@ static int run_model_train(int argc, char **argv) {
     llm_backend *backend = NULL;
     lm_model *model = NULL;
     lm_trainer *trainer = NULL;
-    llm_status status =
-        use_metal != 0 ? llm_backend_metal_create(&backend) : llm_backend_cpu_create(&backend);
+    llm_status status = create_backend_choice(backend_choice, &backend);
     lm_model_config model_config = {.vocabulary_size = lm_dataset_model_vocabulary_size(dataset),
                                     .context_length = trainer_config.context_length,
                                     .hidden_size = hidden_size,
@@ -1070,7 +1212,12 @@ static int run_model_train(int argc, char **argv) {
                                     .feed_forward_size = layer_count == 0U ? 0U : feed_forward_size,
                                     .seed = trainer_config.seed};
     if (status == LLM_OK && resume_path != NULL) {
-        status = lm_trainer_load_checkpoint(backend, dataset, resume_path, &model, &trainer);
+        const lm_trainer_resume_options resume_options = {
+            .batch_size = batch_size_was_explicit != 0 ? trainer_config.batch_size : 0U,
+            .gradient_accumulation_steps =
+                accumulation_was_explicit != 0 ? trainer_config.gradient_accumulation_steps : 0U};
+        status = lm_trainer_load_checkpoint_with_options(backend, dataset, resume_path,
+                                                         &resume_options, &model, &trainer);
     } else if (status == LLM_OK) {
         status = lm_model_create(backend, &model_config, &model);
     }
@@ -1143,7 +1290,7 @@ static int run_model_train(int argc, char **argv) {
                 "\"context_length\":%zu,\"gradient_accumulation\":%zu,"
                 "\"validation_every\":%zu,\"validation_batches\":%zu}\n",
                 lm_trainer_step_count(trainer), steps, parameter_value_count,
-                use_metal != 0 ? "metal" : "cpu", model_sampling_name(trainer_config.sampling),
+                backend_choice_name(backend_choice), model_sampling_name(trainer_config.sampling),
                 trainer_config.batch_size, trainer_config.context_length,
                 trainer_config.gradient_accumulation_steps, validation_every, validation_batches);
     }
@@ -1199,26 +1346,47 @@ static int run_model_train(int argc, char **argv) {
         const unsigned long long global_step = lm_trainer_step_count(trainer);
         const double tokens_per_second =
             step_seconds > 0.0 ? (double)tokens_per_update / step_seconds : 0.0;
-        llm_metal_backend_metrics metal_metrics = {0};
-        if (use_metal != 0)
-            (void)llm_backend_metal_get_metrics(backend, &metal_metrics);
+        cli_accelerator_metrics accelerator_metrics = {0};
+        read_accelerator_metrics(backend_choice, backend, &accelerator_metrics);
         const uint64_t tokens_seen = global_step <= UINT64_MAX / (uint64_t)tokens_per_update
                                          ? (uint64_t)global_step * (uint64_t)tokens_per_update
                                          : UINT64_MAX;
         if (log_file != NULL) {
-            fprintf(log_file,
-                    "{\"schema\":\"llm-lab-training-event-v1\",\"event\":\"train\","
-                    "\"step\":%llu,\"tokens\":%" PRIu64 ",\"loss\":%.9g,"
-                    "\"learning_rate\":%.9g,\"gradient_norm\":%.9g,"
-                    "\"step_seconds\":%.9g,\"steps_per_second\":%.9g,"
-                    "\"tokens_per_second\":%.9g,"
-                    "\"metal_active_bytes\":%zu,\"metal_peak_active_bytes\":%zu,"
-                    "\"metal_total_gpu_seconds\":%.9g}\n",
-                    global_step, tokens_seen, loss, lm_trainer_learning_rate(trainer),
-                    lm_trainer_gradient_norm(trainer), step_seconds,
-                    step_seconds > 0.0 ? 1.0 / step_seconds : 0.0, tokens_per_second,
-                    metal_metrics.active_buffer_bytes, metal_metrics.peak_active_buffer_bytes,
-                    metal_metrics.total_gpu_seconds);
+            fprintf(
+                log_file,
+                "{\"schema\":\"llm-lab-training-event-v1\",\"event\":\"train\","
+                "\"step\":%llu,\"tokens\":%" PRIu64 ",\"loss\":%.9g,"
+                "\"learning_rate\":%.9g,\"gradient_norm\":%.9g,"
+                "\"step_seconds\":%.9g,\"steps_per_second\":%.9g,"
+                "\"tokens_per_second\":%.9g,"
+                "\"accelerator_backend\":\"%s\","
+                "\"accelerator_device\":\"%s\","
+                "\"accelerator_active_buffer_count\":%zu,"
+                "\"accelerator_active_bytes\":%zu,"
+                "\"accelerator_peak_active_bytes\":%zu,"
+                "\"accelerator_cached_buffer_count\":%zu,"
+                "\"accelerator_cached_bytes\":%zu,"
+                "\"accelerator_dispatches\":%llu,"
+                "\"accelerator_synchronizations\":%llu,"
+                "\"accelerator_reused_buffer_allocations\":%llu,"
+                "\"accelerator_total_gpu_seconds\":%.9g,"
+                "\"accelerator_last_gpu_seconds\":%.9g,"
+                "\"metal_active_bytes\":%zu,\"metal_peak_active_bytes\":%zu,"
+                "\"metal_total_gpu_seconds\":%.9g}\n",
+                global_step, tokens_seen, loss, lm_trainer_learning_rate(trainer),
+                lm_trainer_gradient_norm(trainer), step_seconds,
+                step_seconds > 0.0 ? 1.0 / step_seconds : 0.0, tokens_per_second,
+                backend_choice_name(backend_choice),
+                backend_choice_device_name(backend_choice, backend),
+                accelerator_metrics.active_buffer_count, accelerator_metrics.active_buffer_bytes,
+                accelerator_metrics.peak_active_buffer_bytes,
+                accelerator_metrics.cached_buffer_count, accelerator_metrics.cached_buffer_bytes,
+                accelerator_metrics.dispatches, accelerator_metrics.synchronizations,
+                accelerator_metrics.reused_buffer_allocations,
+                accelerator_metrics.total_gpu_seconds, accelerator_metrics.last_gpu_seconds,
+                accelerator_metrics.active_buffer_bytes,
+                accelerator_metrics.peak_active_buffer_bytes,
+                accelerator_metrics.total_gpu_seconds);
         }
         const int final_requested_step = index + 1U == steps || model_training_interrupted != 0;
         const int should_validate =
@@ -1342,7 +1510,7 @@ static int run_model_train(int argc, char **argv) {
            model_config.head_count, model_config.feed_forward_size, parameter_value_count,
            trainer_config.gradient_accumulation_steps, lm_trainer_learning_rate(trainer),
            lm_trainer_gradient_norm(trainer), model_sampling_name(trainer_config.sampling),
-           use_metal != 0 ? "metal" : "cpu");
+           backend_choice_name(backend_choice));
     if (has_validation_result != 0)
         printf("%.8f,\"validation_perplexity\":%.8f,", latest_validation_loss,
                exp(latest_validation_loss));
@@ -1388,30 +1556,34 @@ static size_t valid_utf8_sequence_length(const unsigned char *bytes, size_t leng
     return 0U;
 }
 
-static void write_generation_bytes(const unsigned char *bytes, size_t length) {
+static void write_generation_bytes_to(FILE *output, const unsigned char *bytes, size_t length) {
     for (size_t index = 0U; index < length; ++index) {
         const unsigned char value = bytes[index];
         if (value >= 32U && value <= 126U) {
-            fputc(value, stdout);
+            fputc(value, output);
         } else if (value == '\n') {
-            fputs("\\n", stdout);
+            fputs("\\n", output);
         } else if (value == '\r') {
-            fputs("\\r", stdout);
+            fputs("\\r", output);
         } else if (value == '\t') {
-            fputs("\\t", stdout);
+            fputs("\\t", output);
         } else if (value >= 0x80U) {
             const size_t sequence_length =
                 valid_utf8_sequence_length(bytes + index, length - index);
             if (sequence_length != 0U) {
-                (void)fwrite(bytes + index, 1U, sequence_length, stdout);
+                (void)fwrite(bytes + index, 1U, sequence_length, output);
                 index += sequence_length - 1U;
             } else {
-                fprintf(stdout, "\\x%02x", value);
+                fprintf(output, "\\x%02x", value);
             }
         } else {
-            fprintf(stdout, "\\x%02x", value);
+            fprintf(output, "\\x%02x", value);
         }
     }
+}
+
+static void write_generation_bytes(const unsigned char *bytes, size_t length) {
+    write_generation_bytes_to(stdout, bytes, length);
 }
 
 static int run_model_generate(int argc, char **argv) {
@@ -1422,7 +1594,8 @@ static int run_model_generate(int argc, char **argv) {
     }
     cli_generation_options options = {
         .temperature = 0.8F, .repetition_penalty = 1.1F, .top_k = 40U, .random_state = UINT64_C(1)};
-    int use_metal = 0;
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
     for (int index = 7; index < argc; index += 2) {
         if (index + 1 >= argc) {
             fprintf(stderr, "Model generation options require a value.\n");
@@ -1441,23 +1614,22 @@ static int run_model_generate(int argc, char **argv) {
         } else if (strcmp(option, "--seed") == 0) {
             parsed = parse_seed(value, &options.random_state);
         } else if (strcmp(option, "--backend") == 0) {
-            if (strcmp(value, "cpu") == 0) {
-                parsed = 1;
-            } else if (strcmp(value, "metal") == 0) {
-                use_metal = 1;
-                parsed = 1;
-            }
+            parsed = parse_backend_choice(value, &backend_choice);
+            backend_was_explicit = parsed;
         }
         if (parsed == 0) {
             fprintf(stderr, "Invalid model generation option: %s %s\n", option, value);
             return 1;
         }
     }
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
+        return 1;
+    }
     if (options.random_state == 0U) {
         options.random_state = UINT64_C(0x9e3779b97f4a7c15);
     }
     fprintf(stderr, "Generazione: carico tokenizer e checkpoint su %s...\n",
-            use_metal != 0 ? "Metal" : "CPU");
+            backend_choice_name(backend_choice));
     tokenizer *tokenizer = NULL;
     tokenizer_status tokenizer_result = tokenizer_load(argv[4], &tokenizer);
     if (tokenizer_result != TOKENIZER_OK) {
@@ -1487,8 +1659,7 @@ static int run_model_generate(int argc, char **argv) {
 
     llm_backend *backend = NULL;
     lm_model *model = NULL;
-    llm_status status =
-        use_metal != 0 ? llm_backend_metal_create(&backend) : llm_backend_cpu_create(&backend);
+    llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, argv[3], &model, NULL);
     }
@@ -1598,8 +1769,10 @@ static int run_model_evaluate(int argc, char **argv) {
     size_t steps = 0U;
     size_t batch_size = 2U;
     uint64_t seed = UINT64_C(1);
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
     if (parse_positive_size(argv[5], &steps) == 0) {
-        fprintf(stderr, "STEPS must be a positive integer supported by this system.\n");
+        fprintf(stderr, "BATCHES must be a positive integer supported by this system.\n");
         return 1;
     }
     for (int index = 6; index < argc; index += 2) {
@@ -1612,12 +1785,18 @@ static int run_model_evaluate(int argc, char **argv) {
             parsed = parse_positive_size(argv[index + 1], &batch_size);
         } else if (strcmp(argv[index], "--seed") == 0) {
             parsed = parse_seed(argv[index + 1], &seed);
+        } else if (strcmp(argv[index], "--backend") == 0) {
+            parsed = parse_backend_choice(argv[index + 1], &backend_choice);
+            backend_was_explicit = parsed;
         }
         if (parsed == 0) {
             fprintf(stderr, "Invalid model evaluation option: %s %s\n", argv[index],
                     argv[index + 1]);
             return 1;
         }
+    }
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
+        return 1;
     }
     cli_model_dataset_open_progress dataset_progress = {
         .started_at = current_time_seconds(),
@@ -1634,7 +1813,7 @@ static int run_model_evaluate(int argc, char **argv) {
     }
     llm_backend *backend = NULL;
     lm_model *model = NULL;
-    llm_status status = llm_backend_cpu_create(&backend);
+    llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, argv[4], &model, NULL);
     }
@@ -1645,87 +1824,342 @@ static int run_model_evaluate(int argc, char **argv) {
     if (status == LLM_OK && config.vocabulary_size != lm_dataset_model_vocabulary_size(dataset)) {
         status = LLM_INVALID_SHAPE;
     }
-    if (status != LLM_OK || batch_size > SIZE_MAX / config.context_length) {
+    if (status != LLM_OK) {
         fprintf(stderr, "Loading evaluation model failed: %s\n", llm_status_string(status));
         lm_model_destroy(model);
         llm_backend_destroy(backend);
         lm_dataset_close(dataset);
         return 1;
     }
+    fprintf(stderr, "Valutazione modello su %s: %zu batch...\n",
+            backend_choice_name(backend_choice), steps);
+    float mean_loss = 0.0F;
+    status = lm_model_evaluate_validation(model, dataset, batch_size, steps, seed, &mean_loss);
+    if (status == LLM_OK) {
+        printf("{\"schema\":\"llm-lab-model-evaluation-v1\",\"batches\":%zu,"
+               "\"loss\":%.8f,\"perplexity\":%.8f,\"layer_count\":%zu,"
+               "\"backend\":\"%s\",\"device\":\"%s\"}\n",
+               steps, (double)mean_loss, exp((double)mean_loss), config.layer_count,
+               backend_choice_name(backend_choice),
+               backend_choice_device_name(backend_choice, backend));
+    } else {
+        fprintf(stderr, "Model evaluation failed: %s\n", llm_status_string(status));
+    }
+    lm_model_destroy(model);
+    llm_backend_destroy(backend);
+    lm_dataset_close(dataset);
+    return status == LLM_OK ? 0 : 1;
+}
+
+static void diagnostic_record_rank(cli_next_token_diagnostics *diagnostics, size_t rank,
+                                   int is_end_of_document) {
+    ++diagnostics->token_count;
+    diagnostics->rank_sum += (double)rank;
+    diagnostics->reciprocal_rank_sum += 1.0 / (double)rank;
+    if (rank <= 1U)
+        ++diagnostics->top_1_count;
+    if (rank <= 5U)
+        ++diagnostics->top_5_count;
+    if (rank <= 20U)
+        ++diagnostics->top_20_count;
+    if (rank <= 100U)
+        ++diagnostics->top_100_count;
+    if (is_end_of_document != 0) {
+        ++diagnostics->end_of_document_count;
+        return;
+    }
+    ++diagnostics->regular_token_count;
+    if (rank <= 1U)
+        ++diagnostics->regular_top_1_count;
+    if (rank <= 5U)
+        ++diagnostics->regular_top_5_count;
+    if (rank <= 20U)
+        ++diagnostics->regular_top_20_count;
+    if (rank <= 100U)
+        ++diagnostics->regular_top_100_count;
+}
+
+static double diagnostic_fraction(uint64_t count, uint64_t total) {
+    return total == 0U ? 0.0 : (double)count / (double)total;
+}
+
+static void diagnostic_print_tokens(const char *label, const tokenizer *active_tokenizer,
+                                    token_id end_of_document, const token_id *tokens,
+                                    size_t count) {
+    fprintf(stderr, "%s", label);
+    const uint32_t tokenizer_size = tokenizer_vocabulary_size(active_tokenizer);
+    size_t index = 0U;
+    while (index < count) {
+        if (tokens[index] >= tokenizer_size) {
+            if (tokens[index] == end_of_document)
+                fputs("<EOD>", stderr);
+            else
+                fprintf(stderr, "<ID:%" PRIu32 ">", tokens[index]);
+            ++index;
+            continue;
+        }
+        const size_t first = index;
+        while (index < count && tokens[index] < tokenizer_size)
+            ++index;
+        const token_sequence sequence = {.ids = (token_id *)(tokens + first),
+                                         .length = index - first};
+        unsigned char *bytes = NULL;
+        size_t byte_count = 0U;
+        if (tokenizer_decode(active_tokenizer, &sequence, &bytes, &byte_count) != TOKENIZER_OK) {
+            fputs("<INVALID-SEQUENCE>", stderr);
+            tokenizer_bytes_destroy(bytes);
+            continue;
+        }
+        write_generation_bytes_to(stderr, bytes, byte_count);
+        tokenizer_bytes_destroy(bytes);
+    }
+    fputc('\n', stderr);
+}
+
+static int run_model_diagnose(int argc, char **argv) {
+    size_t batches = 0U;
+    size_t batch_size = 1U;
+    uint64_t seed = UINT64_C(1);
+    cli_backend_choice backend_choice = CLI_BACKEND_CPU;
+    int backend_was_explicit = 0;
+    if (parse_positive_size(argv[6], &batches) == 0) {
+        fprintf(stderr, "BATCHES must be a positive integer supported by this system.\n");
+        return 1;
+    }
+    for (int index = 7; index < argc; index += 2) {
+        if (index + 1 >= argc) {
+            fprintf(stderr, "Model diagnostic options require a value.\n");
+            return 1;
+        }
+        int parsed = 0;
+        if (strcmp(argv[index], "--batch-size") == 0) {
+            parsed = parse_positive_size(argv[index + 1], &batch_size);
+        } else if (strcmp(argv[index], "--seed") == 0) {
+            parsed = parse_seed(argv[index + 1], &seed);
+        } else if (strcmp(argv[index], "--backend") == 0) {
+            parsed = parse_backend_choice(argv[index + 1], &backend_choice);
+            backend_was_explicit = parsed;
+        }
+        if (parsed == 0) {
+            fprintf(stderr, "Invalid model diagnostic option: %s %s\n", argv[index],
+                    argv[index + 1]);
+            return 1;
+        }
+    }
+    if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0)
+        return 1;
+
+    cli_model_dataset_open_progress dataset_progress = {
+        .started_at = current_time_seconds(), .interactive = standard_error_is_terminal()};
+    lm_dataset *dataset = NULL;
+    const lm_dataset_status dataset_status = lm_dataset_open_with_progress(
+        argv[3], show_model_dataset_open_progress, &dataset_progress, &dataset);
+    finish_model_dataset_open_progress(&dataset_progress);
+    if (dataset_status != LM_DATASET_OK || lm_dataset_get_split(dataset) != LM_DATASET_VALIDATION) {
+        fprintf(stderr, "Model diagnostics require a validation split artifact.\n");
+        lm_dataset_close(dataset);
+        return 1;
+    }
+
+    int tokenizer_matches = 0;
+    const lm_dataset_status tokenizer_match_status =
+        lm_dataset_tokenizer_matches(dataset, argv[5], &tokenizer_matches);
+    if (tokenizer_match_status != LM_DATASET_OK || tokenizer_matches == 0) {
+        fprintf(stderr,
+                "Diagnostic tokenizer does not match the tokenizer recorded in the dataset.\n");
+        lm_dataset_close(dataset);
+        return 1;
+    }
+
+    tokenizer *active_tokenizer = NULL;
+    tokenizer_status tokenizer_result = tokenizer_load(argv[5], &active_tokenizer);
+    llm_backend *backend = NULL;
+    lm_model *model = NULL;
+    llm_status status = tokenizer_result == TOKENIZER_OK
+                            ? create_backend_choice(backend_choice, &backend)
+                            : LLM_BACKEND_ERROR;
+    if (status == LLM_OK)
+        status = lm_trainer_load_checkpoint(backend, NULL, argv[4], &model, NULL);
+    lm_model_config config = {0};
+    if (status == LLM_OK)
+        status = lm_model_get_config(model, &config);
+    const uint32_t tokenizer_size = tokenizer_vocabulary_size(active_tokenizer);
+    if (status == LLM_OK &&
+        (tokenizer_size == UINT32_MAX || config.vocabulary_size < tokenizer_size + 1U ||
+         tokenizer_size != lm_dataset_tokenizer_vocabulary_size(dataset) ||
+         config.vocabulary_size != lm_dataset_model_vocabulary_size(dataset))) {
+        status = LLM_INVALID_SHAPE;
+    }
+    if (status != LLM_OK || batch_size > SIZE_MAX / config.context_length) {
+        fprintf(stderr, "Loading diagnostic model failed: %s\n",
+                status == LLM_OK ? "invalid batch shape" : llm_status_string(status));
+        lm_model_destroy(model);
+        llm_backend_destroy(backend);
+        tokenizer_destroy(active_tokenizer);
+        lm_dataset_close(dataset);
+        return 1;
+    }
+
     const size_t token_count = batch_size * config.context_length;
-    token_id *host_inputs = malloc(token_count * sizeof(*host_inputs));
-    token_id *host_targets = malloc(token_count * sizeof(*host_targets));
     const size_t input_shape[] = {batch_size, config.context_length};
     const size_t target_shape[] = {token_count};
     const size_t logits_shape[] = {token_count, config.vocabulary_size};
+    token_id *host_inputs = malloc(token_count * sizeof(*host_inputs));
+    token_id *host_targets = malloc(token_count * sizeof(*host_targets));
+    token_id *sample_inputs = malloc(config.context_length * sizeof(*sample_inputs));
+    token_id *sample_targets = malloc(config.context_length * sizeof(*sample_targets));
+    token_id *sample_predictions = malloc(config.context_length * sizeof(*sample_predictions));
+    float *host_logits = NULL;
     llm_tensor inputs = {0};
     llm_tensor targets = {0};
     llm_tensor logits = {0};
     llm_tensor loss = {0};
     lm_batcher *batcher = NULL;
-    if (host_inputs == NULL || host_targets == NULL) {
+    if (host_inputs == NULL || host_targets == NULL || sample_inputs == NULL ||
+        sample_targets == NULL || sample_predictions == NULL) {
         status = LLM_ALLOCATION_FAILED;
     }
     if (status == LLM_OK && lm_batcher_create(dataset, batch_size, config.context_length, seed,
                                               &batcher) != LM_DATASET_OK) {
         status = LLM_BACKEND_ERROR;
     }
-    if (status == LLM_OK) {
+    if (status == LLM_OK)
         status = llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &inputs);
-    }
-    if (status == LLM_OK) {
+    if (status == LLM_OK)
         status = llm_tensor_create(backend, LLM_DTYPE_U32, 1U, target_shape, &targets);
-    }
-    if (status == LLM_OK) {
+    if (status == LLM_OK)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits);
-    }
-    if (status == LLM_OK) {
+    if (status == LLM_OK)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &loss);
+    if (status == LLM_OK && logits.element_count <= SIZE_MAX / sizeof(*host_logits)) {
+        host_logits = malloc(logits.element_count * sizeof(*host_logits));
+        status = host_logits == NULL ? LLM_ALLOCATION_FAILED : LLM_OK;
+    } else if (status == LLM_OK) {
+        status = LLM_OVERFLOW;
     }
-    double loss_sum = 0.0;
-    fprintf(stderr, "Valutazione modello: %zu batch...\n", steps);
-    for (size_t index = 0U; status == LLM_OK && index < steps; ++index) {
+
+    fprintf(stderr, "Diagnostica next-token su %s: %zu batch x %zu...\n",
+            backend_choice_name(backend_choice), batches, batch_size);
+    cli_next_token_diagnostics diagnostics = {0};
+    const token_id end_of_document = lm_dataset_end_of_document_token(dataset);
+    for (size_t batch = 0U; status == LLM_OK && batch < batches; ++batch) {
         if (lm_batcher_next(batcher, host_inputs, host_targets) != LM_DATASET_OK) {
             status = LLM_BACKEND_ERROR;
             break;
         }
-        status =
-            llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
-        if (status == LLM_OK) {
+        if (batch == 0U) {
+            (void)memcpy(sample_inputs, host_inputs,
+                         config.context_length * sizeof(*sample_inputs));
+            (void)memcpy(sample_targets, host_targets,
+                         config.context_length * sizeof(*sample_targets));
+        }
+        status = llm_backend_begin_batch(backend);
+        if (status == LLM_OK)
+            status =
+                llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
+        if (status == LLM_OK)
             status = llm_tensor_write(backend, &targets, host_targets,
                                       token_count * sizeof(*host_targets));
-        }
-        if (status == LLM_OK) {
+        if (status == LLM_OK)
             status = lm_model_forward(model, &inputs, &logits);
-        }
-        if (status == LLM_OK) {
+        if (status == LLM_OK)
             status = llm_cross_entropy_forward(backend, &logits, &targets, &loss);
-        }
+        const llm_status batch_status = llm_backend_end_batch(backend);
+        if (status == LLM_OK)
+            status = batch_status;
         float batch_loss = 0.0F;
-        if (status == LLM_OK) {
+        if (status == LLM_OK)
             status = llm_tensor_read(backend, &loss, &batch_loss, sizeof(batch_loss));
-        }
-        if (status == LLM_OK) {
-            loss_sum += batch_loss;
+        if (status == LLM_OK)
+            status = llm_tensor_read(backend, &logits, host_logits,
+                                     logits.element_count * sizeof(*host_logits));
+        if (status == LLM_OK && isfinite(batch_loss) == 0)
+            status = LLM_NUMERICAL_ERROR;
+        if (status != LLM_OK)
+            break;
+        diagnostics.loss_sum += (double)batch_loss;
+        for (size_t row = 0U; row < token_count; ++row) {
+            const token_id target = host_targets[row];
+            if (target >= config.vocabulary_size) {
+                status = LLM_INVALID_SHAPE;
+                break;
+            }
+            const float *row_logits = host_logits + row * config.vocabulary_size;
+            const float target_logit = row_logits[target];
+            if (isfinite(target_logit) == 0) {
+                status = LLM_NUMERICAL_ERROR;
+                break;
+            }
+            size_t rank = 1U;
+            token_id best = 0U;
+            for (uint32_t token = 0U; token < config.vocabulary_size; ++token) {
+                if (row_logits[token] > target_logit)
+                    ++rank;
+                if (row_logits[token] > row_logits[best])
+                    best = token;
+            }
+            diagnostic_record_rank(&diagnostics, rank, target == end_of_document);
+            if (batch == 0U && row < config.context_length)
+                sample_predictions[row] = best;
         }
     }
-    if (status == LLM_OK) {
-        const double mean_loss = loss_sum / (double)steps;
-        printf("{\"schema\":\"llm-lab-model-evaluation-v1\",\"batches\":%zu,"
-               "\"loss\":%.8f,\"perplexity\":%.8f,\"layer_count\":%zu}\n",
-               steps, mean_loss, exp(mean_loss), config.layer_count);
-    } else {
-        fprintf(stderr, "Model evaluation failed: %s\n", llm_status_string(status));
+
+    if (status == LLM_OK && config.context_length >= 2U) {
+        const size_t prompt_count =
+            config.context_length < 256U ? config.context_length / 2U : 128U;
+        const size_t available = config.context_length - prompt_count;
+        const size_t continuation_count = available < 64U ? available : 64U;
+        diagnostic_print_tokens("Sample reale, prompt: ", active_tokenizer, end_of_document,
+                                sample_inputs, prompt_count);
+        diagnostic_print_tokens("Sample reale, continuazione: ", active_tokenizer, end_of_document,
+                                sample_targets + prompt_count - 1U, continuation_count);
+        diagnostic_print_tokens("Teacher-forced top-1: ", active_tokenizer, end_of_document,
+                                sample_predictions + prompt_count - 1U, continuation_count);
     }
+    if (status == LLM_OK && diagnostics.token_count != 0U) {
+        const double mean_loss = diagnostics.loss_sum / (double)batches;
+        printf(
+            "{\"schema\":\"llm-lab-model-diagnostics-v1\",\"batches\":%zu,"
+            "\"batch_size\":%zu,\"tokens\":%" PRIu64 ",\"loss\":%.8f,"
+            "\"perplexity\":%.8f,\"top_1_accuracy\":%.8f,"
+            "\"top_5_accuracy\":%.8f,\"top_20_accuracy\":%.8f,"
+            "\"top_100_accuracy\":%.8f,\"mean_rank\":%.8f,\"mrr\":%.8f,"
+            "\"regular_tokens\":%" PRIu64 ",\"regular_top_1_accuracy\":%.8f,"
+            "\"regular_top_5_accuracy\":%.8f,\"regular_top_20_accuracy\":%.8f,"
+            "\"regular_top_100_accuracy\":%.8f,\"end_of_document_tokens\":%" PRIu64
+            ",\"backend\":\"%s\",\"device\":\"%s\"}\n",
+            batches, batch_size, diagnostics.token_count, mean_loss, exp(mean_loss),
+            diagnostic_fraction(diagnostics.top_1_count, diagnostics.token_count),
+            diagnostic_fraction(diagnostics.top_5_count, diagnostics.token_count),
+            diagnostic_fraction(diagnostics.top_20_count, diagnostics.token_count),
+            diagnostic_fraction(diagnostics.top_100_count, diagnostics.token_count),
+            diagnostics.rank_sum / (double)diagnostics.token_count,
+            diagnostics.reciprocal_rank_sum / (double)diagnostics.token_count,
+            diagnostics.regular_token_count,
+            diagnostic_fraction(diagnostics.regular_top_1_count, diagnostics.regular_token_count),
+            diagnostic_fraction(diagnostics.regular_top_5_count, diagnostics.regular_token_count),
+            diagnostic_fraction(diagnostics.regular_top_20_count, diagnostics.regular_token_count),
+            diagnostic_fraction(diagnostics.regular_top_100_count, diagnostics.regular_token_count),
+            diagnostics.end_of_document_count, backend_choice_name(backend_choice),
+            backend_choice_device_name(backend_choice, backend));
+    } else if (status != LLM_OK) {
+        fprintf(stderr, "Model diagnostics failed: %s\n", llm_status_string(status));
+    }
+
     lm_batcher_destroy(batcher);
     llm_tensor_destroy(&loss);
     llm_tensor_destroy(&logits);
     llm_tensor_destroy(&targets);
     llm_tensor_destroy(&inputs);
+    free(host_logits);
+    free(sample_predictions);
+    free(sample_targets);
+    free(sample_inputs);
     free(host_targets);
     free(host_inputs);
     lm_model_destroy(model);
     llm_backend_destroy(backend);
+    tokenizer_destroy(active_tokenizer);
     lm_dataset_close(dataset);
     return status == LLM_OK ? 0 : 1;
 }
@@ -1748,6 +2182,9 @@ int llm_lab_run_command(int argc, char **argv) {
     }
     if (argc >= 6 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "evaluate") == 0) {
         return run_model_evaluate(argc, argv);
+    }
+    if (argc >= 7 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "diagnose") == 0) {
+        return run_model_diagnose(argc, argv);
     }
 
     print_usage(argv[0]);

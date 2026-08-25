@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "dataset_internal.h"
 
@@ -26,6 +27,20 @@ static lm_dataset_status sha256_file(const char *path, unsigned char checksum[32
     }
     if (status == LM_DATASET_OK) {
         tokenizer_sha256_final(&sha256, checksum);
+    }
+    return status;
+}
+
+lm_dataset_status lm_dataset_tokenizer_matches(const lm_dataset *dataset,
+                                               const char *tokenizer_path, int *out_matches) {
+    if (dataset == NULL || tokenizer_path == NULL || out_matches == NULL) {
+        return LM_DATASET_INVALID_ARGUMENT;
+    }
+    *out_matches = 0;
+    unsigned char checksum[TOKENIZER_SHA256_DIGEST_SIZE] = {0};
+    const lm_dataset_status status = sha256_file(tokenizer_path, checksum);
+    if (status == LM_DATASET_OK) {
+        *out_matches = memcmp(checksum, dataset->tokenizer_checksum, sizeof(checksum)) == 0 ? 1 : 0;
     }
     return status;
 }

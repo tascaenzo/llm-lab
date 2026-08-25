@@ -38,6 +38,12 @@ RMSNorm, RoPE, attention causale GQA e AdamW, inclusi i backward richiesti dal
 contratto. `matmul_ex` usa internamente `MPSMatrixMultiplication` per le
 trasposizioni; l'API pubblica resta invariata.
 
+Il percorso trainer usa inoltre due fusioni condivise con CUDA: la norma globale dei gradienti
+accumula direttamente la somma dei quadrati con un solo dispatch per parametro, e AdamW azzera il
+gradiente nello stesso kernel dopo averlo consumato. Per il modello 75M questo elimina 333
+operazioni di riduzione/scalatura e 111 azzeramenti separati per update (444 dispatch in totale),
+oltre ai relativi buffer intermedi.
+
 La build Release e i test Metal sono stati eseguiti fuori dal sandbox su Apple
 M4 reale: il test MPS `matmul_ex` seguito da un kernel Metal nello stesso batch
 passa. Il benchmark GEMM F32 `512x512x512` ha misurato circa 360 GFLOP/s Metal
@@ -58,10 +64,9 @@ Ogni modifica Metal deve mantenere l'evidenza esecutiva su hardware:
 4. benchmark e ottimizzazione sulle forme del primo modello.
 
 Il trainer raggruppa un intero step Metal in un command buffer, evitando
-sincronizzazioni tra forward, backward e AdamW; resta soltanto la lettura della
-loss al termine dello step. Non aggiungere CUDA: l'API backend resta portabile,
-ma senza hardware e CI CUDA non ci sarebbe una validazione affidabile della
-parita' numerica.
+sincronizzazioni tra forward, backward e AdamW; restano soltanto le letture necessarie di loss e
+norma del gradiente. Le ottimizzazioni comuni devono mantenere la suite contrattuale su CPU, Metal
+e CUDA; quelle specifiche del vendor restano confinate nel rispettivo backend.
 
 ## Risultato del Modello Minimal — sessione di training Metal
 
@@ -141,11 +146,18 @@ l'attention vale il 62,5% pur essendo il 4,1% delle operazioni aritmetiche.
 Va rilanciato dopo ogni ottimizzazione: dice se il guadagno e' arrivato dove ci
 si aspettava, e quando il collo di bottiglia si e' spostato altrove.
 
+Il forward attention ora usa una softmax online: score e somma pesata di V vengono aggiornati in
+un solo passaggio causale, senza materializzare la riga delle probabilita'. Il backward calcola
+insieme QK e il gradiente rispetto alle probabilita'. Sulla forma reale `B4 S512 H8 D64`, il
+benchmark appaiato su Apple M4 ha ridotto il tempo GPU combinato forward+backward da circa
+`33,31 ms` a `29,11 ms` per chiamata (circa `12,6%`); la suite del modello completa passa sulla GPU
+reale.
+
 ### Riproducibilita' per backend
 
 Su Metal alcune riduzioni sommano con atomiche float in ordine non
 deterministico: gradiente del peso di RMSNorm, gradienti di K e V
-dell'attention, scatter-add dell'embedding e riduzione della loss. Il seed rende
+dell'attention, scatter-add dell'embedding, norma globale dei gradienti e riduzione della loss. Il seed rende
 quindi riproducibile la *sequenza dei batch*, non il valore esatto dei numeri: due
 run Metal identici possono differire negli ultimi bit e divergere lentamente. La
 build CPU resta deterministica a parita' di numero di thread. Chi ha bisogno di

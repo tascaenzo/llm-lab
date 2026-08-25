@@ -186,6 +186,25 @@ llm_status llm_reduce_mean_square_last(llm_backend *backend, const llm_tensor *i
         outer_count, reduction_size);
 }
 
+llm_status llm_accumulate_sum_squares(llm_backend *backend, const llm_tensor *input,
+                                      llm_tensor *accumulator) {
+    llm_status status = validate_f32_tensor(backend, input);
+    if (status == LLM_OK) {
+        status = validate_f32_tensor(backend, accumulator);
+    }
+    if (status != LLM_OK) {
+        return status;
+    }
+    if (input->element_count == 0U || accumulator->rank != 0U ||
+        input->storage == accumulator->storage ||
+        backend->ops->accumulate_sum_squares_f32 == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    return backend->ops->accumulate_sum_squares_f32(
+        backend->context, (const float *)input->storage->memory,
+        (float *)accumulator->storage->memory, input->element_count);
+}
+
 llm_status llm_matmul(llm_backend *backend, const llm_tensor *left, const llm_tensor *right,
                       llm_tensor *output) {
     llm_status status = validate_f32_tensor(backend, left);
@@ -709,7 +728,7 @@ llm_status llm_attention_backward(llm_backend *backend, const llm_tensor *query,
         (float *)value_gradient->storage->memory);
 }
 
-llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, const llm_tensor *gradient,
+llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, llm_tensor *gradient,
                             llm_tensor *first_moment, llm_tensor *second_moment,
                             const llm_adamw_options *options) {
     if (options == NULL || !isfinite(options->learning_rate) || options->learning_rate < 0.0F ||
@@ -746,9 +765,9 @@ llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, const l
         return LLM_UNSUPPORTED_OPERATION;
     }
     return backend->ops->adamw_update_f32(
-        backend->context, (float *)parameter->storage->memory,
-        (const float *)gradient->storage->memory, (float *)first_moment->storage->memory,
-        (float *)second_moment->storage->memory, parameter->element_count, options->learning_rate,
-        options->beta1, options->beta2, options->epsilon, options->weight_decay,
-        options->gradient_scale, options->step);
+        backend->context, (float *)parameter->storage->memory, (float *)gradient->storage->memory,
+        (float *)first_moment->storage->memory, (float *)second_moment->storage->memory,
+        parameter->element_count, options->learning_rate, options->beta1, options->beta2,
+        options->epsilon, options->weight_decay, options->gradient_scale, options->step,
+        options->zero_gradient != 0);
 }

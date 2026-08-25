@@ -31,6 +31,7 @@ struct lm_dataset {
     uint32_t model_vocabulary_size;
     token_id end_of_document_token;
     lm_dataset_split split;
+    unsigned char tokenizer_checksum[TOKENIZER_SHA256_DIGEST_SIZE];
 };
 
 struct lm_batcher {
