@@ -349,8 +349,8 @@ llm_status llm_cross_entropy_forward(llm_backend *backend, const llm_tensor *log
     }
     return backend->ops->cross_entropy_forward_f32(
         backend->context, (const float *)logits->storage->memory,
-        (const uint32_t *)targets->storage->memory, logits->shape[0], logits->shape[1],
-        (float *)loss->storage->memory);
+        (const uint32_t *)targets->storage->memory, NULL, logits->shape[0], logits->shape[1],
+        logits->shape[0], (float *)loss->storage->memory);
 }
 
 llm_status llm_cross_entropy_backward(llm_backend *backend, const llm_tensor *logits,
@@ -371,8 +371,83 @@ llm_status llm_cross_entropy_backward(llm_backend *backend, const llm_tensor *lo
     }
     return backend->ops->cross_entropy_backward_f32(
         backend->context, (const float *)logits->storage->memory,
-        (const uint32_t *)targets->storage->memory, logits->shape[0], logits->shape[1],
-        (float *)logits_gradient->storage->memory);
+        (const uint32_t *)targets->storage->memory, NULL, logits->shape[0], logits->shape[1],
+        logits->shape[0], (float *)logits_gradient->storage->memory);
+}
+
+static llm_status validate_cross_entropy_mask(const llm_tensor *logits, const llm_tensor *targets,
+                                              const llm_tensor *loss_mask,
+                                              size_t normalization_target_count) {
+    if (loss_mask == NULL || loss_mask->dtype != LLM_DTYPE_U32 || loss_mask->rank != 1U ||
+        loss_mask->shape[0] != logits->shape[0] || normalization_target_count == 0U ||
+        normalization_target_count > logits->shape[0]) {
+        return LLM_INVALID_SHAPE;
+    }
+    if (loss_mask->storage == logits->storage || loss_mask->storage == targets->storage) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    return LLM_OK;
+}
+
+llm_status llm_cross_entropy_masked_forward(llm_backend *backend, const llm_tensor *logits,
+                                            const llm_tensor *targets,
+                                            const llm_tensor *loss_mask,
+                                            size_t normalization_target_count, llm_tensor *loss) {
+    llm_status status = validate_cross_entropy_inputs(backend, logits, targets);
+    if (status == LLM_OK) {
+        status = validate_u32_tensor(backend, loss_mask);
+    }
+    if (status == LLM_OK) {
+        status = validate_cross_entropy_mask(logits, targets, loss_mask,
+                                             normalization_target_count);
+    }
+    if (status == LLM_OK) {
+        status = validate_f32_tensor(backend, loss);
+    }
+    if (status != LLM_OK) {
+        return status;
+    }
+    if (loss->rank != 0U || loss->element_count != 1U || loss->storage == logits->storage ||
+        loss->storage == targets->storage || loss->storage == loss_mask->storage) {
+        return LLM_INVALID_SHAPE;
+    }
+    return backend->ops->cross_entropy_forward_f32(
+        backend->context, (const float *)logits->storage->memory,
+        (const uint32_t *)targets->storage->memory,
+        (const uint32_t *)loss_mask->storage->memory, logits->shape[0], logits->shape[1],
+        normalization_target_count, (float *)loss->storage->memory);
+}
+
+llm_status llm_cross_entropy_masked_backward(llm_backend *backend, const llm_tensor *logits,
+                                             const llm_tensor *targets,
+                                             const llm_tensor *loss_mask,
+                                             size_t normalization_target_count,
+                                             llm_tensor *logits_gradient) {
+    llm_status status = validate_cross_entropy_inputs(backend, logits, targets);
+    if (status == LLM_OK) {
+        status = validate_u32_tensor(backend, loss_mask);
+    }
+    if (status == LLM_OK) {
+        status = validate_cross_entropy_mask(logits, targets, loss_mask,
+                                             normalization_target_count);
+    }
+    if (status == LLM_OK) {
+        status = validate_f32_tensor(backend, logits_gradient);
+    }
+    if (status != LLM_OK) {
+        return status;
+    }
+    if (tensors_have_same_shape(logits, logits_gradient) == 0 ||
+        logits_gradient->storage == logits->storage ||
+        logits_gradient->storage == targets->storage ||
+        logits_gradient->storage == loss_mask->storage) {
+        return LLM_INVALID_SHAPE;
+    }
+    return backend->ops->cross_entropy_backward_f32(
+        backend->context, (const float *)logits->storage->memory,
+        (const uint32_t *)targets->storage->memory,
+        (const uint32_t *)loss_mask->storage->memory, logits->shape[0], logits->shape[1],
+        normalization_target_count, (float *)logits_gradient->storage->memory);
 }
 
 llm_status llm_matmul_ex(llm_backend *backend, const llm_tensor *left, const llm_tensor *right,

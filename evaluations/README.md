@@ -11,3 +11,11 @@ e parametri di generazione. Il test split non deve essere usato per scegliere
 prompt, parametri di generazione o checkpoint.
 
 La suite e' qualitativa: completa la validation quantitativa, non la sostituisce.
+
+`italiano-chat-75m-prompts.jsonl` verifica invece il comportamento istruzionale:
+aderenza, formato, ragionamento elementare, gestione dell'incertezza, richieste
+di chiarimento e sicurezza. Ogni record dichiara categoria e criteri manuali.
+La suite puo' essere eseguita in modo riproducibile con
+`utils/sft/evaluate_chat.py`, come descritto in
+`docs/italiano-chat-75m.md`. I prompt di valutazione non devono essere copiati
+nel corpus SFT.

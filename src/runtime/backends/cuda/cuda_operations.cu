@@ -525,10 +525,13 @@ llm_status llm_cuda_attention_backward_f32(void *opaque_context, const float *qu
 }
 
 llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float *logits,
-                                              const uint32_t *targets, size_t row_count,
-                                              size_t vocabulary_size, float *loss) {
+                                              const uint32_t *targets,
+                                              const uint32_t *loss_mask, size_t row_count,
+                                              size_t vocabulary_size,
+                                              size_t normalization_row_count, float *loss) {
     if (opaque_context == NULL || logits == NULL || targets == NULL || loss == NULL ||
-        vocabulary_size == 0U || row_count_is_launchable(row_count) == 0) {
+        vocabulary_size == 0U || normalization_row_count == 0U ||
+        normalization_row_count > row_count || row_count_is_launchable(row_count) == 0) {
         return LLM_INVALID_ARGUMENT;
     }
     if (row_count > SIZE_MAX / vocabulary_size) {
@@ -536,6 +539,9 @@ llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float 
     }
     llm_cuda_context *context = as_context(opaque_context);
     llm_status status = llm_cuda_check_indices(context, targets, row_count, vocabulary_size);
+    if (status == LLM_OK && loss_mask != NULL) {
+        status = llm_cuda_check_indices(context, loss_mask, row_count, 2U);
+    }
     if (status != LLM_OK) {
         return status;
     }
@@ -545,30 +551,40 @@ llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float 
         return status;
     }
     llm_cuda_launch_cross_entropy_forward(context->stream, device_const_float(logits),
-                                          device_const_u32(targets), device_float(loss), row_count,
-                                          vocabulary_size);
+                                          device_const_u32(targets),
+                                          loss_mask == NULL ? nullptr : device_const_u32(loss_mask),
+                                          device_float(loss), row_count, vocabulary_size,
+                                          normalization_row_count);
     ++context->metrics.kernel_launches;
     return finish_with_required_finite_check(context, loss, 1U);
 }
 
 llm_status llm_cuda_cross_entropy_backward_f32(void *opaque_context, const float *logits,
-                                               const uint32_t *targets, size_t row_count,
-                                               size_t vocabulary_size, float *gradient) {
+                                               const uint32_t *targets,
+                                               const uint32_t *loss_mask, size_t row_count,
+                                               size_t vocabulary_size,
+                                               size_t normalization_row_count, float *gradient) {
     if (opaque_context == NULL || logits == NULL || targets == NULL || gradient == NULL ||
-        vocabulary_size == 0U || row_count_is_launchable(row_count) == 0) {
+        vocabulary_size == 0U || normalization_row_count == 0U ||
+        normalization_row_count > row_count || row_count_is_launchable(row_count) == 0) {
         return LLM_INVALID_ARGUMENT;
     }
     if (row_count > SIZE_MAX / vocabulary_size) {
         return LLM_OVERFLOW;
     }
     llm_cuda_context *context = as_context(opaque_context);
-    const llm_status status = llm_cuda_check_indices(context, targets, row_count, vocabulary_size);
+    llm_status status = llm_cuda_check_indices(context, targets, row_count, vocabulary_size);
+    if (status == LLM_OK && loss_mask != NULL) {
+        status = llm_cuda_check_indices(context, loss_mask, row_count, 2U);
+    }
     if (status != LLM_OK) {
         return status;
     }
     llm_cuda_launch_cross_entropy_backward(context->stream, device_const_float(logits),
-                                           device_const_u32(targets), device_float(gradient),
-                                           row_count, vocabulary_size);
+                                           device_const_u32(targets),
+                                           loss_mask == NULL ? nullptr : device_const_u32(loss_mask),
+                                           device_float(gradient), row_count, vocabulary_size,
+                                           normalization_row_count);
     ++context->metrics.kernel_launches;
     return finish_with_finite_check(context, gradient, row_count * vocabulary_size);
 }

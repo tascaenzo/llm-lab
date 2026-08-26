@@ -98,10 +98,12 @@ static int test_cross_entropy(void) {
     const size_t targets_shape[] = {2U};
     llm_tensor logits = {0};
     llm_tensor targets = {0};
+    llm_tensor loss_mask = {0};
     llm_tensor loss = {0};
     llm_tensor gradient = {0};
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits) == LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 1U, targets_shape, &targets) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 1U, targets_shape, &loss_mask) == LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &loss) == LLM_OK);
     TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &gradient) == LLM_OK);
 
@@ -127,6 +129,33 @@ static int test_cross_entropy(void) {
     }
     TEST_ASSERT(close_enough(gradient_values[0] + gradient_values[1] + gradient_values[2], 0.0F));
 
+    const uint32_t mask_values[] = {1U, 0U};
+    TEST_ASSERT(llm_tensor_write(backend, &loss_mask, mask_values, sizeof(mask_values)) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_masked_forward(backend, &logits, &targets, &loss_mask, 1U,
+                                                 &loss) == LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &loss, &loss_value, sizeof(loss_value)) == LLM_OK);
+    TEST_ASSERT(close_enough(loss_value, 0.40760595F));
+    TEST_ASSERT(llm_cross_entropy_masked_backward(backend, &logits, &targets, &loss_mask, 1U,
+                                                  &gradient) == LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &gradient, gradient_values, sizeof(gradient_values)) ==
+                LLM_OK);
+    TEST_ASSERT(close_enough(gradient_values[0], -0.33475904F));
+    TEST_ASSERT(close_enough(gradient_values[1], 0.24472848F));
+    TEST_ASSERT(close_enough(gradient_values[2], 0.09003058F));
+    TEST_ASSERT(gradient_values[3] == 0.0F && gradient_values[4] == 0.0F &&
+                gradient_values[5] == 0.0F);
+
+    const uint32_t invalid_mask[] = {1U, 2U};
+    TEST_ASSERT(llm_tensor_write(backend, &loss_mask, invalid_mask, sizeof(invalid_mask)) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_masked_forward(backend, &logits, &targets, &loss_mask, 1U,
+                                                 &loss) == LLM_INVALID_ARGUMENT);
+    TEST_ASSERT(llm_tensor_write(backend, &loss_mask, mask_values, sizeof(mask_values)) == LLM_OK);
+    TEST_ASSERT(llm_cross_entropy_masked_forward(backend, &logits, &targets, &loss_mask, 2U,
+                                                 &loss) == LLM_OK);
+
+    for (size_t index = 0U; index < 6U; ++index) {
+        gradient_values[index] = expected[index];
+    }
     const float epsilon = 1.0e-3F;
     for (size_t changed = 0U; changed < 6U; ++changed) {
         float perturbed[6] = {0};
@@ -158,6 +187,7 @@ static int test_cross_entropy(void) {
 
     llm_tensor_destroy(&gradient);
     llm_tensor_destroy(&loss);
+    llm_tensor_destroy(&loss_mask);
     llm_tensor_destroy(&targets);
     llm_tensor_destroy(&logits);
     llm_backend_destroy(backend);

@@ -72,15 +72,19 @@ struct lm_model {
 struct lm_trainer {
     lm_model *model;
     lm_batcher *batcher;
+    lm_sft_batcher *sft_batcher;
+    int sft_mode;
     lm_trainer_config config;
     llm_tensor input_ids;
     llm_tensor target_ids;
+    llm_tensor loss_mask;
     llm_tensor logits;
     llm_tensor loss;
     llm_tensor logits_gradient;
     llm_tensor gradient_norm_square;
     token_id *host_inputs;
     token_id *host_targets;
+    uint32_t *host_loss_mask;
     unsigned long long step;
     float learning_rate;
     float gradient_norm;

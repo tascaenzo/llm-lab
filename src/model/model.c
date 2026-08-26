@@ -531,6 +531,23 @@ llm_status lm_model_zero_grad(lm_model *model) {
     return LLM_OK;
 }
 
+llm_status lm_model_reset_optimizer_state(lm_model *model) {
+    if (model == NULL || model->backend == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    llm_status status = LLM_OK;
+    for (size_t index = 0U; status == LLM_OK && index < model->parameter_count; ++index) {
+        status = llm_tensor_zero(model->backend, &model->parameters[index].gradient);
+        if (status == LLM_OK) {
+            status = llm_tensor_zero(model->backend, &model->parameters[index].first_moment);
+        }
+        if (status == LLM_OK) {
+            status = llm_tensor_zero(model->backend, &model->parameters[index].second_moment);
+        }
+    }
+    return status;
+}
+
 llm_status lm_model_apply_adamw(lm_model *model, const llm_adamw_options *options) {
     if (model == NULL || options == NULL)
         return LLM_INVALID_ARGUMENT;

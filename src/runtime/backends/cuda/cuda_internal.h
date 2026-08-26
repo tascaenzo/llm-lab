@@ -162,11 +162,15 @@ llm_status llm_cuda_attention_backward_f32(void *context, const float *query, co
 llm_status llm_cuda_softmax_last_f32(void *context, const float *input, float *output,
                                      size_t outer_count, size_t row_width);
 llm_status llm_cuda_cross_entropy_forward_f32(void *context, const float *logits,
-                                              const uint32_t *targets, size_t row_count,
-                                              size_t vocabulary_size, float *loss);
+                                              const uint32_t *targets,
+                                              const uint32_t *loss_mask, size_t row_count,
+                                              size_t vocabulary_size,
+                                              size_t normalization_row_count, float *loss);
 llm_status llm_cuda_cross_entropy_backward_f32(void *context, const float *logits,
-                                               const uint32_t *targets, size_t row_count,
-                                               size_t vocabulary_size, float *gradient);
+                                               const uint32_t *targets,
+                                               const uint32_t *loss_mask, size_t row_count,
+                                               size_t vocabulary_size,
+                                               size_t normalization_row_count, float *gradient);
 llm_status llm_cuda_adamw_update_f32(void *context, float *parameter, float *gradient,
                                      float *first_moment, float *second_moment, size_t value_count,
                                      float learning_rate, float beta1, float beta2, float epsilon,
@@ -228,11 +232,14 @@ void llm_cuda_launch_attention_backward(cudaStream_t stream, const float *query,
                                         size_t sequence_length, size_t query_head_count,
                                         size_t key_value_head_count, size_t head_dimension);
 void llm_cuda_launch_cross_entropy_forward(cudaStream_t stream, const float *logits,
-                                           const uint32_t *targets, float *loss, size_t row_count,
-                                           size_t vocabulary_size);
+                                           const uint32_t *targets, const uint32_t *loss_mask,
+                                           float *loss, size_t row_count, size_t vocabulary_size,
+                                           size_t normalization_row_count);
 void llm_cuda_launch_cross_entropy_backward(cudaStream_t stream, const float *logits,
-                                            const uint32_t *targets, float *gradient,
-                                            size_t row_count, size_t vocabulary_size);
+                                            const uint32_t *targets, const uint32_t *loss_mask,
+                                            float *gradient, size_t row_count,
+                                            size_t vocabulary_size,
+                                            size_t normalization_row_count);
 void llm_cuda_launch_adamw(cudaStream_t stream, float *parameter, float *gradient,
                            float *first_moment, float *second_moment, size_t count,
                            float learning_rate, float beta1, float beta2, float epsilon,

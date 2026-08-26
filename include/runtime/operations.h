@@ -127,6 +127,24 @@ llm_status llm_cross_entropy_forward(llm_backend *backend, const llm_tensor *log
 llm_status llm_cross_entropy_backward(llm_backend *backend, const llm_tensor *logits,
                                       const llm_tensor *targets, llm_tensor *logits_gradient);
 
+/**
+ * Computes mean next-token cross-entropy over the rows selected by a U32 [N]
+ * mask. Mask values must be zero or one. normalization_target_count controls
+ * the divisor, allowing callers to request either a mean (number of ones) or
+ * an unnormalized sum (one). Ignored rows contribute neither loss nor gradient.
+ */
+llm_status llm_cross_entropy_masked_forward(llm_backend *backend, const llm_tensor *logits,
+                                            const llm_tensor *targets,
+                                            const llm_tensor *loss_mask,
+                                            size_t normalization_target_count, llm_tensor *loss);
+
+/** Computes the gradient of masked mean cross-entropy with respect to logits. */
+llm_status llm_cross_entropy_masked_backward(llm_backend *backend, const llm_tensor *logits,
+                                             const llm_tensor *targets,
+                                             const llm_tensor *loss_mask,
+                                             size_t normalization_target_count,
+                                             llm_tensor *logits_gradient);
+
 /** Updates an FP32 parameter and its two FP32 AdamW moment tensors in place. */
 llm_status llm_adamw_update(llm_backend *backend, llm_tensor *parameter, llm_tensor *gradient,
                             llm_tensor *first_moment, llm_tensor *second_moment,

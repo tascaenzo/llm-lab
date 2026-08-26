@@ -19,10 +19,11 @@ prima la pagina wiki e poi la specifica corrispondente.
 8. [Modello Minimal: prima rete addestrabile](model-minimal.md)
 9. [Italiano-Base-75M: primo decoder utilizzabile](italiano-base-75m.md)
 10. [Checkpoint pubblici di Italiano Base 75M](italiano-base-75m-checkpoints.md)
-11. [Backend CPU](backend-cpu.md)
-12. [Backend Metal](backend-metal.md)
-13. [Backend CUDA](backend-cuda.md)
-14. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
+11. [Italiano-Chat-75M: consolidamento e SFT](italiano-chat-75m.md)
+12. [Backend CPU](backend-cpu.md)
+13. [Backend Metal](backend-metal.md)
+14. [Backend CUDA](backend-cuda.md)
+15. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

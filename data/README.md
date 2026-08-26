@@ -19,6 +19,7 @@ Le tre directory sono create dalle utility quando servono e sono ignorate da Git
 fonte pubblica -> raw -> clean -> tokenizer .llmtok
                          |             |
                          +-------------+-> dataset .llmdat
+conversazioni autorizzate -> clean/conversations.jsonl -> dataset .llmsft
 ```
 
 - `raw` conserva il file esattamente come ricevuto; permette di ripetere la
@@ -37,5 +38,7 @@ La procedura completa e gli script di estrazione e training sono in
 [../docs/corpus.md](../docs/corpus.md).
 La derivazione degli split del language model e' in
 [../docs/dataset.md](../docs/dataset.md).
+Lo schema conversazionale, i controlli di licenza e la derivazione `.llmsft`
+sono in [../docs/italiano-chat-75m.md](../docs/italiano-chat-75m.md).
 Una spiegazione end-to-end di ogni file e del suo uso nel futuro training e' in
 [../wiki/09-flusso-dati-e-artefatti.md](../wiki/09-flusso-dati-e-artefatti.md).

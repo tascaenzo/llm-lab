@@ -234,7 +234,8 @@ registri origine, licenza, filtri, deduplicazione, identificatori e split.
 Il trainer del tokenizer rifiuta manifest che non dichiarano esplicitamente
 `tokenizer_input_split: train`, evitando contaminazione di validation e test.
 
-Il fine-tuning chat e' una fase successiva e separata:
+Il fine-tuning chat e' una fase successiva e separata, ora implementata e
+specificata in [Italiano-Chat-75M](italiano-chat-75m.md):
 
 ```text
 Italiano-Base-75M
@@ -244,10 +245,9 @@ Italiano-Base-75M
       -> Italiano-Chat-75M
 ```
 
-Non usare conversazioni personali o dati privati nel dataset. La perdita sui
-token del prompt deve essere mascherata durante SFT; questa capacita' richiede
-un'estensione esplicita del formato dataset, non un'etichetta ad hoc nel
-batcher v1.
+Non usare conversazioni personali o dati privati nel dataset. Il formato
+`.llmsft` conserva una mask per posizione e il trainer calcola loss e gradienti
+soltanto sul contenuto assistant e sul relativo token di fine turno.
 
 ## Valutazione e criteri di uscita
 

@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "dataset/dataset.h"
+#include "dataset/sft_dataset.h"
 #include "runtime/runtime.h"
 
 typedef struct lm_model lm_model;
@@ -75,6 +76,9 @@ llm_status lm_model_backward(lm_model *model, const llm_tensor *input_ids,
 /** Clears every parameter gradient. */
 llm_status lm_model_zero_grad(lm_model *model);
 
+/** Clears gradients and AdamW moments while preserving trained parameter values. */
+llm_status lm_model_reset_optimizer_state(lm_model *model);
+
 /** Applies AdamW to every registered parameter. The caller supplies a non-zero step. */
 llm_status lm_model_apply_adamw(lm_model *model, const llm_adamw_options *options);
 
@@ -86,6 +90,9 @@ const llm_tensor *lm_model_parameter_gradient(const lm_model *model, size_t inde
 /** Creates a trainer bound to one training dataset and model. */
 llm_status lm_trainer_create(lm_model *model, lm_dataset *dataset, const lm_trainer_config *config,
                              lm_trainer **out_trainer);
+/** Creates an assistant-only-loss trainer over an SFT training split. */
+llm_status lm_sft_trainer_create(lm_model *model, lm_sft_dataset *dataset,
+                                 const lm_trainer_config *config, lm_trainer **out_trainer);
 void lm_trainer_destroy(lm_trainer *trainer);
 /** Copies the immutable training configuration into caller-owned storage. */
 llm_status lm_trainer_get_config(const lm_trainer *trainer, lm_trainer_config *out_config);
@@ -101,10 +108,15 @@ float lm_trainer_gradient_norm(const lm_trainer *trainer);
 /** Evaluates fixed random windows from a validation split without changing trainer state. */
 llm_status lm_model_evaluate_validation(lm_model *model, lm_dataset *dataset, size_t batch_size,
                                         size_t batch_count, uint64_t seed, float *out_loss);
+llm_status lm_model_evaluate_sft_validation(lm_model *model, lm_sft_dataset *dataset,
+                                            size_t batch_size, size_t batch_count, uint64_t seed,
+                                            float *out_loss);
 
 /** Atomically saves model configuration, parameters, AdamW moments and trainer state. */
 llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset,
                                       const char *path);
+llm_status lm_sft_trainer_save_checkpoint(const lm_trainer *trainer, lm_sft_dataset *dataset,
+                                          const char *path);
 
 /** Restores a model from a checkpoint; with a dataset, also restores its trainer and batcher state.
  */
@@ -116,5 +128,12 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
                                                    const char *path,
                                                    const lm_trainer_resume_options *options,
                                                    lm_model **out_model, lm_trainer **out_trainer);
+
+llm_status lm_sft_trainer_load_checkpoint_with_options(
+    llm_backend *backend, lm_sft_dataset *dataset, const char *path,
+    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer);
+llm_status lm_sft_trainer_load_checkpoint(llm_backend *backend, lm_sft_dataset *dataset,
+                                          const char *path, lm_model **out_model,
+                                          lm_trainer **out_trainer);
 
 #endif

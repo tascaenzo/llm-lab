@@ -64,6 +64,39 @@ def write_tiny_training_dataset(path):
     path.write_bytes(header + payload)
 
 
+def fnv1a_bucket(text):
+    value = 14695981039346656037
+    for byte in text.encode("utf-8"):
+        value = ((value ^ byte) * 1099511628211) & ((1 << 64) - 1)
+    return value % 10000
+
+
+def write_sft_examples(path):
+    examples = []
+    found = set()
+    for number in range(10000):
+        identifier = f"integration-sft:{number}"
+        bucket = fnv1a_bucket(identifier)
+        split = "train" if bucket < 9000 else "validation" if bucket < 9500 else "test"
+        if split in found:
+            continue
+        found.add(split)
+        examples.append(
+            {
+                "id": identifier,
+                "source": "integration-fixture",
+                "license": "CC0-1.0",
+                "messages": [
+                    {"role": "user", "content": "a"},
+                    {"role": "assistant", "content": "b"},
+                ],
+            }
+        )
+        if len(found) == 3:
+            break
+    path.write_text("".join(json.dumps(item) + "\n" for item in examples), encoding="utf-8")
+
+
 def main():
     if len(sys.argv) != 5:
         raise SystemExit("uso: test_dataset_cli.py CLI DOCUMENTS CORPUS_A CORPUS_B")
@@ -305,6 +338,124 @@ def main():
         )
         if not reserved_generated.stdout.strip():
             raise AssertionError("generazione con ID riservati vuota")
+
+        sft_base_prefix = root / "sft-base-dataset"
+        sft_base_report = json.loads(
+            run(
+                [
+                    str(cli),
+                    "dataset",
+                    "prepare",
+                    str(model),
+                    str(documents),
+                    str(sft_base_prefix),
+                    "--reserved-tokens",
+                    "7",
+                ]
+            ).stdout
+        )
+        if sft_base_report["model_vocabulary_size"] != 272:
+            raise AssertionError(sft_base_report)
+        sft_base_checkpoint = root / "sft-base.llmckpt"
+        run(
+            [
+                str(cli),
+                "model",
+                "train",
+                f"{sft_base_prefix}.train.llmdat",
+                "1",
+                "--batch-size",
+                "1",
+                "--context",
+                "16",
+                "--hidden",
+                "4",
+                "--learning-rate",
+                "0.001",
+                "--checkpoint",
+                str(sft_base_checkpoint),
+            ]
+        )
+        sft_jsonl = root / "conversations.jsonl"
+        write_sft_examples(sft_jsonl)
+        sft_prefix = root / "italiano-chat"
+        sft_dataset_report = json.loads(
+            run(
+                [
+                    str(cli),
+                    "dataset",
+                    "sft-prepare",
+                    str(model),
+                    str(sft_jsonl),
+                    str(sft_prefix),
+                    "--context",
+                    "16",
+                ]
+            ).stdout
+        )
+        if (
+            sft_dataset_report["schema"] != "llm-lab-sft-dataset-report-v1"
+            or sft_dataset_report["protocol"]["assistant"] != 267
+            or any(sft_dataset_report["splits"][split]["examples"] != 1 for split in ("train", "validation", "test"))
+        ):
+            raise AssertionError(sft_dataset_report)
+        sft_checkpoint = root / "italiano-chat.llmckpt"
+        sft_best = root / "italiano-chat-best.llmckpt"
+        sft_log = root / "italiano-chat.jsonl"
+        sft_training = json.loads(
+            run(
+                [
+                    str(cli),
+                    "model",
+                    "sft",
+                    f"{sft_prefix}.train.llmsft",
+                    "2",
+                    "--base",
+                    str(sft_base_checkpoint),
+                    "--batch-size",
+                    "1",
+                    "--learning-rate",
+                    "0.001",
+                    "--min-learning-rate",
+                    "0.0001",
+                    "--checkpoint",
+                    str(sft_checkpoint),
+                    "--validation",
+                    f"{sft_prefix}.validation.llmsft",
+                    "--validation-every",
+                    "1",
+                    "--validation-batches",
+                    "1",
+                    "--best-checkpoint",
+                    str(sft_best),
+                    "--log",
+                    str(sft_log),
+                ]
+            ).stdout
+        )
+        if (
+            sft_training["schema"] != "llm-lab-sft-training-v1"
+            or sft_training["steps"] != 2
+            or not math.isfinite(sft_training["assistant_loss"])
+            or not sft_checkpoint.is_file()
+            or not sft_best.is_file()
+        ):
+            raise AssertionError(sft_training)
+        run(
+            [
+                str(cli),
+                "model",
+                "chat",
+                str(sft_checkpoint),
+                str(model),
+                "2",
+                "a",
+                "--system",
+                "s",
+                "--backend",
+                "cpu",
+            ]
+        )
         sampled_command = [
             str(cli),
             "model",

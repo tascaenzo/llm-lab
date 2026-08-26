@@ -27,6 +27,8 @@ struct GatherParameters {
 struct CrossEntropyParameters {
     uint row_count;
     uint vocabulary_size;
+    uint normalization_row_count;
+    uint use_loss_mask;
 };
 
 struct RmsNormParameters {
@@ -825,14 +827,18 @@ kernel void llm_softmax_last_f32(device const float *input [[buffer(0)]],
 
 kernel void llm_cross_entropy_forward_f32(device const float *logits [[buffer(0)]],
                                           device const uint *targets [[buffer(1)]],
-                                          device atomic_uint *loss [[buffer(2)]],
-                                          constant CrossEntropyParameters &parameters [[buffer(3)]],
+                                          device const uint *loss_mask [[buffer(2)]],
+                                          device atomic_uint *loss [[buffer(3)]],
+                                          constant CrossEntropyParameters &parameters [[buffer(4)]],
                                           uint row [[threadgroup_position_in_grid]],
                                           uint thread_index [[thread_index_in_threadgroup]],
                                           uint lane [[thread_index_in_simdgroup]],
                                           uint simdgroup [[simdgroup_index_in_threadgroup]],
                                           uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.row_count) {
+        return;
+    }
+    if (parameters.use_loss_mask != 0 && loss_mask[row] == 0) {
         return;
     }
     threadgroup float partial[32];
@@ -866,17 +872,26 @@ kernel void llm_cross_entropy_forward_f32(device const float *logits [[buffer(0)
     sum = llm_threadgroup_sum(sum, partial, thread_index, lane, simdgroup, threads_per_group);
     if (thread_index == 0) {
         const float row_loss = maximum + log(sum) - logits[offset + targets[row]];
-        llm_atomic_add_float(loss, row_loss / float(parameters.row_count));
+        llm_atomic_add_float(loss, row_loss / float(parameters.normalization_row_count));
     }
 }
 
 kernel void llm_cross_entropy_backward_f32(
     device const float *logits [[buffer(0)]], device const uint *targets [[buffer(1)]],
-    device float *gradient [[buffer(2)]], constant CrossEntropyParameters &parameters [[buffer(3)]],
+    device const uint *loss_mask [[buffer(2)]], device float *gradient [[buffer(3)]],
+    constant CrossEntropyParameters &parameters [[buffer(4)]],
     uint row [[threadgroup_position_in_grid]], uint thread_index [[thread_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]], uint simdgroup [[simdgroup_index_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.row_count) {
+        return;
+    }
+    if (parameters.use_loss_mask != 0 && loss_mask[row] == 0) {
+        const uint ignored_offset = row * parameters.vocabulary_size;
+        for (uint column = thread_index; column < parameters.vocabulary_size;
+             column += threads_per_group) {
+            gradient[ignored_offset + column] = 0.0f;
+        }
         return;
     }
     threadgroup float partial[32];
@@ -908,12 +923,12 @@ kernel void llm_cross_entropy_backward_f32(
         sum += exp(logits[offset + column] - maximum);
     }
     sum = llm_threadgroup_sum(sum, partial, thread_index, lane, simdgroup, threads_per_group);
-    const float scale = 1.0f / (sum * float(parameters.row_count));
+    const float scale = 1.0f / (sum * float(parameters.normalization_row_count));
     for (uint column = thread_index; column < parameters.vocabulary_size;
          column += threads_per_group) {
         float value = exp(logits[offset + column] - maximum) * scale;
         if (column == targets[row]) {
-            value -= 1.0f / float(parameters.row_count);
+            value -= 1.0f / float(parameters.normalization_row_count);
         }
         gradient[offset + column] = value;
     }

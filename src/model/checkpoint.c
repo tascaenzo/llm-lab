@@ -199,10 +199,15 @@ static char *temporary_path(const char *path) {
     return result;
 }
 
-llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset,
-                                      const char *path) {
-    if (trainer == NULL || trainer->model == NULL || dataset == NULL || path == NULL ||
-        lm_dataset_get_split(dataset) != LM_DATASET_TRAIN) {
+static llm_status save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset,
+                                  lm_sft_dataset *sft_dataset, const char *path) {
+    if (trainer == NULL || trainer->model == NULL || path == NULL ||
+        ((dataset == NULL) == (sft_dataset == NULL)) ||
+        (dataset != NULL &&
+         (trainer->sft_mode != 0 || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
+        (sft_dataset != NULL &&
+         (trainer->sft_mode == 0 ||
+          lm_sft_dataset_get_split(sft_dataset) != LM_DATASET_TRAIN))) {
         return LLM_INVALID_ARGUMENT;
     }
     const lm_model *model = trainer->model;
@@ -225,7 +230,7 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
     store_u32(header + 8U, LM_CHECKPOINT_VERSION);
     store_u32(header + 12U, LM_CHECKPOINT_V5_HEADER_SIZE);
     store_u32(header + 16U, model->config.vocabulary_size);
-    store_u32(header + 20U, (uint32_t)lm_dataset_get_split(dataset));
+    store_u32(header + 20U, (uint32_t)LM_DATASET_TRAIN);
     store_u64(header + 24U, model->config.context_length);
     store_u64(header + 32U, model->config.hidden_size);
     store_u64(header + 40U, model->config.layer_count);
@@ -241,22 +246,27 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
     store_f32(header + 108U, trainer->config.epsilon);
     store_f32(header + 112U, trainer->config.weight_decay);
     store_u64(header + 116U, trainer->step);
-    store_u64(header + 124U, lm_batcher_random_state(trainer->batcher));
-    store_u64(header + 132U, lm_dataset_token_count(dataset));
-    store_u64(header + 140U, lm_dataset_document_count(dataset));
+    lm_batcher_state batcher_state = {0};
+    const lm_dataset_status batcher_status =
+        trainer->sft_mode != 0 ? lm_sft_batcher_get_state(trainer->sft_batcher, &batcher_state)
+                               : lm_batcher_get_state(trainer->batcher, &batcher_state);
+    if (batcher_status != LM_DATASET_OK) {
+        (void)fclose(file);
+        (void)remove(part_path);
+        free(part_path);
+        return LLM_BACKEND_ERROR;
+    }
+    store_u64(header + 124U, batcher_state.random_state);
+    store_u64(header + 132U, dataset != NULL ? lm_dataset_token_count(dataset)
+                                             : lm_sft_dataset_supervised_token_count(sft_dataset));
+    store_u64(header + 140U, dataset != NULL ? lm_dataset_document_count(dataset)
+                                             : lm_sft_dataset_example_count(sft_dataset));
     store_u64(header + 148U, saved_payload_size);
     store_u64(header + 156U, trainer->config.gradient_accumulation_steps);
     store_u64(header + 164U, trainer->config.warmup_steps);
     store_u64(header + 172U, trainer->config.total_steps);
     store_f32(header + 180U, trainer->config.minimum_learning_rate);
     store_u32(header + 188U, (uint32_t)trainer->config.sampling);
-    lm_batcher_state batcher_state = {0};
-    if (lm_batcher_get_state(trainer->batcher, &batcher_state) != LM_DATASET_OK) {
-        (void)fclose(file);
-        (void)remove(part_path);
-        free(part_path);
-        return LLM_BACKEND_ERROR;
-    }
     store_u64(header + 192U, batcher_state.epoch);
     store_u64(header + 200U, batcher_state.sample_index);
     store_u64(header + 208U, batcher_state.next_offset);
@@ -305,14 +315,28 @@ llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dat
     return status;
 }
 
-llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_dataset *dataset,
-                                                   const char *path,
-                                                   const lm_trainer_resume_options *options,
-                                                   lm_model **out_model, lm_trainer **out_trainer) {
+llm_status lm_trainer_save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset,
+                                      const char *path) {
+    return save_checkpoint(trainer, dataset, NULL, path);
+}
+
+llm_status lm_sft_trainer_save_checkpoint(const lm_trainer *trainer, lm_sft_dataset *dataset,
+                                          const char *path) {
+    return save_checkpoint(trainer, NULL, dataset, path);
+}
+
+static llm_status load_checkpoint(llm_backend *backend, lm_dataset *dataset,
+                                  lm_sft_dataset *sft_dataset, const char *path,
+                                  const lm_trainer_resume_options *options,
+                                  lm_model **out_model, lm_trainer **out_trainer) {
     if (backend == NULL || path == NULL || out_model == NULL ||
+        (dataset != NULL && sft_dataset != NULL) ||
         (dataset != NULL &&
          (out_trainer == NULL || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
-        (dataset == NULL && out_trainer != NULL)) {
+        (sft_dataset != NULL &&
+         (out_trainer == NULL ||
+          lm_sft_dataset_get_split(sft_dataset) != LM_DATASET_TRAIN)) ||
+        (dataset == NULL && sft_dataset == NULL && out_trainer != NULL)) {
         return LLM_INVALID_ARGUMENT;
     }
     *out_model = NULL;
@@ -388,7 +412,12 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
          (dataset != NULL &&
           (model_config.vocabulary_size != lm_dataset_model_vocabulary_size(dataset) ||
            token_count != lm_dataset_token_count(dataset) ||
-           document_count != lm_dataset_document_count(dataset))))) {
+           document_count != lm_dataset_document_count(dataset))) ||
+         (sft_dataset != NULL &&
+          (model_config.vocabulary_size != lm_sft_dataset_model_vocabulary_size(sft_dataset) ||
+           model_config.context_length != lm_sft_dataset_context_length(sft_dataset) ||
+           token_count != lm_sft_dataset_supervised_token_count(sft_dataset) ||
+           document_count != lm_sft_dataset_example_count(sft_dataset))))) {
         status = LLM_INVALID_ARGUMENT;
     }
     lm_model *model = NULL;
@@ -405,6 +434,9 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
     }
     if (status == LLM_OK && dataset != NULL) {
         status = lm_trainer_create(model, dataset, &trainer_config, &trainer);
+    }
+    if (status == LLM_OK && sft_dataset != NULL) {
+        status = lm_sft_trainer_create(model, sft_dataset, &trainer_config, &trainer);
     }
     tokenizer_sha256_context checksum = {0};
     if (status == LLM_OK && version >= 5U) {
@@ -436,7 +468,7 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
     if (fclose(file) != 0 && status == LLM_OK) {
         status = LLM_BACKEND_ERROR;
     }
-    if (status == LLM_OK && trainer != NULL) {
+    if (status == LLM_OK && trainer != NULL && trainer->sft_mode == 0) {
         if (version < 3U) {
             if (lm_batcher_set_random_state(trainer->batcher, batcher_state) != LM_DATASET_OK) {
                 status = LLM_INVALID_ARGUMENT;
@@ -454,6 +486,23 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
             }
         }
     }
+    if (status == LLM_OK && trainer != NULL && trainer->sft_mode != 0) {
+        if (version < 3U) {
+            status = LLM_INVALID_ARGUMENT;
+        } else {
+            const lm_batcher_state restored_state = {
+                .random_state = batcher_state,
+                .epoch = load_u64(header + 192U),
+                .sample_index = load_u64(header + 200U),
+                .next_offset = load_u64(header + 208U),
+                .stride = load_u64(header + 216U),
+            };
+            if (lm_sft_batcher_set_state(trainer->sft_batcher, &restored_state) !=
+                LM_DATASET_OK) {
+                status = LLM_INVALID_ARGUMENT;
+            }
+        }
+    }
     if (status == LLM_OK) {
         if (trainer != NULL) {
             trainer->step = step;
@@ -467,8 +516,29 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
     return status;
 }
 
+llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_dataset *dataset,
+                                                   const char *path,
+                                                   const lm_trainer_resume_options *options,
+                                                   lm_model **out_model,
+                                                   lm_trainer **out_trainer) {
+    return load_checkpoint(backend, dataset, NULL, path, options, out_model, out_trainer);
+}
+
 llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
                                       lm_model **out_model, lm_trainer **out_trainer) {
     return lm_trainer_load_checkpoint_with_options(backend, dataset, path, NULL, out_model,
                                                    out_trainer);
+}
+
+llm_status lm_sft_trainer_load_checkpoint_with_options(
+    llm_backend *backend, lm_sft_dataset *dataset, const char *path,
+    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer) {
+    return load_checkpoint(backend, NULL, dataset, path, options, out_model, out_trainer);
+}
+
+llm_status lm_sft_trainer_load_checkpoint(llm_backend *backend, lm_sft_dataset *dataset,
+                                          const char *path, lm_model **out_model,
+                                          lm_trainer **out_trainer) {
+    return lm_sft_trainer_load_checkpoint_with_options(backend, dataset, path, NULL, out_model,
+                                                       out_trainer);
 }

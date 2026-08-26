@@ -93,12 +93,30 @@ target_compile_definitions(dataset_test PRIVATE
 llm_lab_set_warnings(dataset_test)
 add_test(NAME dataset.unit COMMAND dataset_test)
 
+add_executable(sft_dataset_test dataset/test_sft_dataset.c)
+target_compile_features(sft_dataset_test PRIVATE c_std_23)
+target_link_libraries(sft_dataset_test PRIVATE dataset)
+target_include_directories(sft_dataset_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+target_compile_definitions(sft_dataset_test PRIVATE
+    LLM_LAB_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+llm_lab_set_warnings(sft_dataset_test)
+add_test(NAME dataset.sft COMMAND sft_dataset_test)
+
 add_executable(model_test model/test_model.c)
 target_compile_features(model_test PRIVATE c_std_23)
 target_link_libraries(model_test PRIVATE model)
 target_include_directories(model_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
 llm_lab_set_warnings(model_test)
 add_test(NAME model.unit COMMAND model_test)
+
+add_executable(sft_trainer_test model/test_sft_trainer.c)
+target_compile_features(sft_trainer_test PRIVATE c_std_23)
+target_link_libraries(sft_trainer_test PRIVATE model)
+target_include_directories(sft_trainer_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer)
+target_compile_definitions(sft_trainer_test PRIVATE
+    LLM_LAB_TEST_BINARY_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+llm_lab_set_warnings(sft_trainer_test)
+add_test(NAME model.sft COMMAND sft_trainer_test)
 
 add_test(
     NAME python.unit

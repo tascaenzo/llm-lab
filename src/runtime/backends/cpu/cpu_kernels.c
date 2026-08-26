@@ -263,16 +263,26 @@ static llm_status find_row_softmax_denominator(const float *row, size_t row_widt
 }
 
 llm_status llm_cpu_cross_entropy_forward_f32(const float *logits, const uint32_t *targets,
-                                             size_t row_count, size_t vocabulary_size,
-                                             float *loss) {
+                                             const uint32_t *loss_mask, size_t row_count,
+                                             size_t vocabulary_size,
+                                             size_t normalization_row_count, float *loss) {
     if (logits == NULL || targets == NULL || loss == NULL || row_count == 0U ||
-        vocabulary_size == 0U) {
+        vocabulary_size == 0U || normalization_row_count == 0U ||
+        normalization_row_count > row_count) {
         return LLM_INVALID_ARGUMENT;
     }
     double loss_sum = 0.0;
     for (size_t row = 0U; row < row_count; ++row) {
+        if (loss_mask != NULL && loss_mask[row] > 1U) {
+            return LLM_INVALID_ARGUMENT;
+        }
         if ((size_t)targets[row] >= vocabulary_size) {
             return LLM_INVALID_INDEX;
+        }
+    }
+    for (size_t row = 0U; row < row_count; ++row) {
+        if (loss_mask != NULL && loss_mask[row] == 0U) {
+            continue;
         }
         const float *logit_row = logits + row * vocabulary_size;
         float maximum = 0.0F;
@@ -288,7 +298,7 @@ llm_status llm_cpu_cross_entropy_forward_f32(const float *logits, const uint32_t
         }
         loss_sum += (double)row_loss;
     }
-    const double mean_loss = loss_sum / (double)row_count;
+    const double mean_loss = loss_sum / (double)normalization_row_count;
     if (isfinite(mean_loss) == 0) {
         return LLM_NUMERICAL_ERROR;
     }
@@ -297,13 +307,17 @@ llm_status llm_cpu_cross_entropy_forward_f32(const float *logits, const uint32_t
 }
 
 llm_status llm_cpu_cross_entropy_backward_f32(const float *logits, const uint32_t *targets,
-                                              size_t row_count, size_t vocabulary_size,
+                                              const uint32_t *loss_mask, size_t row_count,
+                                              size_t vocabulary_size,
                                               size_t normalization_row_count, float *gradient) {
     if (logits == NULL || targets == NULL || gradient == NULL || row_count == 0U ||
         vocabulary_size == 0U || normalization_row_count == 0U) {
         return LLM_INVALID_ARGUMENT;
     }
     for (size_t row = 0U; row < row_count; ++row) {
+        if (loss_mask != NULL && loss_mask[row] > 1U) {
+            return LLM_INVALID_ARGUMENT;
+        }
         if ((size_t)targets[row] >= vocabulary_size) {
             return LLM_INVALID_INDEX;
         }
@@ -312,6 +326,12 @@ llm_status llm_cpu_cross_entropy_backward_f32(const float *logits, const uint32_
     for (size_t row = 0U; row < row_count; ++row) {
         const float *logit_row = logits + row * vocabulary_size;
         float *gradient_row = gradient + row * vocabulary_size;
+        if (loss_mask != NULL && loss_mask[row] == 0U) {
+            for (size_t column = 0U; column < vocabulary_size; ++column) {
+                gradient_row[column] = 0.0F;
+            }
+            continue;
+        }
         float maximum = 0.0F;
         float sum = 0.0F;
         const llm_status status =

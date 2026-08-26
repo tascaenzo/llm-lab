@@ -38,6 +38,8 @@ typedef struct metal_gather_parameters {
 typedef struct metal_cross_entropy_parameters {
     uint32_t row_count;
     uint32_t vocabulary_size;
+    uint32_t normalization_row_count;
+    uint32_t use_loss_mask;
 } metal_cross_entropy_parameters;
 
 typedef struct metal_rms_norm_parameters {
@@ -1294,29 +1296,49 @@ llm_status llm_metal_softmax_last_f32(void *opaque_context, const float *input, 
 
 static llm_status
 metal_cross_entropy_parameters_create(llm_metal_context *context, const uint32_t *targets,
-                                      size_t row_count, size_t vocabulary_size,
+                                      const uint32_t *loss_mask, size_t row_count,
+                                      size_t vocabulary_size, size_t normalization_row_count,
                                       metal_cross_entropy_parameters *out_parameters) {
     if (targets == NULL || out_parameters == NULL ||
         metal_size_to_u32(row_count, &out_parameters->row_count) == 0 ||
-        metal_size_to_u32(vocabulary_size, &out_parameters->vocabulary_size) == 0) {
+        metal_size_to_u32(vocabulary_size, &out_parameters->vocabulary_size) == 0 ||
+        normalization_row_count == 0U || normalization_row_count > row_count ||
+        metal_size_to_u32(normalization_row_count,
+                          &out_parameters->normalization_row_count) == 0) {
         return LLM_OVERFLOW;
     }
-    return metal_indices_are_valid(context, targets, row_count, vocabulary_size) != 0
-               ? LLM_OK
-               : LLM_INVALID_INDEX;
+    out_parameters->use_loss_mask = loss_mask != NULL ? 1U : 0U;
+    if (metal_indices_are_valid(context, targets, row_count, vocabulary_size) == 0) {
+        return LLM_INVALID_INDEX;
+    }
+    if (loss_mask != NULL) {
+        if (llm_metal_flush(context) != LLM_OK) {
+            return LLM_BACKEND_ERROR;
+        }
+        const uint32_t *values = [metal_buffer_handle(loss_mask) contents];
+        for (size_t index = 0U; index < row_count; ++index) {
+            if (values[index] > 1U) {
+                return LLM_INVALID_ARGUMENT;
+            }
+        }
+    }
+    return LLM_OK;
 }
 
 static llm_status metal_cross_entropy_dispatch(void *opaque_context, llm_metal_pipeline pipeline,
                                                const float *logits, const uint32_t *targets,
-                                               float *output, size_t row_count,
-                                               size_t vocabulary_size, size_t output_count) {
+                                               const uint32_t *loss_mask, float *output,
+                                               size_t row_count, size_t vocabulary_size,
+                                               size_t normalization_row_count,
+                                               size_t output_count) {
     if (opaque_context == NULL || logits == NULL || targets == NULL || output == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
     llm_metal_context *context = opaque_context;
     metal_cross_entropy_parameters parameters = {0};
-    llm_status status = metal_cross_entropy_parameters_create(context, targets, row_count,
-                                                              vocabulary_size, &parameters);
+    llm_status status = metal_cross_entropy_parameters_create(
+        context, targets, loss_mask, row_count, vocabulary_size, normalization_row_count,
+        &parameters);
     if (status != LLM_OK) {
         return status;
     }
@@ -1338,8 +1360,11 @@ static llm_status metal_cross_entropy_dispatch(void *opaque_context, llm_metal_p
         }
         [encoder setBuffer:metal_buffer_handle(logits) offset:0U atIndex:0U];
         [encoder setBuffer:metal_buffer_handle(targets) offset:0U atIndex:1U];
-        [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:2U];
-        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:3U];
+        [encoder setBuffer:metal_buffer_handle(loss_mask != NULL ? loss_mask : targets)
+                     offset:0U
+                    atIndex:2U];
+        [encoder setBuffer:metal_buffer_handle(output) offset:0U atIndex:3U];
+        [encoder setBytes:&parameters length:sizeof(parameters) atIndex:4U];
         status = metal_dispatch_row_groups(context, pipeline, command_buffer, encoder, row_count,
                                            vocabulary_size);
         if (status != LLM_OK) {
@@ -1354,19 +1379,24 @@ static llm_status metal_cross_entropy_dispatch(void *opaque_context, llm_metal_p
 }
 
 llm_status llm_metal_cross_entropy_forward_f32(void *context, const float *logits,
-                                               const uint32_t *targets, size_t row_count,
-                                               size_t vocabulary_size, float *loss) {
+                                               const uint32_t *targets,
+                                               const uint32_t *loss_mask, size_t row_count,
+                                               size_t vocabulary_size,
+                                               size_t normalization_row_count, float *loss) {
     return metal_cross_entropy_dispatch(context, LLM_METAL_PIPELINE_CROSS_ENTROPY_FORWARD, logits,
-                                        targets, loss, row_count, vocabulary_size, 1U);
+                                        targets, loss_mask, loss, row_count, vocabulary_size,
+                                        normalization_row_count, 1U);
 }
 
 llm_status llm_metal_cross_entropy_backward_f32(void *context, const float *logits,
-                                                const uint32_t *targets, size_t row_count,
-                                                size_t vocabulary_size, float *gradient) {
+                                                const uint32_t *targets,
+                                                const uint32_t *loss_mask, size_t row_count,
+                                                size_t vocabulary_size,
+                                                size_t normalization_row_count, float *gradient) {
     if (row_count > SIZE_MAX / vocabulary_size) {
         return LLM_OVERFLOW;
     }
     return metal_cross_entropy_dispatch(context, LLM_METAL_PIPELINE_CROSS_ENTROPY_BACKWARD, logits,
-                                        targets, gradient, row_count, vocabulary_size,
-                                        row_count * vocabulary_size);
+                                        targets, loss_mask, gradient, row_count, vocabulary_size,
+                                        normalization_row_count, row_count * vocabulary_size);
 }
