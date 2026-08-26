@@ -104,6 +104,11 @@ llm_status llm_rope_backward(llm_backend *backend, const llm_tensor *output_grad
                              const llm_tensor *cos_table, const llm_tensor *sin_table,
                              llm_tensor *input_gradient);
 
+/** Applies RoPE for one [B,H,D] decode position using [T,D/2] lookup tables. */
+llm_status llm_rope_position(llm_backend *backend, const llm_tensor *input,
+                             const llm_tensor *cos_table, const llm_tensor *sin_table,
+                             size_t position, llm_tensor *output);
+
 /** Computes FP32 causal grouped-query attention for [B,S,H,D] tensors. */
 llm_status llm_attention_forward(llm_backend *backend, const llm_tensor *query,
                                  const llm_tensor *key, const llm_tensor *value,
@@ -115,6 +120,15 @@ llm_status llm_attention_backward(llm_backend *backend, const llm_tensor *query,
                                   const llm_tensor *output_gradient,
                                   const llm_attention_options *options, llm_tensor *query_gradient,
                                   llm_tensor *key_gradient, llm_tensor *value_gradient);
+
+/**
+ * Appends one [B,H,D] key/value pair to [B,T,H,D] caches and computes attention
+ * for that position. The operation is inference-only and updates both caches.
+ */
+llm_status llm_attention_decode(llm_backend *backend, const llm_tensor *query,
+                                const llm_tensor *key, const llm_tensor *value,
+                                llm_tensor *key_cache, llm_tensor *value_cache, size_t position,
+                                const llm_attention_options *options, llm_tensor *output);
 
 /** Computes a numerically stable FP32 softmax over the last dimension. */
 llm_status llm_softmax_last(llm_backend *backend, const llm_tensor *input, llm_tensor *output);
@@ -134,14 +148,12 @@ llm_status llm_cross_entropy_backward(llm_backend *backend, const llm_tensor *lo
  * an unnormalized sum (one). Ignored rows contribute neither loss nor gradient.
  */
 llm_status llm_cross_entropy_masked_forward(llm_backend *backend, const llm_tensor *logits,
-                                            const llm_tensor *targets,
-                                            const llm_tensor *loss_mask,
+                                            const llm_tensor *targets, const llm_tensor *loss_mask,
                                             size_t normalization_target_count, llm_tensor *loss);
 
 /** Computes the gradient of masked mean cross-entropy with respect to logits. */
 llm_status llm_cross_entropy_masked_backward(llm_backend *backend, const llm_tensor *logits,
-                                             const llm_tensor *targets,
-                                             const llm_tensor *loss_mask,
+                                             const llm_tensor *targets, const llm_tensor *loss_mask,
                                              size_t normalization_target_count,
                                              llm_tensor *logits_gradient);
 

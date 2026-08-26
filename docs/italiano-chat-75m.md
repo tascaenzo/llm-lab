@@ -144,7 +144,8 @@ controlla la qualita' delle generazioni. Per riprendere esattamente:
 ## Inferenza e valutazione
 
 La CLI applica lo stesso template del training, esclude dalla generazione tutti
-i token di ruolo e padding, e termina su `<|end|>`:
+i token di ruolo e padding, termina su `<|end|>` e usa il decoder incrementale
+con KV cache descritto in [Serving e inferenza incrementale](serving-inference.md):
 
 ```sh
 ./build/release/llm-lab model chat \
@@ -186,8 +187,8 @@ Il checkpoint candidato deve soddisfare tutti i gate:
 6. checkpoint, tokenizer, dati, manifest, commit, comandi e metriche hanno
    checksum e sono riproducibili.
 
-Il decode attuale ricomputa la finestra completa: e' corretto ma non ottimizzato.
-KV cache, mixed precision e quantizzazione sono milestone di serving successive,
-da affrontare dopo che un checkpoint supera questi gate. Anche l'aumento di
-layer/parametri va deciso soltanto con error analysis che mostri un limite di
-capacita', non un problema di dati o allineamento.
+Il decode incrementale FP32 e' il riferimento di qualita'. Mixed precision e
+quantizzazione restano opzioni separate: prima dell'adozione devono superare la
+parita' di logits, la suite qualitativa e una misura hardware che dimostri un
+vantaggio reale. Anche l'aumento di layer/parametri va deciso soltanto con error
+analysis che mostri un limite di capacita', non un problema di dati o allineamento.

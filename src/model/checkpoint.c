@@ -145,6 +145,37 @@ static llm_status read_tensor(FILE *file, llm_backend *backend, llm_tensor *tens
     return status;
 }
 
+static llm_status skip_tensor(FILE *file, size_t element_count,
+                              tokenizer_sha256_context *checksum) {
+    const size_t chunk_capacity = 65536U;
+    float *values = malloc(chunk_capacity * sizeof(*values));
+    if (values == NULL) {
+        return LLM_ALLOCATION_FAILED;
+    }
+    llm_status status = LLM_OK;
+    size_t remaining = element_count;
+    while (status == LLM_OK && remaining != 0U) {
+        const size_t count = remaining < chunk_capacity ? remaining : chunk_capacity;
+        const size_t byte_count = count * sizeof(*values);
+        if (read_exact(file, values, byte_count) == 0) {
+            status = LLM_INVALID_ARGUMENT;
+            break;
+        }
+        for (size_t index = 0U; index < count; ++index) {
+            if (isfinite(values[index]) == 0) {
+                status = LLM_NUMERICAL_ERROR;
+                break;
+            }
+        }
+        if (status == LLM_OK && checksum != NULL) {
+            tokenizer_sha256_update(checksum, (const unsigned char *)values, byte_count);
+        }
+        remaining -= count;
+    }
+    free(values);
+    return status;
+}
+
 static int checkpoint_header_is_supported(uint32_t version, uint32_t header_size) {
     return version >= 1U && version <= LM_CHECKPOINT_VERSION &&
            (header_size == LM_CHECKPOINT_V1_HEADER_SIZE ||
@@ -206,8 +237,7 @@ static llm_status save_checkpoint(const lm_trainer *trainer, lm_dataset *dataset
         (dataset != NULL &&
          (trainer->sft_mode != 0 || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
         (sft_dataset != NULL &&
-         (trainer->sft_mode == 0 ||
-          lm_sft_dataset_get_split(sft_dataset) != LM_DATASET_TRAIN))) {
+         (trainer->sft_mode == 0 || lm_sft_dataset_get_split(sft_dataset) != LM_DATASET_TRAIN))) {
         return LLM_INVALID_ARGUMENT;
     }
     const lm_model *model = trainer->model;
@@ -327,16 +357,16 @@ llm_status lm_sft_trainer_save_checkpoint(const lm_trainer *trainer, lm_sft_data
 
 static llm_status load_checkpoint(llm_backend *backend, lm_dataset *dataset,
                                   lm_sft_dataset *sft_dataset, const char *path,
-                                  const lm_trainer_resume_options *options,
+                                  const lm_trainer_resume_options *options, int inference_only,
                                   lm_model **out_model, lm_trainer **out_trainer) {
     if (backend == NULL || path == NULL || out_model == NULL ||
         (dataset != NULL && sft_dataset != NULL) ||
         (dataset != NULL &&
          (out_trainer == NULL || lm_dataset_get_split(dataset) != LM_DATASET_TRAIN)) ||
         (sft_dataset != NULL &&
-         (out_trainer == NULL ||
-          lm_sft_dataset_get_split(sft_dataset) != LM_DATASET_TRAIN)) ||
-        (dataset == NULL && sft_dataset == NULL && out_trainer != NULL)) {
+         (out_trainer == NULL || lm_sft_dataset_get_split(sft_dataset) != LM_DATASET_TRAIN)) ||
+        (dataset == NULL && sft_dataset == NULL && out_trainer != NULL) ||
+        (inference_only != 0 && (dataset != NULL || sft_dataset != NULL))) {
         return LLM_INVALID_ARGUMENT;
     }
     *out_model = NULL;
@@ -423,7 +453,7 @@ static llm_status load_checkpoint(llm_backend *backend, lm_dataset *dataset,
     lm_model *model = NULL;
     lm_trainer *trainer = NULL;
     if (status == LLM_OK) {
-        status = lm_model_create(backend, &model_config, &model);
+        status = lm_model_create_internal(backend, &model_config, inference_only, &model);
     }
     uint64_t expected_payload_size = 0U;
     if (status == LLM_OK) {
@@ -446,13 +476,19 @@ static llm_status load_checkpoint(llm_backend *backend, lm_dataset *dataset,
     for (size_t index = 0U; status == LLM_OK && index < model->parameter_count; ++index) {
         lm_model_parameter *parameter = &model->parameters[index];
         status = read_tensor(file, backend, &parameter->value, version >= 5U ? &checksum : NULL);
-        if (status == LLM_OK) {
+        if (status == LLM_OK && inference_only == 0) {
             status = read_tensor(file, backend, &parameter->first_moment,
                                  version >= 5U ? &checksum : NULL);
+        } else if (status == LLM_OK) {
+            status =
+                skip_tensor(file, parameter->value.element_count, version >= 5U ? &checksum : NULL);
         }
-        if (status == LLM_OK) {
+        if (status == LLM_OK && inference_only == 0) {
             status = read_tensor(file, backend, &parameter->second_moment,
                                  version >= 5U ? &checksum : NULL);
+        } else if (status == LLM_OK) {
+            status =
+                skip_tensor(file, parameter->value.element_count, version >= 5U ? &checksum : NULL);
         }
     }
     if (status == LLM_OK && version >= 5U) {
@@ -497,8 +533,7 @@ static llm_status load_checkpoint(llm_backend *backend, lm_dataset *dataset,
                 .next_offset = load_u64(header + 208U),
                 .stride = load_u64(header + 216U),
             };
-            if (lm_sft_batcher_set_state(trainer->sft_batcher, &restored_state) !=
-                LM_DATASET_OK) {
+            if (lm_sft_batcher_set_state(trainer->sft_batcher, &restored_state) != LM_DATASET_OK) {
                 status = LLM_INVALID_ARGUMENT;
             }
         }
@@ -519,9 +554,8 @@ static llm_status load_checkpoint(llm_backend *backend, lm_dataset *dataset,
 llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_dataset *dataset,
                                                    const char *path,
                                                    const lm_trainer_resume_options *options,
-                                                   lm_model **out_model,
-                                                   lm_trainer **out_trainer) {
-    return load_checkpoint(backend, dataset, NULL, path, options, out_model, out_trainer);
+                                                   lm_model **out_model, lm_trainer **out_trainer) {
+    return load_checkpoint(backend, dataset, NULL, path, options, 0, out_model, out_trainer);
 }
 
 llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset, const char *path,
@@ -530,10 +564,12 @@ llm_status lm_trainer_load_checkpoint(llm_backend *backend, lm_dataset *dataset,
                                                    out_trainer);
 }
 
-llm_status lm_sft_trainer_load_checkpoint_with_options(
-    llm_backend *backend, lm_sft_dataset *dataset, const char *path,
-    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer) {
-    return load_checkpoint(backend, NULL, dataset, path, options, out_model, out_trainer);
+llm_status lm_sft_trainer_load_checkpoint_with_options(llm_backend *backend,
+                                                       lm_sft_dataset *dataset, const char *path,
+                                                       const lm_trainer_resume_options *options,
+                                                       lm_model **out_model,
+                                                       lm_trainer **out_trainer) {
+    return load_checkpoint(backend, NULL, dataset, path, options, 0, out_model, out_trainer);
 }
 
 llm_status lm_sft_trainer_load_checkpoint(llm_backend *backend, lm_sft_dataset *dataset,
@@ -541,4 +577,9 @@ llm_status lm_sft_trainer_load_checkpoint(llm_backend *backend, lm_sft_dataset *
                                           lm_trainer **out_trainer) {
     return lm_sft_trainer_load_checkpoint_with_options(backend, dataset, path, NULL, out_model,
                                                        out_trainer);
+}
+
+llm_status lm_model_load_checkpoint_for_inference(llm_backend *backend, const char *path,
+                                                  lm_model **out_model) {
+    return load_checkpoint(backend, NULL, NULL, path, NULL, 1, out_model, NULL);
 }

@@ -10,6 +10,7 @@
 
 typedef struct lm_model lm_model;
 typedef struct lm_trainer lm_trainer;
+typedef struct lm_decode_session lm_decode_session;
 
 /** Configuration shared by the Minimal Model and scalable decoder-only Transformer. */
 typedef struct lm_model_config {
@@ -68,6 +69,31 @@ llm_backend *lm_model_backend(lm_model *model);
 
 /** Runs embedding lookup and the output head. */
 llm_status lm_model_forward(lm_model *model, const llm_tensor *input_ids, llm_tensor *logits);
+
+/**
+ * Creates a stateful, inference-only decoder with one KV cache per Transformer layer.
+ * The model must outlive the session. A capacity of zero uses the model context length.
+ */
+llm_status lm_decode_session_create(lm_model *model, size_t capacity,
+                                    lm_decode_session **out_session);
+void lm_decode_session_destroy(lm_decode_session *session);
+
+/** Discards the logical cache contents without reallocating device memory. */
+llm_status lm_decode_session_reset(lm_decode_session *session);
+
+/**
+ * Resets the session and consumes a prompt. Logits for its final token become available.
+ */
+llm_status lm_decode_session_prefill(lm_decode_session *session, const token_id *tokens,
+                                     size_t token_count);
+
+/** Appends one token and computes only the next-token logits for that position. */
+llm_status lm_decode_session_decode(lm_decode_session *session, token_id token);
+
+/** Device-resident FP32 [1, vocabulary_size] logits from the most recent token. */
+const llm_tensor *lm_decode_session_logits(const lm_decode_session *session);
+size_t lm_decode_session_token_count(const lm_decode_session *session);
+size_t lm_decode_session_capacity(const lm_decode_session *session);
 
 /** Accumulates parameter gradients from a preceding forward pass. */
 llm_status lm_model_backward(lm_model *model, const llm_tensor *input_ids,
@@ -129,11 +155,20 @@ llm_status lm_trainer_load_checkpoint_with_options(llm_backend *backend, lm_data
                                                    const lm_trainer_resume_options *options,
                                                    lm_model **out_model, lm_trainer **out_trainer);
 
-llm_status lm_sft_trainer_load_checkpoint_with_options(
-    llm_backend *backend, lm_sft_dataset *dataset, const char *path,
-    const lm_trainer_resume_options *options, lm_model **out_model, lm_trainer **out_trainer);
+llm_status lm_sft_trainer_load_checkpoint_with_options(llm_backend *backend,
+                                                       lm_sft_dataset *dataset, const char *path,
+                                                       const lm_trainer_resume_options *options,
+                                                       lm_model **out_model,
+                                                       lm_trainer **out_trainer);
 llm_status lm_sft_trainer_load_checkpoint(llm_backend *backend, lm_sft_dataset *dataset,
                                           const char *path, lm_model **out_model,
                                           lm_trainer **out_trainer);
+
+/**
+ * Loads only parameter values from a training checkpoint. Optimizer moments,
+ * gradients and backward workspaces are neither allocated nor transferred.
+ */
+llm_status lm_model_load_checkpoint_for_inference(llm_backend *backend, const char *path,
+                                                  lm_model **out_model);
 
 #endif

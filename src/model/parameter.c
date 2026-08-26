@@ -94,6 +94,24 @@ llm_status lm_model_parameter_create(lm_model_parameter *parameter, llm_backend 
     return status;
 }
 
+llm_status lm_model_parameter_create_inference(lm_model_parameter *parameter, llm_backend *backend,
+                                               const char *name, size_t rank, const size_t *shape) {
+    if (parameter == NULL || backend == NULL || name == NULL) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    *parameter = (lm_model_parameter){0};
+    parameter->name = duplicate_name(name);
+    if (parameter->name == NULL) {
+        return LLM_ALLOCATION_FAILED;
+    }
+    const llm_status status =
+        llm_tensor_create(backend, LLM_DTYPE_F32, rank, shape, &parameter->value);
+    if (status != LLM_OK) {
+        lm_model_parameter_destroy(parameter);
+    }
+    return status;
+}
+
 void lm_model_parameter_destroy(lm_model_parameter *parameter) {
     if (parameter == NULL) {
         return;

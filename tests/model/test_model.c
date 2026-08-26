@@ -324,6 +324,71 @@ static int test_scalable_transformer_smoke(void) {
     return EXIT_SUCCESS;
 }
 
+static int test_cached_decode_matches_full_forward(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+    const lm_model_config config = {.vocabulary_size = 11U,
+                                    .context_length = 4U,
+                                    .hidden_size = 8U,
+                                    .layer_count = 2U,
+                                    .head_count = 2U,
+                                    .feed_forward_size = 16U,
+                                    .seed = UINT64_C(2026)};
+    lm_model *model = NULL;
+    TEST_ASSERT(lm_model_create(backend, &config, &model) == LLM_OK);
+    const size_t input_shape[] = {1U, config.context_length};
+    const size_t logits_shape[] = {config.context_length, config.vocabulary_size};
+    llm_tensor inputs = {0};
+    llm_tensor full_logits = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &inputs) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &full_logits) ==
+                LLM_OK);
+    const token_id tokens[] = {2U, 5U, 3U, 7U};
+    TEST_ASSERT(llm_tensor_write(backend, &inputs, tokens, sizeof(tokens)) == LLM_OK);
+    TEST_ASSERT(lm_model_forward(model, &inputs, &full_logits) == LLM_OK);
+    float expected[44] = {0};
+    TEST_ASSERT(llm_tensor_read(backend, &full_logits, expected, sizeof(expected)) == LLM_OK);
+
+    lm_decode_session *session = NULL;
+    TEST_ASSERT(lm_decode_session_create(model, 0U, &session) == LLM_OK);
+    TEST_ASSERT(lm_decode_session_capacity(session) == config.context_length);
+    for (size_t position = 0U; position < config.context_length; ++position) {
+        TEST_ASSERT(lm_decode_session_decode(session, tokens[position]) == LLM_OK);
+        TEST_ASSERT(lm_decode_session_token_count(session) == position + 1U);
+        const llm_tensor *cached_logits = lm_decode_session_logits(session);
+        TEST_ASSERT(cached_logits != NULL && cached_logits->shape[0] == 1U &&
+                    cached_logits->shape[1] == config.vocabulary_size);
+        float actual[11] = {0};
+        TEST_ASSERT(llm_tensor_read(backend, cached_logits, actual, sizeof(actual)) == LLM_OK);
+        for (size_t vocabulary = 0U; vocabulary < config.vocabulary_size; ++vocabulary) {
+            const float reference = expected[position * config.vocabulary_size + vocabulary];
+            TEST_ASSERT(
+                close_enough(actual[vocabulary], reference, 2.0e-5F + fabsf(reference) * 2.0e-5F));
+        }
+    }
+    TEST_ASSERT(lm_decode_session_decode(session, tokens[0]) == LLM_INVALID_SHAPE);
+    TEST_ASSERT(lm_decode_session_reset(session) == LLM_OK);
+    TEST_ASSERT(lm_decode_session_logits(session) == NULL);
+    TEST_ASSERT(lm_decode_session_prefill(session, tokens, 3U) == LLM_OK);
+    TEST_ASSERT(lm_decode_session_token_count(session) == 3U);
+    float prefill_logits[11] = {0};
+    TEST_ASSERT(llm_tensor_read(backend, lm_decode_session_logits(session), prefill_logits,
+                                sizeof(prefill_logits)) == LLM_OK);
+    for (size_t vocabulary = 0U; vocabulary < config.vocabulary_size; ++vocabulary) {
+        const float reference = expected[2U * config.vocabulary_size + vocabulary];
+        TEST_ASSERT(close_enough(prefill_logits[vocabulary], reference,
+                                 2.0e-5F + fabsf(reference) * 2.0e-5F));
+    }
+    TEST_ASSERT(lm_decode_session_decode(session, config.vocabulary_size) == LLM_INVALID_INDEX);
+
+    lm_decode_session_destroy(session);
+    llm_tensor_destroy(&full_logits);
+    llm_tensor_destroy(&inputs);
+    lm_model_destroy(model);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
 /**
  * Two backward passes without an intervening zero_grad must leave exactly
  * twice the gradient of a single pass, for every parameter. This is what a
@@ -409,6 +474,7 @@ int main(void) {
         test_seed_is_reproducible() != EXIT_SUCCESS ||
         test_transformer_is_causal() != EXIT_SUCCESS ||
         test_scalable_transformer_smoke() != EXIT_SUCCESS ||
+        test_cached_decode_matches_full_forward() != EXIT_SUCCESS ||
         test_backward_accumulates_every_parameter() != EXIT_SUCCESS) {
         return EXIT_FAILURE;
     }

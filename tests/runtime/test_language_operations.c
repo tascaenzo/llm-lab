@@ -146,7 +146,8 @@ static int test_cross_entropy(void) {
                 gradient_values[5] == 0.0F);
 
     const uint32_t invalid_mask[] = {1U, 2U};
-    TEST_ASSERT(llm_tensor_write(backend, &loss_mask, invalid_mask, sizeof(invalid_mask)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &loss_mask, invalid_mask, sizeof(invalid_mask)) ==
+                LLM_OK);
     TEST_ASSERT(llm_cross_entropy_masked_forward(backend, &logits, &targets, &loss_mask, 1U,
                                                  &loss) == LLM_INVALID_ARGUMENT);
     TEST_ASSERT(llm_tensor_write(backend, &loss_mask, mask_values, sizeof(mask_values)) == LLM_OK);
@@ -194,9 +195,100 @@ static int test_cross_entropy(void) {
     return EXIT_SUCCESS;
 }
 
+static int test_incremental_decode_operations(void) {
+    llm_backend *backend = NULL;
+    TEST_ASSERT(llm_backend_cpu_create(&backend) == LLM_OK);
+    const size_t full_shape[] = {1U, 3U, 1U, 2U};
+    const size_t current_shape[] = {1U, 1U, 2U};
+    const size_t table_shape[] = {3U, 1U};
+    llm_tensor query = {0}, key = {0}, value = {0}, full_output = {0};
+    llm_tensor current_query = {0}, current_key = {0}, current_value = {0};
+    llm_tensor rotated = {0}, decode_output = {0}, key_cache = {0}, value_cache = {0};
+    llm_tensor cos_table = {0}, sin_table = {0}, full_rotated = {0};
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &query) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &key) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &value) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &full_output) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &full_rotated) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 3U, current_shape, &current_query) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 3U, current_shape, &current_key) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 3U, current_shape, &current_value) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 3U, current_shape, &rotated) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 3U, current_shape, &decode_output) ==
+                LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &key_cache) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 4U, full_shape, &value_cache) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, table_shape, &cos_table) == LLM_OK);
+    TEST_ASSERT(llm_tensor_create(backend, LLM_DTYPE_F32, 2U, table_shape, &sin_table) == LLM_OK);
+
+    const float query_values[] = {1.0F, 0.0F, 0.0F, 1.0F, 1.0F, 1.0F};
+    const float key_values[] = {1.0F, 0.0F, 0.0F, 1.0F, 0.5F, 0.5F};
+    const float value_values[] = {2.0F, 0.0F, 0.0F, 4.0F, 6.0F, 8.0F};
+    const float cos_values[] = {1.0F, 0.0F, -1.0F};
+    const float sin_values[] = {0.0F, 1.0F, 0.0F};
+    TEST_ASSERT(llm_tensor_write(backend, &query, query_values, sizeof(query_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &key, key_values, sizeof(key_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &value, value_values, sizeof(value_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &cos_table, cos_values, sizeof(cos_values)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_write(backend, &sin_table, sin_values, sizeof(sin_values)) == LLM_OK);
+    TEST_ASSERT(llm_rope(backend, &query, &cos_table, &sin_table, &full_rotated) == LLM_OK);
+    const llm_attention_options options = {.scale = 1.0F / sqrtf(2.0F)};
+    TEST_ASSERT(llm_attention_forward(backend, &query, &key, &value, &options, &full_output) ==
+                LLM_OK);
+    float expected_attention[6] = {0};
+    float expected_rope[6] = {0};
+    TEST_ASSERT(llm_tensor_read(backend, &full_output, expected_attention,
+                                sizeof(expected_attention)) == LLM_OK);
+    TEST_ASSERT(llm_tensor_read(backend, &full_rotated, expected_rope, sizeof(expected_rope)) ==
+                LLM_OK);
+    for (size_t position = 0U; position < 3U; ++position) {
+        TEST_ASSERT(llm_tensor_write(backend, &current_query, query_values + position * 2U,
+                                     2U * sizeof(float)) == LLM_OK);
+        TEST_ASSERT(llm_tensor_write(backend, &current_key, key_values + position * 2U,
+                                     2U * sizeof(float)) == LLM_OK);
+        TEST_ASSERT(llm_tensor_write(backend, &current_value, value_values + position * 2U,
+                                     2U * sizeof(float)) == LLM_OK);
+        TEST_ASSERT(llm_rope_position(backend, &current_query, &cos_table, &sin_table, position,
+                                      &rotated) == LLM_OK);
+        float rotated_values[2] = {0};
+        TEST_ASSERT(llm_tensor_read(backend, &rotated, rotated_values, sizeof(rotated_values)) ==
+                    LLM_OK);
+        TEST_ASSERT(close_enough(rotated_values[0], expected_rope[position * 2U]));
+        TEST_ASSERT(close_enough(rotated_values[1], expected_rope[position * 2U + 1U]));
+        TEST_ASSERT(llm_attention_decode(backend, &current_query, &current_key, &current_value,
+                                         &key_cache, &value_cache, position, &options,
+                                         &decode_output) == LLM_OK);
+        float decoded[2] = {0};
+        TEST_ASSERT(llm_tensor_read(backend, &decode_output, decoded, sizeof(decoded)) == LLM_OK);
+        TEST_ASSERT(close_enough(decoded[0], expected_attention[position * 2U]));
+        TEST_ASSERT(close_enough(decoded[1], expected_attention[position * 2U + 1U]));
+    }
+
+    llm_tensor_destroy(&sin_table);
+    llm_tensor_destroy(&cos_table);
+    llm_tensor_destroy(&value_cache);
+    llm_tensor_destroy(&key_cache);
+    llm_tensor_destroy(&decode_output);
+    llm_tensor_destroy(&rotated);
+    llm_tensor_destroy(&current_value);
+    llm_tensor_destroy(&current_key);
+    llm_tensor_destroy(&current_query);
+    llm_tensor_destroy(&full_rotated);
+    llm_tensor_destroy(&full_output);
+    llm_tensor_destroy(&value);
+    llm_tensor_destroy(&key);
+    llm_tensor_destroy(&query);
+    llm_backend_destroy(backend);
+    return EXIT_SUCCESS;
+}
+
 int main(void) {
     if (test_gather_and_scatter() != EXIT_SUCCESS || test_softmax() != EXIT_SUCCESS ||
-        test_cross_entropy() != EXIT_SUCCESS) {
+        test_cross_entropy() != EXIT_SUCCESS ||
+        test_incremental_decode_operations() != EXIT_SUCCESS) {
         return EXIT_FAILURE;
     }
     return EXIT_SUCCESS;

@@ -26,6 +26,9 @@ Il primo backend GPU Metal e' introdotto nella
 Il backend CUDA, usato per proseguire il training su GPU in cloud partendo da un
 checkpoint prodotto sul Mac, e' specificato in
 [docs/backend-cuda.md](docs/backend-cuda.md).
+La chat e la generazione usano KV cache, logits dell'ultima posizione e un
+loader inference-only; contratto e benchmark sono documentati in
+[docs/serving-inference.md](docs/serving-inference.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 

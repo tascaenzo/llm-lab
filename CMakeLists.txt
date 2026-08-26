@@ -210,6 +210,7 @@ llm_lab_set_warnings(dataset)
 
 add_library(model STATIC
     src/model/model.c
+    src/model/inference.c
     src/model/checkpoint.c
     src/model/parameter.c
     src/model/trainer.c

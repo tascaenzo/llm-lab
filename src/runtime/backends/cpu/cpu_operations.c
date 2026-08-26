@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -49,6 +50,14 @@ typedef struct cpu_matmul_job {
     size_t inner_size;
     size_t columns;
 } cpu_matmul_job;
+
+typedef struct cpu_matmul_output_job {
+    const float *left;
+    const float *right;
+    float *output;
+    size_t inner_size;
+    size_t columns;
+} cpu_matmul_output_job;
 
 typedef struct cpu_gather_job {
     const float *table;
@@ -154,6 +163,22 @@ static llm_status matmul_range(void *context, size_t begin, size_t end) {
                               job->columns);
 }
 
+static llm_status matmul_output_range(void *context, size_t begin, size_t end) {
+    cpu_matmul_output_job *job = context;
+    for (size_t index = begin; index < end; ++index) {
+        const size_t row = index / job->columns;
+        const size_t column = index % job->columns;
+        const float *left = job->left + row * job->inner_size;
+        float sum = 0.0F;
+        for (size_t inner = 0U; inner < job->inner_size; ++inner)
+            sum += left[inner] * job->right[inner * job->columns + column];
+        if (isfinite(sum) == 0)
+            return LLM_NUMERICAL_ERROR;
+        job->output[index] = sum;
+    }
+    return LLM_OK;
+}
+
 static llm_status gather_range(void *context, size_t begin, size_t end) {
     cpu_gather_job *job = context;
     return llm_cpu_gather_rows_f32(job->table, job->row_count, job->row_width, job->indices + begin,
@@ -182,12 +207,10 @@ static llm_status softmax_range(void *context, size_t begin, size_t end) {
 
 static llm_status cross_entropy_backward_range(void *context, size_t begin, size_t end) {
     cpu_cross_entropy_backward_job *job = context;
-    return llm_cpu_cross_entropy_backward_f32(job->logits + begin * job->vocabulary_size,
-                                              job->targets + begin,
-                                              job->loss_mask == NULL ? NULL : job->loss_mask + begin,
-                                              end - begin,
-                                              job->vocabulary_size, job->normalization_row_count,
-                                              job->gradient + begin * job->vocabulary_size);
+    return llm_cpu_cross_entropy_backward_f32(
+        job->logits + begin * job->vocabulary_size, job->targets + begin,
+        job->loss_mask == NULL ? NULL : job->loss_mask + begin, end - begin, job->vocabulary_size,
+        job->normalization_row_count, job->gradient + begin * job->vocabulary_size);
 }
 
 llm_status llm_cpu_execute_zero(void *context, void *memory, size_t byte_count) {
@@ -310,6 +333,18 @@ llm_status llm_cpu_execute_matmul_f32(void *context, const float *left, const fl
         inner_size == 0U || columns == 0U) {
         return LLM_INVALID_ARGUMENT;
     }
+    if (rows <= 2U && rows <= SIZE_MAX / columns) {
+        cpu_matmul_output_job output_job = {.left = left,
+                                            .right = right,
+                                            .output = output,
+                                            .inner_size = inner_size,
+                                            .columns = columns};
+        const size_t values_per_task = inner_size >= LLM_CPU_TARGET_MATMUL_OPERATIONS_PER_TASK
+                                           ? 1U
+                                           : LLM_CPU_TARGET_MATMUL_OPERATIONS_PER_TASK / inner_size;
+        return llm_cpu_parallel_for(cpu->executor, rows * columns, values_per_task,
+                                    matmul_output_range, &output_job);
+    }
     cpu_matmul_job job = {
         .left = left,
         .right = right,
@@ -394,16 +429,13 @@ llm_status llm_cpu_execute_cross_entropy_forward_f32(void *context, const float 
     if (context == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
-    return llm_cpu_cross_entropy_forward_f32(logits, targets, loss_mask, row_count,
-                                             vocabulary_size, normalization_row_count, loss);
+    return llm_cpu_cross_entropy_forward_f32(logits, targets, loss_mask, row_count, vocabulary_size,
+                                             normalization_row_count, loss);
 }
 
-llm_status llm_cpu_execute_cross_entropy_backward_f32(void *context, const float *logits,
-                                                      const uint32_t *targets,
-                                                      const uint32_t *loss_mask, size_t row_count,
-                                                      size_t vocabulary_size,
-                                                      size_t normalization_row_count,
-                                                      float *gradient) {
+llm_status llm_cpu_execute_cross_entropy_backward_f32(
+    void *context, const float *logits, const uint32_t *targets, const uint32_t *loss_mask,
+    size_t row_count, size_t vocabulary_size, size_t normalization_row_count, float *gradient) {
     llm_cpu_context *cpu = context;
     if (cpu == NULL || logits == NULL || targets == NULL || gradient == NULL || row_count == 0U ||
         vocabulary_size == 0U || normalization_row_count == 0U ||

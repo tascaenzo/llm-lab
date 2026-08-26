@@ -92,8 +92,12 @@ static llm_status add_parameter(lm_model *model, size_t *next_parameter, const c
         *next_parameter >= model->parameter_count) {
         return LLM_INVALID_ARGUMENT;
     }
-    llm_status status = lm_model_parameter_create(&model->parameters[*next_parameter],
-                                                  model->backend, name, rank, shape, random_state);
+    llm_status status =
+        model->inference_only != 0
+            ? lm_model_parameter_create_inference(&model->parameters[*next_parameter],
+                                                  model->backend, name, rank, shape)
+            : lm_model_parameter_create(&model->parameters[*next_parameter], model->backend, name,
+                                        rank, shape, random_state);
     if (status == LLM_OK) {
         ++*next_parameter;
     }
@@ -171,7 +175,7 @@ static llm_status create_block_workspace(lm_model *model, lm_transformer_block *
                                          const size_t *hidden_shape, const size_t *attention_shape,
                                          const size_t *mlp_shape) {
     llm_status status = create_workspace(model->backend, 3U, hidden_shape, &block->output);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->output_gradient);
     if (status == LLM_OK)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->attention_norm);
@@ -189,29 +193,29 @@ static llm_status create_block_workspace(lm_model *model, lm_transformer_block *
         status = create_workspace(model->backend, 4U, attention_shape, &block->attention_output);
     if (status == LLM_OK)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->attention_projection);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 4U, attention_shape,
                                   &block->attention_output_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 4U, attention_shape, &block->query_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 4U, attention_shape, &block->key_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status =
             create_workspace(model->backend, 4U, attention_shape, &block->rotated_query_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status =
             create_workspace(model->backend, 4U, attention_shape, &block->rotated_key_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 4U, attention_shape, &block->value_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status =
             create_workspace(model->backend, 3U, hidden_shape, &block->attention_norm_gradient);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->linear_input_gradient);
     if (has_mlp(&model->config) != 0 && status == LLM_OK)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->attention_residual);
-    if (has_mlp(&model->config) != 0 && status == LLM_OK)
+    if (has_mlp(&model->config) != 0 && status == LLM_OK && model->inference_only == 0)
         status =
             create_workspace(model->backend, 3U, hidden_shape, &block->attention_residual_gradient);
     if (has_mlp(&model->config) != 0 && status == LLM_OK)
@@ -226,15 +230,15 @@ static llm_status create_block_workspace(lm_model *model, lm_transformer_block *
         status = create_workspace(model->backend, 3U, mlp_shape, &block->swiglu);
     if (has_mlp(&model->config) != 0 && status == LLM_OK)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->mlp_projection);
-    if (has_mlp(&model->config) != 0 && status == LLM_OK)
+    if (has_mlp(&model->config) != 0 && status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, mlp_shape, &block->swiglu_gradient);
-    if (has_mlp(&model->config) != 0 && status == LLM_OK)
+    if (has_mlp(&model->config) != 0 && status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, mlp_shape, &block->silu_gate_gradient);
-    if (has_mlp(&model->config) != 0 && status == LLM_OK)
+    if (has_mlp(&model->config) != 0 && status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, mlp_shape, &block->gate_gradient);
-    if (has_mlp(&model->config) != 0 && status == LLM_OK)
+    if (has_mlp(&model->config) != 0 && status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, mlp_shape, &block->up_gradient);
-    if (has_mlp(&model->config) != 0 && status == LLM_OK)
+    if (has_mlp(&model->config) != 0 && status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, hidden_shape, &block->mlp_norm_gradient);
     return status;
 }
@@ -256,7 +260,7 @@ static llm_status ensure_workspace(lm_model *model, size_t batch_size) {
     const size_t mlp_shape[] = {batch_size, model->config.context_length,
                                 model->config.feed_forward_size};
     llm_status status = create_workspace(model->backend, 3U, hidden_shape, &model->hidden);
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = create_workspace(model->backend, 3U, hidden_shape, &model->hidden_gradient);
     for (size_t layer = 0U; status == LLM_OK && layer < model->config.layer_count; ++layer) {
         status = create_block_workspace(model, &model->blocks[layer], hidden_shape, attention_shape,
@@ -265,7 +269,7 @@ static llm_status ensure_workspace(lm_model *model, size_t batch_size) {
     if (status == LLM_OK && has_mlp(&model->config) != 0) {
         status = create_workspace(model->backend, 3U, hidden_shape, &model->final_norm);
     }
-    if (status == LLM_OK && has_mlp(&model->config) != 0) {
+    if (status == LLM_OK && has_mlp(&model->config) != 0 && model->inference_only == 0) {
         status = create_workspace(model->backend, 3U, hidden_shape, &model->final_norm_gradient);
     }
     if (status != LLM_OK) {
@@ -294,8 +298,8 @@ static llm_status validate_forward_inputs(const lm_model *model, const llm_tenso
     return LLM_OK;
 }
 
-llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
-                           lm_model **out_model) {
+llm_status lm_model_create_internal(llm_backend *backend, const lm_model_config *config,
+                                    int inference_only, lm_model **out_model) {
     if (backend == NULL || out_model == NULL || config_is_valid(config) == 0) {
         return LLM_INVALID_ARGUMENT;
     }
@@ -305,6 +309,7 @@ llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
         return LLM_ALLOCATION_FAILED;
     model->backend = backend;
     model->config = *config;
+    model->inference_only = inference_only != 0;
     const size_t per_block = block_parameter_count(config);
     if (config->layer_count > (SIZE_MAX - 3U) / per_block) {
         free(model);
@@ -383,19 +388,19 @@ llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
     }
     if (status == LLM_OK && next_parameter != model->parameter_count)
         status = LLM_INVALID_ARGUMENT;
-    if (status == LLM_OK)
+    if (status == LLM_OK && model->inference_only == 0)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, output_shape,
                                    &model->output_weight_gradient_workspace);
-    if (status == LLM_OK && config->layer_count != 0U)
+    if (status == LLM_OK && config->layer_count != 0U && model->inference_only == 0)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, attention_weight_shape,
                                    &model->attention_weight_gradient_workspace);
-    if (status == LLM_OK && has_mlp(config) != 0)
+    if (status == LLM_OK && has_mlp(config) != 0 && model->inference_only == 0)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, mlp_up_shape,
                                    &model->mlp_up_weight_gradient_workspace);
-    if (status == LLM_OK && has_mlp(config) != 0)
+    if (status == LLM_OK && has_mlp(config) != 0 && model->inference_only == 0)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, mlp_down_shape,
                                    &model->mlp_down_weight_gradient_workspace);
-    if (status == LLM_OK && config->layer_count != 0U)
+    if (status == LLM_OK && config->layer_count != 0U && model->inference_only == 0)
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 1U, norm_shape,
                                    &model->norm_weight_gradient_workspace);
     if (status == LLM_OK && config->layer_count != 0U) {
@@ -414,6 +419,11 @@ llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
     }
     *out_model = model;
     return LLM_OK;
+}
+
+llm_status lm_model_create(llm_backend *backend, const lm_model_config *config,
+                           lm_model **out_model) {
+    return lm_model_create_internal(backend, config, 0, out_model);
 }
 
 void lm_model_destroy(lm_model *model) {
@@ -499,6 +509,8 @@ llm_status lm_model_forward(lm_model *model, const llm_tensor *input_ids, llm_te
 
 llm_status lm_model_backward(lm_model *model, const llm_tensor *input_ids,
                              const llm_tensor *logits_gradient) {
+    if (model != NULL && model->inference_only != 0)
+        return LLM_UNSUPPORTED_OPERATION;
     llm_status status = validate_forward_inputs(model, input_ids, logits_gradient);
     if (status != LLM_OK)
         return status;
@@ -522,6 +534,8 @@ llm_status lm_model_backward(lm_model *model, const llm_tensor *input_ids,
 llm_status lm_model_zero_grad(lm_model *model) {
     if (model == NULL)
         return LLM_INVALID_ARGUMENT;
+    if (model->inference_only != 0)
+        return LLM_UNSUPPORTED_OPERATION;
     for (size_t index = 0U; index < model->parameter_count; ++index) {
         const llm_status status =
             lm_model_parameter_zero_grad(&model->parameters[index], model->backend);
@@ -535,6 +549,8 @@ llm_status lm_model_reset_optimizer_state(lm_model *model) {
     if (model == NULL || model->backend == NULL) {
         return LLM_INVALID_ARGUMENT;
     }
+    if (model->inference_only != 0)
+        return LLM_UNSUPPORTED_OPERATION;
     llm_status status = LLM_OK;
     for (size_t index = 0U; status == LLM_OK && index < model->parameter_count; ++index) {
         status = llm_tensor_zero(model->backend, &model->parameters[index].gradient);
@@ -551,6 +567,8 @@ llm_status lm_model_reset_optimizer_state(lm_model *model) {
 llm_status lm_model_apply_adamw(lm_model *model, const llm_adamw_options *options) {
     if (model == NULL || options == NULL)
         return LLM_INVALID_ARGUMENT;
+    if (model->inference_only != 0)
+        return LLM_UNSUPPORTED_OPERATION;
     for (size_t index = 0U; index < model->parameter_count; ++index) {
         lm_model_parameter *parameter = &model->parameters[index];
         llm_adamw_options parameter_options = *options;
@@ -583,7 +601,7 @@ llm_tensor *lm_model_parameter_value(lm_model *model, size_t index) {
 }
 
 const llm_tensor *lm_model_parameter_gradient(const lm_model *model, size_t index) {
-    return model == NULL || index >= lm_model_parameter_count(model)
+    return model == NULL || model->inference_only != 0 || index >= lm_model_parameter_count(model)
                ? NULL
                : &model->parameters[index].gradient;
 }

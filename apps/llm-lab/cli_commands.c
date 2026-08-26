@@ -659,8 +659,7 @@ static token_id sample_generation_token(const float *logits, uint32_t tokenizer_
 static token_id sample_chat_token(const float *logits, uint32_t tokenizer_vocabulary_size,
                                   token_id end_token, const token_id *tokens, size_t token_count,
                                   size_t context_length, cli_generation_candidate *candidates,
-                                  unsigned char *recent_tokens,
-                                  cli_generation_options *options) {
+                                  unsigned char *recent_tokens, cli_generation_options *options) {
     const size_t candidate_count = (size_t)tokenizer_vocabulary_size;
     (void)memset(recent_tokens, 0, tokenizer_vocabulary_size * sizeof(*recent_tokens));
     const size_t recent_start = token_count > context_length ? token_count - context_length : 0U;
@@ -856,33 +855,28 @@ static int run_sft_dataset_prepare(int argc, char **argv) {
         return 1;
     }
     lm_sft_prepare_report report = {0};
-    const lm_dataset_status status = lm_sft_dataset_prepare_jsonl(
-        argv[3], argv[4], argv[5], context_length, &report);
+    const lm_dataset_status status =
+        lm_sft_dataset_prepare_jsonl(argv[3], argv[4], argv[5], context_length, &report);
     if (status != LM_DATASET_OK) {
-        fprintf(stderr, "SFT dataset preparation failed: %s\n",
-                lm_dataset_status_string(status));
+        fprintf(stderr, "SFT dataset preparation failed: %s\n", lm_dataset_status_string(status));
         return 1;
     }
     printf("{\"schema\":\"llm-lab-sft-dataset-report-v1\","
            "\"tokenizer_vocabulary_size\":%" PRIu32 ","
            "\"model_vocabulary_size\":%" PRIu32 ",\"context_length\":%zu,"
-           "\"protocol\":{\"system\":%" PRIu32 ",\"user\":%" PRIu32
-           ",\"assistant\":%" PRIu32 ",\"end\":%" PRIu32 ",\"pad\":%" PRIu32 "},"
-           "\"splits\":{\"train\":{\"examples\":%" PRIu64
-           ",\"supervised_tokens\":%" PRIu64 "},"
-           "\"validation\":{\"examples\":%" PRIu64
-           ",\"supervised_tokens\":%" PRIu64 "},"
-           "\"test\":{\"examples\":%" PRIu64
-           ",\"supervised_tokens\":%" PRIu64 "}}}\n",
-           report.tokenizer_vocabulary_size, report.model_vocabulary_size,
-           report.context_length, report.protocol.system_token, report.protocol.user_token,
+           "\"protocol\":{\"system\":%" PRIu32 ",\"user\":%" PRIu32 ",\"assistant\":%" PRIu32
+           ",\"end\":%" PRIu32 ",\"pad\":%" PRIu32 "},"
+           "\"splits\":{\"train\":{\"examples\":%" PRIu64 ",\"supervised_tokens\":%" PRIu64 "},"
+           "\"validation\":{\"examples\":%" PRIu64 ",\"supervised_tokens\":%" PRIu64 "},"
+           "\"test\":{\"examples\":%" PRIu64 ",\"supervised_tokens\":%" PRIu64 "}}}\n",
+           report.tokenizer_vocabulary_size, report.model_vocabulary_size, report.context_length,
+           report.protocol.system_token, report.protocol.user_token,
            report.protocol.assistant_token, report.protocol.end_token,
            report.protocol.padding_token, report.example_counts[LM_DATASET_TRAIN],
            report.supervised_token_counts[LM_DATASET_TRAIN],
            report.example_counts[LM_DATASET_VALIDATION],
            report.supervised_token_counts[LM_DATASET_VALIDATION],
-           report.example_counts[LM_DATASET_TEST],
-           report.supervised_token_counts[LM_DATASET_TEST]);
+           report.example_counts[LM_DATASET_TEST], report.supervised_token_counts[LM_DATASET_TEST]);
     return 0;
 }
 
@@ -1751,7 +1745,8 @@ static int run_model_sft(int argc, char **argv) {
         return 1;
     }
     if (resume_path != NULL && resume_forbidden_option != 0) {
-        fprintf(stderr, "--resume restores SFT settings; only equivalent batch overrides are allowed.\n");
+        fprintf(stderr,
+                "--resume restores SFT settings; only equivalent batch overrides are allowed.\n");
         return 1;
     }
     if (backend_was_explicit == 0 && resolve_environment_backend(&backend_choice) == 0) {
@@ -1774,8 +1769,7 @@ static int run_model_sft(int argc, char **argv) {
     }
     lm_sft_dataset *dataset = NULL;
     lm_dataset_status dataset_status = lm_sft_dataset_open(argv[3], &dataset);
-    if (dataset_status != LM_DATASET_OK ||
-        lm_sft_dataset_get_split(dataset) != LM_DATASET_TRAIN) {
+    if (dataset_status != LM_DATASET_OK || lm_sft_dataset_get_split(dataset) != LM_DATASET_TRAIN) {
         fprintf(stderr, "Opening SFT training dataset failed: %s\n",
                 lm_dataset_status_string(dataset_status));
         lm_sft_dataset_close(dataset);
@@ -1804,8 +1798,8 @@ static int run_model_sft(int argc, char **argv) {
             .batch_size = batch_was_explicit != 0 ? config.batch_size : 0U,
             .gradient_accumulation_steps =
                 accumulation_was_explicit != 0 ? config.gradient_accumulation_steps : 0U};
-        status = lm_sft_trainer_load_checkpoint_with_options(
-            backend, dataset, resume_path, &resume_options, &model, &trainer);
+        status = lm_sft_trainer_load_checkpoint_with_options(backend, dataset, resume_path,
+                                                             &resume_options, &model, &trainer);
     } else if (status == LLM_OK) {
         status = lm_trainer_load_checkpoint(backend, NULL, base_path, &model, NULL);
         if (status == LLM_OK) {
@@ -1890,9 +1884,9 @@ static int run_model_sft(int argc, char **argv) {
         if (validation_dataset != NULL &&
             (step % (unsigned long long)validation_every == 0U || final_step != 0)) {
             float validation_loss = 0.0F;
-            status = lm_model_evaluate_sft_validation(model, validation_dataset, config.batch_size,
-                                                      validation_batches, config.seed,
-                                                      &validation_loss);
+            status =
+                lm_model_evaluate_sft_validation(model, validation_dataset, config.batch_size,
+                                                 validation_batches, config.seed, &validation_loss);
             if (status != LLM_OK) {
                 fprintf(stderr, "SFT validation failed: %s\n", llm_status_string(status));
                 break;
@@ -2102,7 +2096,7 @@ static int run_model_generate(int argc, char **argv) {
     lm_model *model = NULL;
     llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
-        status = lm_trainer_load_checkpoint(backend, NULL, argv[3], &model, NULL);
+        status = lm_model_load_checkpoint_for_inference(backend, argv[3], &model);
     }
     lm_model_config config = {0};
     if (status == LLM_OK) {
@@ -2121,17 +2115,11 @@ static int run_model_generate(int argc, char **argv) {
         return 1;
     }
 
-    const size_t input_shape[] = {1U, config.context_length};
-    const size_t logits_shape[] = {config.context_length, config.vocabulary_size};
-    llm_tensor input_ids = {0};
-    llm_tensor logits = {0};
-    status = llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &input_ids);
-    if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits);
-    }
+    lm_decode_session *decode_session = NULL;
+    status = lm_decode_session_create(model, 0U, &decode_session);
     float *host_logits = NULL;
-    if (status == LLM_OK && logits.element_count <= SIZE_MAX / sizeof(*host_logits)) {
-        host_logits = malloc(logits.element_count * sizeof(*host_logits));
+    if (status == LLM_OK) {
+        host_logits = malloc((size_t)config.vocabulary_size * sizeof(*host_logits));
         status = host_logits == NULL ? LLM_ALLOCATION_FAILED : LLM_OK;
     } else if (status == LLM_OK) {
         status = LLM_OVERFLOW;
@@ -2145,39 +2133,58 @@ static int run_model_generate(int argc, char **argv) {
     } else if (status == LLM_OK) {
         status = LLM_INVALID_SHAPE;
     }
+    const size_t prompt_used =
+        sequence.length < config.context_length ? sequence.length : config.context_length;
+    const size_t prompt_first = sequence.length - prompt_used;
+    const double prefill_started = current_time_seconds();
+    if (status == LLM_OK)
+        status =
+            lm_decode_session_prefill(decode_session, sequence.ids + prompt_first, prompt_used);
+    const double prefill_seconds = current_time_seconds() - prefill_started;
     cli_model_generation_progress generation_progress = {
         .started_at = current_time_seconds(), .interactive = standard_error_is_terminal()};
     show_model_generation_progress(0U, generated_count, &generation_progress);
     for (size_t generated = 0U; status == LLM_OK && generated < generated_count; ++generated) {
-        token_id context[LLM_TENSOR_MAX_RANK == 4U ? config.context_length : 1U];
         const size_t available = sequence.length + generated;
-        const size_t used = available < config.context_length ? available : config.context_length;
-        const size_t first = available - used;
-        for (size_t position = 0U; position < used; ++position) {
-            context[position] = sequence.ids[first + position];
-        }
-        for (size_t position = used; position < config.context_length; ++position) {
-            context[position] = tokenizer_size;
-        }
-        status = llm_tensor_write(backend, &input_ids, context, sizeof(context));
+        const llm_tensor *device_logits = lm_decode_session_logits(decode_session);
+        if (device_logits == NULL)
+            status = LLM_BACKEND_ERROR;
+        if (status == LLM_OK)
+            status = llm_tensor_read(backend, device_logits, host_logits,
+                                     (size_t)config.vocabulary_size * sizeof(*host_logits));
         if (status == LLM_OK) {
-            status = lm_model_forward(model, &input_ids, &logits);
-        }
-        if (status == LLM_OK) {
-            status = llm_tensor_read(backend, &logits, host_logits,
-                                     logits.element_count * sizeof(*host_logits));
-        }
-        if (status == LLM_OK) {
-            const float *row = host_logits + (used - 1U) * config.vocabulary_size;
             sequence.ids[available] =
-                sample_generation_token(row, tokenizer_size, sequence.ids, available,
+                sample_generation_token(host_logits, tokenizer_size, sequence.ids, available,
                                         config.context_length, candidates, recent_tokens, &options);
         }
         if (status == LLM_OK) {
             show_model_generation_progress(generated + 1U, generated_count, &generation_progress);
         }
+        if (status == LLM_OK && generated + 1U < generated_count) {
+            if (lm_decode_session_token_count(decode_session) < config.context_length) {
+                status = lm_decode_session_decode(decode_session, sequence.ids[available]);
+            } else {
+                const size_t refreshed_available = available + 1U;
+                const size_t refreshed_used = refreshed_available < config.context_length
+                                                  ? refreshed_available
+                                                  : config.context_length;
+                status = lm_decode_session_prefill(
+                    decode_session, sequence.ids + refreshed_available - refreshed_used,
+                    refreshed_used);
+            }
+        }
     }
     finish_model_generation_progress(&generation_progress);
+    const double decode_seconds = current_time_seconds() - generation_progress.started_at;
+    if (status == LLM_OK) {
+        fprintf(stderr,
+                "Inferenza cached: prefill %zu token in %.3fs (%.2f token/s), "
+                "decode %zu token in %.3fs (%.2f token/s).\n",
+                prompt_used, prefill_seconds,
+                prefill_seconds > 0.0 ? (double)prompt_used / prefill_seconds : 0.0,
+                generated_count, decode_seconds,
+                decode_seconds > 0.0 ? (double)generated_count / decode_seconds : 0.0);
+    }
     if (status == LLM_OK) {
         sequence.length += generated_count;
         unsigned char *output = NULL;
@@ -2197,8 +2204,7 @@ static int run_model_generate(int argc, char **argv) {
     free(recent_tokens);
     free(candidates);
     free(host_logits);
-    llm_tensor_destroy(&logits);
-    llm_tensor_destroy(&input_ids);
+    lm_decode_session_destroy(decode_session);
     lm_model_destroy(model);
     llm_backend_destroy(backend);
     token_sequence_destroy(&sequence);
@@ -2263,17 +2269,15 @@ static int run_model_chat(int argc, char **argv) {
     lm_model *model = NULL;
     llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK)
-        status = lm_trainer_load_checkpoint(backend, NULL, argv[3], &model, NULL);
+        status = lm_model_load_checkpoint_for_inference(backend, argv[3], &model);
     lm_model_config config = {0};
     if (status == LLM_OK)
         status = lm_model_get_config(model, &config);
     const uint32_t tokenizer_size = tokenizer_vocabulary_size(text_tokenizer);
     lm_chat_protocol protocol = {0};
     if (status == LLM_OK &&
-        (tokenizer_size > UINT32_MAX - 8U ||
-         config.vocabulary_size != tokenizer_size + 8U ||
-         lm_chat_protocol_v1(tokenizer_size, config.vocabulary_size, &protocol) !=
-             LM_DATASET_OK)) {
+        (tokenizer_size > UINT32_MAX - 8U || config.vocabulary_size != tokenizer_size + 8U ||
+         lm_chat_protocol_v1(tokenizer_size, config.vocabulary_size, &protocol) != LM_DATASET_OK)) {
         status = LLM_INVALID_SHAPE;
     }
     token_sequence system_tokens = {0}, user_tokens = {0};
@@ -2303,8 +2307,7 @@ static int run_model_chat(int argc, char **argv) {
     if (status == LLM_OK) {
         size_t position = 0U;
         sequence[position++] = protocol.system_token;
-        memcpy(sequence + position, system_tokens.ids,
-               system_tokens.length * sizeof(*sequence));
+        memcpy(sequence + position, system_tokens.ids, system_tokens.length * sizeof(*sequence));
         position += system_tokens.length;
         sequence[position++] = protocol.end_token;
         sequence[position++] = protocol.user_token;
@@ -2325,53 +2328,68 @@ static int run_model_chat(int argc, char **argv) {
         return 1;
     }
 
-    const size_t input_shape[] = {1U, config.context_length};
-    const size_t logits_shape[] = {config.context_length, config.vocabulary_size};
-    llm_tensor input_ids = {0}, logits = {0};
-    status = llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &input_ids);
-    if (status == LLM_OK)
-        status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &logits);
+    lm_decode_session *decode_session = NULL;
+    status = lm_decode_session_create(model, 0U, &decode_session);
     float *host_logits = NULL;
     cli_generation_candidate *candidates = NULL;
     unsigned char *recent_tokens = NULL;
-    if (status == LLM_OK && logits.element_count <= SIZE_MAX / sizeof(*host_logits)) {
-        host_logits = malloc(logits.element_count * sizeof(*host_logits));
+    if (status == LLM_OK) {
+        host_logits = malloc((size_t)config.vocabulary_size * sizeof(*host_logits));
         candidates = malloc((size_t)tokenizer_size * sizeof(*candidates));
         recent_tokens = calloc(tokenizer_size, sizeof(*recent_tokens));
         if (host_logits == NULL || candidates == NULL || recent_tokens == NULL)
             status = LLM_ALLOCATION_FAILED;
     }
+    const double prefill_started = current_time_seconds();
+    if (status == LLM_OK)
+        status = lm_decode_session_prefill(decode_session, sequence, prefix_length);
+    const double prefill_seconds = current_time_seconds() - prefill_started;
     size_t generated_count = 0U;
     cli_model_generation_progress progress = {.started_at = current_time_seconds(),
                                               .interactive = standard_error_is_terminal()};
     show_model_generation_progress(0U, maximum_generated, &progress);
     while (status == LLM_OK && generated_count < maximum_generated) {
-        token_id context[LLM_TENSOR_MAX_RANK == 4U ? config.context_length : 1U];
         const size_t available = prefix_length + generated_count;
-        const size_t used = available < config.context_length ? available : config.context_length;
-        const size_t first = available - used;
-        for (size_t position = 0U; position < used; ++position)
-            context[position] = sequence[first + position];
-        for (size_t position = used; position < config.context_length; ++position)
-            context[position] = protocol.padding_token;
-        status = llm_tensor_write(backend, &input_ids, context, sizeof(context));
+        const llm_tensor *device_logits = lm_decode_session_logits(decode_session);
+        if (device_logits == NULL)
+            status = LLM_BACKEND_ERROR;
         if (status == LLM_OK)
-            status = lm_model_forward(model, &input_ids, &logits);
-        if (status == LLM_OK)
-            status = llm_tensor_read(backend, &logits, host_logits,
-                                     logits.element_count * sizeof(*host_logits));
+            status = llm_tensor_read(backend, device_logits, host_logits,
+                                     (size_t)config.vocabulary_size * sizeof(*host_logits));
         if (status == LLM_OK) {
-            const float *row = host_logits + (used - 1U) * config.vocabulary_size;
-            const token_id next = sample_chat_token(
-                row, tokenizer_size, protocol.end_token, sequence, available,
-                config.context_length, candidates, recent_tokens, &options);
+            const token_id next = sample_chat_token(host_logits, tokenizer_size, protocol.end_token,
+                                                    sequence, available, config.context_length,
+                                                    candidates, recent_tokens, &options);
             if (next == protocol.end_token)
                 break;
             sequence[prefix_length + generated_count++] = next;
             show_model_generation_progress(generated_count, maximum_generated, &progress);
+            if (generated_count < maximum_generated) {
+                if (lm_decode_session_token_count(decode_session) < config.context_length) {
+                    status = lm_decode_session_decode(decode_session, next);
+                } else {
+                    const size_t refreshed_available = available + 1U;
+                    const size_t refreshed_used = refreshed_available < config.context_length
+                                                      ? refreshed_available
+                                                      : config.context_length;
+                    status = lm_decode_session_prefill(
+                        decode_session, sequence + refreshed_available - refreshed_used,
+                        refreshed_used);
+                }
+            }
         }
     }
     finish_model_generation_progress(&progress);
+    const double decode_seconds = current_time_seconds() - progress.started_at;
+    if (status == LLM_OK) {
+        fprintf(stderr,
+                "Inferenza cached: prefill %zu token in %.3fs (%.2f token/s), "
+                "decode %zu token in %.3fs (%.2f token/s).\n",
+                prefix_length, prefill_seconds,
+                prefill_seconds > 0.0 ? (double)prefix_length / prefill_seconds : 0.0,
+                generated_count, decode_seconds,
+                decode_seconds > 0.0 ? (double)generated_count / decode_seconds : 0.0);
+    }
     if (status == LLM_OK) {
         const token_sequence answer = {.ids = sequence + prefix_length, .length = generated_count};
         unsigned char *bytes = NULL;
@@ -2390,8 +2408,7 @@ static int run_model_chat(int argc, char **argv) {
     free(recent_tokens);
     free(candidates);
     free(host_logits);
-    llm_tensor_destroy(&logits);
-    llm_tensor_destroy(&input_ids);
+    lm_decode_session_destroy(decode_session);
     free(sequence);
     lm_model_destroy(model);
     llm_backend_destroy(backend);
@@ -2449,7 +2466,7 @@ static int run_model_evaluate(int argc, char **argv) {
     lm_model *model = NULL;
     llm_status status = create_backend_choice(backend_choice, &backend);
     if (status == LLM_OK) {
-        status = lm_trainer_load_checkpoint(backend, NULL, argv[4], &model, NULL);
+        status = lm_model_load_checkpoint_for_inference(backend, argv[4], &model);
     }
     lm_model_config config = {0};
     if (status == LLM_OK) {
@@ -2613,7 +2630,7 @@ static int run_model_diagnose(int argc, char **argv) {
                             ? create_backend_choice(backend_choice, &backend)
                             : LLM_BACKEND_ERROR;
     if (status == LLM_OK)
-        status = lm_trainer_load_checkpoint(backend, NULL, argv[4], &model, NULL);
+        status = lm_model_load_checkpoint_for_inference(backend, argv[4], &model);
     lm_model_config config = {0};
     if (status == LLM_OK)
         status = lm_model_get_config(model, &config);
@@ -2808,8 +2825,7 @@ int llm_lab_run_command(int argc, char **argv) {
     if (argc >= 6 && strcmp(argv[1], "dataset") == 0 && strcmp(argv[2], "prepare") == 0) {
         return run_dataset_prepare(argc, argv);
     }
-    if (argc >= 8 && strcmp(argv[1], "dataset") == 0 &&
-        strcmp(argv[2], "sft-prepare") == 0) {
+    if (argc >= 8 && strcmp(argv[1], "dataset") == 0 && strcmp(argv[2], "sft-prepare") == 0) {
         return run_sft_dataset_prepare(argc, argv);
     }
     if (argc >= 5 && strcmp(argv[1], "model") == 0 && strcmp(argv[2], "train") == 0) {

@@ -67,6 +67,7 @@ struct lm_model {
     llm_tensor rope_cos_table;
     llm_tensor rope_sin_table;
     size_t forward_batch_size;
+    int inference_only;
 };
 
 struct lm_trainer {
@@ -94,6 +95,8 @@ struct lm_trainer {
 llm_status lm_model_parameter_create(lm_model_parameter *parameter, llm_backend *backend,
                                      const char *name, size_t rank, const size_t *shape,
                                      uint64_t *random_state);
+llm_status lm_model_parameter_create_inference(lm_model_parameter *parameter, llm_backend *backend,
+                                               const char *name, size_t rank, const size_t *shape);
 void lm_model_parameter_destroy(lm_model_parameter *parameter);
 llm_status lm_model_parameter_zero_grad(lm_model_parameter *parameter, llm_backend *backend);
 
@@ -118,5 +121,8 @@ llm_status lm_transformer_forward(lm_model *model);
 llm_status lm_transformer_backward(lm_model *model);
 const llm_tensor *lm_model_output_hidden(const lm_model *model);
 llm_tensor *lm_model_output_hidden_gradient(lm_model *model);
+
+llm_status lm_model_create_internal(llm_backend *backend, const lm_model_config *config,
+                                    int inference_only, lm_model **out_model);
 
 #endif
