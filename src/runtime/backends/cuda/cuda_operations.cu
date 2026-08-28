@@ -421,6 +421,28 @@ llm_status llm_cuda_rope_backward_f32(void *context, const float *output_gradien
                               sequence_length, head_count, head_dimension, input_gradient, 1);
 }
 
+llm_status llm_cuda_rope_position_f32(void *opaque_context, const float *input,
+                                      const float *cos_table, const float *sin_table,
+                                      size_t batch_count, size_t head_count, size_t head_dimension,
+                                      size_t position, float *output) {
+    if (opaque_context == NULL || input == NULL || cos_table == NULL || sin_table == NULL ||
+        output == NULL || batch_count == 0U || head_count == 0U || head_dimension == 0U ||
+        head_dimension % 2U != 0U || batch_count > SIZE_MAX / head_count ||
+        batch_count * head_count > SIZE_MAX / head_dimension ||
+        position > SIZE_MAX / (head_dimension / 2U)) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    llm_cuda_context *context = as_context(opaque_context);
+    const size_t table_offset = position * (head_dimension / 2U);
+    const size_t value_count = batch_count * head_count * head_dimension;
+    llm_cuda_launch_rope(context->stream, device_const_float(input),
+                         device_const_float(cos_table) + table_offset,
+                         device_const_float(sin_table) + table_offset, device_float(output),
+                         value_count / 2U, 1U, head_dimension / 2U, head_count);
+    ++context->metrics.kernel_launches;
+    return finish_with_finite_check(context, output, value_count);
+}
+
 /* Shared computation of the attention shapes, with the same validity rules the
    CPU backend applies: heads must divide evenly and every product must fit. */
 static llm_status cuda_attention_shapes(size_t batch_count, size_t sequence_length,
@@ -524,11 +546,36 @@ llm_status llm_cuda_attention_backward_f32(void *opaque_context, const float *qu
     return finish_with_finite_check(context, query_gradient, query_values);
 }
 
+llm_status llm_cuda_attention_decode_f32(void *opaque_context, const float *query, const float *key,
+                                         const float *value, float *key_cache, float *value_cache,
+                                         float scale, size_t batch_count, size_t cache_capacity,
+                                         size_t head_count, size_t head_dimension, size_t position,
+                                         float *output) {
+    if (opaque_context == NULL || query == NULL || key == NULL || value == NULL ||
+        key_cache == NULL || value_cache == NULL || output == NULL || !isfinite(scale) ||
+        scale <= 0.0F || batch_count == 0U || cache_capacity == 0U || head_count == 0U ||
+        head_dimension == 0U || position >= cache_capacity || batch_count > SIZE_MAX / head_count ||
+        batch_count * head_count > SIZE_MAX / head_dimension ||
+        row_count_is_launchable(batch_count * head_count) == 0) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    llm_cuda_context *context = as_context(opaque_context);
+    llm_cuda_launch_attention_decode(context->stream, device_const_float(query),
+                                     device_const_float(key), device_const_float(value),
+                                     device_float(key_cache), device_float(value_cache),
+                                     device_float(output), scale, batch_count, cache_capacity,
+                                     head_count, head_dimension, position);
+    ++context->metrics.kernel_launches;
+    return finish_with_finite_check(context, output, batch_count * head_count * head_dimension);
+}
+
 llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float *logits,
-                                              const uint32_t *targets, size_t row_count,
-                                              size_t vocabulary_size, float *loss) {
+                                              const uint32_t *targets, const uint32_t *loss_mask,
+                                              size_t row_count, size_t vocabulary_size,
+                                              size_t normalization_row_count, float *loss) {
     if (opaque_context == NULL || logits == NULL || targets == NULL || loss == NULL ||
-        vocabulary_size == 0U || row_count_is_launchable(row_count) == 0) {
+        vocabulary_size == 0U || normalization_row_count == 0U ||
+        normalization_row_count > row_count || row_count_is_launchable(row_count) == 0) {
         return LLM_INVALID_ARGUMENT;
     }
     if (row_count > SIZE_MAX / vocabulary_size) {
@@ -536,6 +583,9 @@ llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float 
     }
     llm_cuda_context *context = as_context(opaque_context);
     llm_status status = llm_cuda_check_indices(context, targets, row_count, vocabulary_size);
+    if (status == LLM_OK && loss_mask != NULL) {
+        status = llm_cuda_check_indices(context, loss_mask, row_count, 2U);
+    }
     if (status != LLM_OK) {
         return status;
     }
@@ -544,31 +594,38 @@ llm_status llm_cuda_cross_entropy_forward_f32(void *opaque_context, const float 
     if (status != LLM_OK) {
         return status;
     }
-    llm_cuda_launch_cross_entropy_forward(context->stream, device_const_float(logits),
-                                          device_const_u32(targets), device_float(loss), row_count,
-                                          vocabulary_size);
+    llm_cuda_launch_cross_entropy_forward(
+        context->stream, device_const_float(logits), device_const_u32(targets),
+        loss_mask == NULL ? nullptr : device_const_u32(loss_mask), device_float(loss), row_count,
+        vocabulary_size, normalization_row_count);
     ++context->metrics.kernel_launches;
     return finish_with_required_finite_check(context, loss, 1U);
 }
 
 llm_status llm_cuda_cross_entropy_backward_f32(void *opaque_context, const float *logits,
-                                               const uint32_t *targets, size_t row_count,
-                                               size_t vocabulary_size, float *gradient) {
+                                               const uint32_t *targets, const uint32_t *loss_mask,
+                                               size_t row_count, size_t vocabulary_size,
+                                               size_t normalization_row_count, float *gradient) {
     if (opaque_context == NULL || logits == NULL || targets == NULL || gradient == NULL ||
-        vocabulary_size == 0U || row_count_is_launchable(row_count) == 0) {
+        vocabulary_size == 0U || normalization_row_count == 0U ||
+        normalization_row_count > row_count || row_count_is_launchable(row_count) == 0) {
         return LLM_INVALID_ARGUMENT;
     }
     if (row_count > SIZE_MAX / vocabulary_size) {
         return LLM_OVERFLOW;
     }
     llm_cuda_context *context = as_context(opaque_context);
-    const llm_status status = llm_cuda_check_indices(context, targets, row_count, vocabulary_size);
+    llm_status status = llm_cuda_check_indices(context, targets, row_count, vocabulary_size);
+    if (status == LLM_OK && loss_mask != NULL) {
+        status = llm_cuda_check_indices(context, loss_mask, row_count, 2U);
+    }
     if (status != LLM_OK) {
         return status;
     }
-    llm_cuda_launch_cross_entropy_backward(context->stream, device_const_float(logits),
-                                           device_const_u32(targets), device_float(gradient),
-                                           row_count, vocabulary_size);
+    llm_cuda_launch_cross_entropy_backward(
+        context->stream, device_const_float(logits), device_const_u32(targets),
+        loss_mask == NULL ? nullptr : device_const_u32(loss_mask), device_float(gradient),
+        row_count, vocabulary_size, normalization_row_count);
     ++context->metrics.kernel_launches;
     return finish_with_finite_check(context, gradient, row_count * vocabulary_size);
 }

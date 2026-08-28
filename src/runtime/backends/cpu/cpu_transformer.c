@@ -31,6 +31,18 @@ typedef struct cpu_rope_job {
     int backward;
 } cpu_rope_job;
 
+typedef struct cpu_attention_decode_job {
+    const float *query;
+    const float *key_cache;
+    const float *value_cache;
+    float *output;
+    float scale;
+    size_t cache_capacity;
+    size_t head_count;
+    size_t head_dimension;
+    size_t visible_count;
+} cpu_attention_decode_job;
+
 static float stable_sigmoid(float value) {
     if (value >= 0.0F) {
         return 1.0F / (1.0F + expf(-value));
@@ -152,6 +164,52 @@ static float attention_score(const float *query, const float *key, size_t head_d
         *status = LLM_NUMERICAL_ERROR;
     }
     return dot;
+}
+
+static llm_status attention_decode_range(void *context, size_t begin, size_t end) {
+    cpu_attention_decode_job *job = context;
+    for (size_t row = begin; row < end; ++row) {
+        const size_t batch = row / job->head_count;
+        const size_t head = row % job->head_count;
+        const float *query = job->query + row * job->head_dimension;
+        float *output = job->output + row * job->head_dimension;
+        for (size_t dimension = 0U; dimension < job->head_dimension; ++dimension)
+            output[dimension] = 0.0F;
+        float running_maximum = -INFINITY;
+        float running_sum = 0.0F;
+        for (size_t key_position = 0U; key_position < job->visible_count; ++key_position) {
+            const size_t cache_index =
+                ((batch * job->cache_capacity + key_position) * job->head_count + head) *
+                job->head_dimension;
+            const float *key = job->key_cache + cache_index;
+            const float *value = job->value_cache + cache_index;
+            llm_status status = LLM_OK;
+            const float score =
+                attention_score(query, key, job->head_dimension, job->scale, &status);
+            if (status != LLM_OK)
+                return status;
+            const float maximum = fmaxf(running_maximum, score);
+            const float previous_scale =
+                running_sum == 0.0F ? 0.0F : expf(running_maximum - maximum);
+            const float score_scale = expf(score - maximum);
+            running_sum = running_sum * previous_scale + score_scale;
+            for (size_t dimension = 0U; dimension < job->head_dimension; ++dimension) {
+                if (!isfinite(value[dimension]))
+                    return LLM_NUMERICAL_ERROR;
+                output[dimension] =
+                    output[dimension] * previous_scale + score_scale * value[dimension];
+            }
+            running_maximum = maximum;
+        }
+        if (!isfinite(running_sum) || running_sum <= 0.0F)
+            return LLM_NUMERICAL_ERROR;
+        for (size_t dimension = 0U; dimension < job->head_dimension; ++dimension) {
+            output[dimension] /= running_sum;
+            if (!isfinite(output[dimension]))
+                return LLM_NUMERICAL_ERROR;
+        }
+    }
+    return LLM_OK;
 }
 
 llm_status llm_cpu_execute_silu_f32(void *context, const float *input, float *output,
@@ -283,6 +341,20 @@ llm_status llm_cpu_execute_rope_backward_f32(void *context, const float *output_
                         sequence_length, head_count, head_dimension, input_gradient, 1);
 }
 
+llm_status llm_cpu_execute_rope_position_f32(void *context, const float *input,
+                                             const float *cos_table, const float *sin_table,
+                                             size_t batch_count, size_t head_count,
+                                             size_t head_dimension, size_t position,
+                                             float *output) {
+    if (head_dimension == 0U || head_dimension % 2U != 0U ||
+        position > SIZE_MAX / (head_dimension / 2U)) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    const size_t table_offset = position * (head_dimension / 2U);
+    return execute_rope(context, input, cos_table + table_offset, sin_table + table_offset,
+                        batch_count, 1U, head_count, head_dimension, output, 0);
+}
+
 llm_status llm_cpu_execute_attention_forward_f32(void *context, const float *query,
                                                  const float *key, const float *value, float scale,
                                                  size_t batch_count, size_t sequence_length,
@@ -365,6 +437,42 @@ llm_status llm_cpu_execute_attention_forward_f32(void *context, const float *que
         }
     }
     return LLM_OK;
+}
+
+llm_status llm_cpu_execute_attention_decode_f32(void *context, const float *query, const float *key,
+                                                const float *value, float *key_cache,
+                                                float *value_cache, float scale, size_t batch_count,
+                                                size_t cache_capacity, size_t head_count,
+                                                size_t head_dimension, size_t position,
+                                                float *output) {
+    llm_cpu_context *cpu = context;
+    if (cpu == NULL || query == NULL || key == NULL || value == NULL || key_cache == NULL ||
+        value_cache == NULL || output == NULL || !isfinite(scale) || scale <= 0.0F ||
+        batch_count == 0U || cache_capacity == 0U || head_count == 0U || head_dimension == 0U ||
+        position >= cache_capacity || batch_count > SIZE_MAX / head_count ||
+        batch_count * head_count > SIZE_MAX / head_dimension) {
+        return LLM_INVALID_ARGUMENT;
+    }
+    for (size_t batch = 0U; batch < batch_count; ++batch) {
+        for (size_t head = 0U; head < head_count; ++head) {
+            const size_t source = (batch * head_count + head) * head_dimension;
+            const size_t destination =
+                ((batch * cache_capacity + position) * head_count + head) * head_dimension;
+            (void)memcpy(key_cache + destination, key + source, head_dimension * sizeof(float));
+            (void)memcpy(value_cache + destination, value + source, head_dimension * sizeof(float));
+        }
+    }
+    cpu_attention_decode_job job = {.query = query,
+                                    .key_cache = key_cache,
+                                    .value_cache = value_cache,
+                                    .output = output,
+                                    .scale = scale,
+                                    .cache_capacity = cache_capacity,
+                                    .head_count = head_count,
+                                    .head_dimension = head_dimension,
+                                    .visible_count = position + 1U};
+    return llm_cpu_parallel_for(cpu->executor, batch_count * head_count, 1U, attention_decode_range,
+                                &job);
 }
 
 llm_status llm_cpu_execute_attention_backward_f32(

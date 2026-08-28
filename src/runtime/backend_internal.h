@@ -62,6 +62,9 @@ typedef struct llm_backend_ops {
                                     const float *cos_table, const float *sin_table,
                                     size_t batch_count, size_t sequence_length, size_t head_count,
                                     size_t head_dimension, float *input_gradient);
+    llm_status (*rope_position_f32)(void *context, const float *input, const float *cos_table,
+                                    const float *sin_table, size_t batch_count, size_t head_count,
+                                    size_t head_dimension, size_t position, float *output);
     llm_status (*attention_forward_f32)(void *context, const float *query, const float *key,
                                         const float *value, float scale, size_t batch_count,
                                         size_t sequence_length, size_t query_head_count,
@@ -73,14 +76,21 @@ typedef struct llm_backend_ops {
                                          size_t query_head_count, size_t key_value_head_count,
                                          size_t head_dimension, float *query_gradient,
                                          float *key_gradient, float *value_gradient);
+    llm_status (*attention_decode_f32)(void *context, const float *query, const float *key,
+                                       const float *value, float *key_cache, float *value_cache,
+                                       float scale, size_t batch_count, size_t cache_capacity,
+                                       size_t head_count, size_t head_dimension, size_t position,
+                                       float *output);
     llm_status (*softmax_last_f32)(void *context, const float *input, float *output,
                                    size_t outer_count, size_t row_width);
     llm_status (*cross_entropy_forward_f32)(void *context, const float *logits,
-                                            const uint32_t *targets, size_t row_count,
-                                            size_t vocabulary_size, float *loss);
+                                            const uint32_t *targets, const uint32_t *loss_mask,
+                                            size_t row_count, size_t vocabulary_size,
+                                            size_t normalization_row_count, float *loss);
     llm_status (*cross_entropy_backward_f32)(void *context, const float *logits,
-                                             const uint32_t *targets, size_t row_count,
-                                             size_t vocabulary_size, float *gradient);
+                                             const uint32_t *targets, const uint32_t *loss_mask,
+                                             size_t row_count, size_t vocabulary_size,
+                                             size_t normalization_row_count, float *gradient);
     llm_status (*adamw_update_f32)(void *context, float *parameter, float *gradient,
                                    float *first_moment, float *second_moment, size_t value_count,
                                    float learning_rate, float beta1, float beta2, float epsilon,

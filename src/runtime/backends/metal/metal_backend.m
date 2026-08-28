@@ -32,8 +32,10 @@ static const char *const metal_pipeline_names[LLM_METAL_PIPELINE_COUNT] = {
     "llm_rms_norm_backward_f32",
     "llm_rope_f32",
     "llm_rope_backward_f32",
+    "llm_rope_position_f32",
     "llm_attention_forward_f32",
     "llm_attention_backward_f32",
+    "llm_attention_decode_f32",
     "llm_adamw_update_f32",
 };
 
@@ -135,8 +137,10 @@ static const llm_backend_ops *metal_backend_ops(void) {
         .rms_norm_backward_f32 = llm_metal_rms_norm_backward_f32,
         .rope_f32 = llm_metal_rope_f32,
         .rope_backward_f32 = llm_metal_rope_backward_f32,
+        .rope_position_f32 = llm_metal_rope_position_f32,
         .attention_forward_f32 = llm_metal_attention_forward_f32,
         .attention_backward_f32 = llm_metal_attention_backward_f32,
+        .attention_decode_f32 = llm_metal_attention_decode_f32,
         .softmax_last_f32 = llm_metal_softmax_last_f32,
         .cross_entropy_forward_f32 = llm_metal_cross_entropy_forward_f32,
         .cross_entropy_backward_f32 = llm_metal_cross_entropy_backward_f32,

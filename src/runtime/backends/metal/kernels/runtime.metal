@@ -27,6 +27,8 @@ struct GatherParameters {
 struct CrossEntropyParameters {
     uint row_count;
     uint vocabulary_size;
+    uint normalization_row_count;
+    uint use_loss_mask;
 };
 
 struct RmsNormParameters {
@@ -41,12 +43,27 @@ struct RopeParameters {
     uint pairs_per_head;
 };
 
+struct RopePositionParameters {
+    uint head_count;
+    uint pairs_per_head;
+    uint position;
+};
+
 struct AttentionParameters {
     uint batch_count;
     uint sequence_length;
     uint query_head_count;
     uint key_value_head_count;
     uint head_dimension;
+    float scale;
+};
+
+struct AttentionDecodeParameters {
+    uint batch_count;
+    uint cache_capacity;
+    uint head_count;
+    uint head_dimension;
+    uint position;
     float scale;
 };
 
@@ -323,6 +340,23 @@ kernel void llm_rope_backward_f32(device const float *output_gradient [[buffer(0
     input_gradient[value_index + 1] = -first * sine + second * cosine;
 }
 
+kernel void llm_rope_position_f32(device const float *input [[buffer(0)]],
+                                  device const float *cos_table [[buffer(1)]],
+                                  device const float *sin_table [[buffer(2)]],
+                                  device float *output [[buffer(3)]],
+                                  constant RopePositionParameters &parameters [[buffer(4)]],
+                                  uint pair_index [[thread_position_in_grid]]) {
+    const uint pair = pair_index % parameters.pairs_per_head;
+    const uint value_index = pair_index * 2;
+    const uint table_index = parameters.position * parameters.pairs_per_head + pair;
+    const float first = input[value_index];
+    const float second = input[value_index + 1];
+    const float cosine = cos_table[table_index];
+    const float sine = sin_table[table_index];
+    output[value_index] = first * cosine - second * sine;
+    output[value_index + 1] = first * sine + second * cosine;
+}
+
 inline uint llm_attention_offset(uint batch, uint sequence, uint head, uint sequence_length,
                                  uint head_count, uint head_dimension) {
     return ((batch * sequence_length + sequence) * head_count + head) * head_dimension;
@@ -383,6 +417,65 @@ kernel void llm_attention_forward_f32(
     for (uint dimension = thread_index; dimension < parameters.head_dimension;
          dimension += threads_per_group) {
         output[query_index + dimension] = accumulator[dimension] / running_sum;
+    }
+}
+
+kernel void llm_attention_decode_f32(
+    device const float *query [[buffer(0)]], device const float *key [[buffer(1)]],
+    device const float *value [[buffer(2)]], device float *key_cache [[buffer(3)]],
+    device float *value_cache [[buffer(4)]], device float *output [[buffer(5)]],
+    constant AttentionDecodeParameters &parameters [[buffer(6)]],
+    threadgroup float *scratch [[threadgroup(0)]], uint row [[threadgroup_position_in_grid]],
+    uint thread_index [[thread_index_in_threadgroup]], uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]]) {
+    const uint batch = row / parameters.head_count;
+    const uint head = row % parameters.head_count;
+    const uint current_index = row * parameters.head_dimension;
+    const uint cache_current =
+        llm_attention_offset(batch, parameters.position, head, parameters.cache_capacity,
+                             parameters.head_count, parameters.head_dimension);
+    for (uint dimension = thread_index; dimension < parameters.head_dimension;
+         dimension += threads_per_group) {
+        key_cache[cache_current + dimension] = key[current_index + dimension];
+        value_cache[cache_current + dimension] = value[current_index + dimension];
+    }
+    threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
+    threadgroup float *partial = scratch;
+    threadgroup float *accumulator = scratch + 32;
+    for (uint dimension = thread_index; dimension < parameters.head_dimension;
+         dimension += threads_per_group) {
+        accumulator[dimension] = 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float running_maximum = -INFINITY;
+    float running_sum = 0.0f;
+    for (uint key_position = 0; key_position <= parameters.position; ++key_position) {
+        const uint cache_index =
+            llm_attention_offset(batch, key_position, head, parameters.cache_capacity,
+                                 parameters.head_count, parameters.head_dimension);
+        float dot = 0.0f;
+        for (uint dimension = thread_index; dimension < parameters.head_dimension;
+             dimension += threads_per_group) {
+            dot += query[current_index + dimension] * key_cache[cache_index + dimension];
+        }
+        const float score =
+            llm_threadgroup_sum(dot, partial, thread_index, lane, simdgroup, threads_per_group) *
+            parameters.scale;
+        const float maximum = max(running_maximum, score);
+        const float previous_scale = running_sum == 0.0f ? 0.0f : exp(running_maximum - maximum);
+        const float score_scale = exp(score - maximum);
+        running_sum = running_sum * previous_scale + score_scale;
+        for (uint dimension = thread_index; dimension < parameters.head_dimension;
+             dimension += threads_per_group) {
+            accumulator[dimension] = accumulator[dimension] * previous_scale +
+                                     score_scale * value_cache[cache_index + dimension];
+        }
+        running_maximum = maximum;
+    }
+    for (uint dimension = thread_index; dimension < parameters.head_dimension;
+         dimension += threads_per_group) {
+        output[current_index + dimension] = accumulator[dimension] / running_sum;
     }
 }
 
@@ -823,16 +916,17 @@ kernel void llm_softmax_last_f32(device const float *input [[buffer(0)]],
     }
 }
 
-kernel void llm_cross_entropy_forward_f32(device const float *logits [[buffer(0)]],
-                                          device const uint *targets [[buffer(1)]],
-                                          device atomic_uint *loss [[buffer(2)]],
-                                          constant CrossEntropyParameters &parameters [[buffer(3)]],
-                                          uint row [[threadgroup_position_in_grid]],
-                                          uint thread_index [[thread_index_in_threadgroup]],
-                                          uint lane [[thread_index_in_simdgroup]],
-                                          uint simdgroup [[simdgroup_index_in_threadgroup]],
-                                          uint threads_per_group [[threads_per_threadgroup]]) {
+kernel void llm_cross_entropy_forward_f32(
+    device const float *logits [[buffer(0)]], device const uint *targets [[buffer(1)]],
+    device const uint *loss_mask [[buffer(2)]], device atomic_uint *loss [[buffer(3)]],
+    constant CrossEntropyParameters &parameters [[buffer(4)]],
+    uint row [[threadgroup_position_in_grid]], uint thread_index [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]], uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.row_count) {
+        return;
+    }
+    if (parameters.use_loss_mask != 0 && loss_mask[row] == 0) {
         return;
     }
     threadgroup float partial[32];
@@ -866,17 +960,26 @@ kernel void llm_cross_entropy_forward_f32(device const float *logits [[buffer(0)
     sum = llm_threadgroup_sum(sum, partial, thread_index, lane, simdgroup, threads_per_group);
     if (thread_index == 0) {
         const float row_loss = maximum + log(sum) - logits[offset + targets[row]];
-        llm_atomic_add_float(loss, row_loss / float(parameters.row_count));
+        llm_atomic_add_float(loss, row_loss / float(parameters.normalization_row_count));
     }
 }
 
 kernel void llm_cross_entropy_backward_f32(
     device const float *logits [[buffer(0)]], device const uint *targets [[buffer(1)]],
-    device float *gradient [[buffer(2)]], constant CrossEntropyParameters &parameters [[buffer(3)]],
+    device const uint *loss_mask [[buffer(2)]], device float *gradient [[buffer(3)]],
+    constant CrossEntropyParameters &parameters [[buffer(4)]],
     uint row [[threadgroup_position_in_grid]], uint thread_index [[thread_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]], uint simdgroup [[simdgroup_index_in_threadgroup]],
     uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.row_count) {
+        return;
+    }
+    if (parameters.use_loss_mask != 0 && loss_mask[row] == 0) {
+        const uint ignored_offset = row * parameters.vocabulary_size;
+        for (uint column = thread_index; column < parameters.vocabulary_size;
+             column += threads_per_group) {
+            gradient[ignored_offset + column] = 0.0f;
+        }
         return;
     }
     threadgroup float partial[32];
@@ -908,12 +1011,12 @@ kernel void llm_cross_entropy_backward_f32(
         sum += exp(logits[offset + column] - maximum);
     }
     sum = llm_threadgroup_sum(sum, partial, thread_index, lane, simdgroup, threads_per_group);
-    const float scale = 1.0f / (sum * float(parameters.row_count));
+    const float scale = 1.0f / (sum * float(parameters.normalization_row_count));
     for (uint column = thread_index; column < parameters.vocabulary_size;
          column += threads_per_group) {
         float value = exp(logits[offset + column] - maximum) * scale;
         if (column == targets[row]) {
-            value -= 1.0f / float(parameters.row_count);
+            value -= 1.0f / float(parameters.normalization_row_count);
         }
         gradient[offset + column] = value;
     }

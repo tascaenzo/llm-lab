@@ -8,14 +8,18 @@ Il tokenizer da usare con ogni checkpoint e'
 
 ## Checkpoint disponibili
 
+Nel workspace locale, i nomi canonici sono in
+`artifacts/models/italiano-base-75m/checkpoints/`. Non usare i vecchi nomi
+generici `best.llmckpt` e `latest.llmckpt`: rimandano a milestone diverse.
+
 | Step | File | Uso |
 |---:|---|---|
-| 34.600 | [italiano-base-75m-step-034600.llmckpt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/italiano-base-75m-step-034600.llmckpt) | Milestone iniziale per osservare la qualita' nelle prime fasi. |
-| 110.494 | [italiano-base-75m-step-110494.llmckpt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/italiano-base-75m-step-110494.llmckpt) | Checkpoint intermedio del training locale. |
-| 327.000 | [latest.llmckpt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/latest.llmckpt) | Milestone intermedia CUDA. |
-| 483.000 | [cuda-resume-327k.llmckpt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/cuda-resume-327k.llmckpt) | Checkpoint recuperato dalla sessione CUDA. |
-| 624.362 | [cuda-final.llmckpt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/cuda-final.llmckpt) | Stato dell'ultimo update del pretraining. |
-| 624.362, best | [cuda-final-best.llmckpt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/cuda-final-best.llmckpt) | **Checkpoint consigliato**: validation loss migliore, `2,545995`. |
+| 34.600 | `italiano-base-75m-v1-step-034600.llmckpt` | Milestone iniziale. |
+| 110.494 | `italiano-base-75m-v1-step-110494.llmckpt` | Milestone intermedia locale. |
+| 327.000 | `italiano-base-75m-v1-step-327000-validation-best.llmckpt` | Migliore validation della milestone CUDA. |
+| 483.000 | `italiano-base-75m-v1-step-483000-resume.llmckpt` | Punto di ripresa del run finale. |
+| 610.000 | `italiano-base-75m-v1-step-610000-validation-best.llmckpt` | **Checkpoint consigliato**: validation loss migliore, `2,545995`. |
+| 624.362 | `italiano-base-75m-v1-step-624362-final.llmckpt` | Stato dell'ultimo update del pretraining. |
 
 Ogni file pesa circa 858 MiB. Le impronte sono disponibili in
 [italiano-base-75m-v1.0.0-SHA256SUMS.txt](https://github.com/tascaenzo/llm-lab/releases/download/italiano-base-75m-v1.0.0/italiano-base-75m-v1.0.0-SHA256SUMS.txt).
@@ -32,7 +36,7 @@ Per una generazione locale su Metal con il checkpoint consigliato:
 
 ```bash
 LLM_LAB_BACKEND=metal ./build/release/llm-lab model generate \
-  cuda-final-best.llmckpt \
+  artifacts/models/italiano-base-75m/checkpoints/italiano-base-75m-v1-step-610000-validation-best.llmckpt \
   artifacts/tokenizers/italiano-v3.llmtok \
   192 \
   "Roma e' la capitale d'Italia." \

@@ -198,7 +198,9 @@ llm_lab_set_warnings(tokenizer)
 add_library(dataset STATIC
     src/dataset/dataset.c
     src/dataset/dataset_io.c
-    src/dataset/jsonl.c)
+    src/dataset/jsonl.c
+    src/dataset/json_tokens.c
+    src/dataset/sft_dataset.c)
 target_include_directories(dataset
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/tokenizer)
@@ -208,6 +210,7 @@ llm_lab_set_warnings(dataset)
 
 add_library(model STATIC
     src/model/model.c
+    src/model/inference.c
     src/model/checkpoint.c
     src/model/parameter.c
     src/model/trainer.c

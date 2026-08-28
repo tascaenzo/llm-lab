@@ -535,11 +535,62 @@ __global__ void attention_backward_kernel(const float *query, const float *key, 
     }
 }
 
-__global__ void cross_entropy_forward_kernel(const float *logits, const uint32_t *targets,
-                                             float *loss, size_t row_count,
-                                             size_t vocabulary_size) {
+__global__ void attention_decode_kernel(const float *query, const float *key, const float *value,
+                                        float *key_cache, float *value_cache, float *output,
+                                        float scale, size_t row_count, size_t cache_capacity,
+                                        size_t head_count, size_t head_dimension, size_t position) {
     const size_t row = blockIdx.x;
     if (row >= row_count) {
+        return;
+    }
+    extern __shared__ float shared[];
+    float *partial = shared;
+    float *accumulator = shared + 32U;
+    const size_t batch = row / head_count;
+    const size_t head = row % head_count;
+    const size_t current_index = row * head_dimension;
+    const size_t cache_current =
+        attention_offset(batch, position, head, cache_capacity, head_count, head_dimension);
+    for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
+        key_cache[cache_current + dimension] = key[current_index + dimension];
+        value_cache[cache_current + dimension] = value[current_index + dimension];
+        accumulator[dimension] = 0.0f;
+    }
+    __syncthreads();
+    float running_maximum = -INFINITY;
+    float running_sum = 0.0f;
+    for (size_t key_position = 0U; key_position <= position; ++key_position) {
+        const size_t cache_index =
+            attention_offset(batch, key_position, head, cache_capacity, head_count, head_dimension);
+        float dot = 0.0f;
+        for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
+            dot += query[current_index + dimension] * key_cache[cache_index + dimension];
+        }
+        const float score = block_sum(dot, partial) * scale;
+        const float maximum = fmaxf(running_maximum, score);
+        const float previous_scale = running_sum == 0.0f ? 0.0f : expf(running_maximum - maximum);
+        const float score_scale = expf(score - maximum);
+        running_sum = running_sum * previous_scale + score_scale;
+        for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
+            accumulator[dimension] = accumulator[dimension] * previous_scale +
+                                     score_scale * value_cache[cache_index + dimension];
+        }
+        running_maximum = maximum;
+    }
+    for (size_t dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
+        output[current_index + dimension] = accumulator[dimension] / running_sum;
+    }
+}
+
+__global__ void cross_entropy_forward_kernel(const float *logits, const uint32_t *targets,
+                                             const uint32_t *loss_mask, float *loss,
+                                             size_t row_count, size_t vocabulary_size,
+                                             size_t normalization_row_count) {
+    const size_t row = blockIdx.x;
+    if (row >= row_count) {
+        return;
+    }
+    if (loss_mask != nullptr && loss_mask[row] == 0U) {
         return;
     }
     const uint32_t target = targets[row];
@@ -573,15 +624,23 @@ __global__ void cross_entropy_forward_kernel(const float *logits, const uint32_t
     sum = block_sum(sum, partial);
     if (threadIdx.x == 0U) {
         const float row_loss = maximum + logf(sum) - logits[offset + target];
-        atomicAdd(loss, row_loss / static_cast<float>(row_count));
+        atomicAdd(loss, row_loss / static_cast<float>(normalization_row_count));
     }
 }
 
 __global__ void cross_entropy_backward_kernel(const float *logits, const uint32_t *targets,
-                                              float *gradient, size_t row_count,
-                                              size_t vocabulary_size) {
+                                              const uint32_t *loss_mask, float *gradient,
+                                              size_t row_count, size_t vocabulary_size,
+                                              size_t normalization_row_count) {
     const size_t row = blockIdx.x;
     if (row >= row_count) {
+        return;
+    }
+    if (loss_mask != nullptr && loss_mask[row] == 0U) {
+        const size_t ignored_offset = row * vocabulary_size;
+        for (size_t column = threadIdx.x; column < vocabulary_size; column += blockDim.x) {
+            gradient[ignored_offset + column] = 0.0f;
+        }
         return;
     }
     const uint32_t target = targets[row];
@@ -613,11 +672,11 @@ __global__ void cross_entropy_backward_kernel(const float *logits, const uint32_
         sum += expf(logits[offset + column] - maximum);
     }
     sum = block_sum(sum, partial);
-    const float scale = 1.0f / (sum * static_cast<float>(row_count));
+    const float scale = 1.0f / (sum * static_cast<float>(normalization_row_count));
     for (size_t column = threadIdx.x; column < vocabulary_size; column += blockDim.x) {
         float value = expf(logits[offset + column] - maximum) * scale;
         if (column == target) {
-            value -= 1.0f / static_cast<float>(row_count);
+            value -= 1.0f / static_cast<float>(normalization_row_count);
         }
         gradient[offset + column] = value;
     }
@@ -844,20 +903,36 @@ void llm_cuda_launch_attention_backward(cudaStream_t stream, const float *query,
         query_rows, sequence_length, query_head_count, key_value_head_count, head_dimension);
 }
 
+void llm_cuda_launch_attention_decode(cudaStream_t stream, const float *query, const float *key,
+                                      const float *value, float *key_cache, float *value_cache,
+                                      float *output, float scale, size_t batch_count,
+                                      size_t cache_capacity, size_t head_count,
+                                      size_t head_dimension, size_t position) {
+    const size_t rows = batch_count * head_count;
+    const size_t shared_bytes = (32U + head_dimension) * sizeof(float);
+    attention_decode_kernel<<<static_cast<unsigned int>(rows), LLM_CUDA_ATTENTION_BLOCK,
+                              shared_bytes, stream>>>(query, key, value, key_cache, value_cache,
+                                                      output, scale, rows, cache_capacity,
+                                                      head_count, head_dimension, position);
+}
+
 void llm_cuda_launch_cross_entropy_forward(cudaStream_t stream, const float *logits,
-                                           const uint32_t *targets, float *loss, size_t row_count,
-                                           size_t vocabulary_size) {
+                                           const uint32_t *targets, const uint32_t *loss_mask,
+                                           float *loss, size_t row_count, size_t vocabulary_size,
+                                           size_t normalization_row_count) {
     cross_entropy_forward_kernel<<<static_cast<unsigned int>(row_count),
                                    row_block_size(vocabulary_size), 0, stream>>>(
-        logits, targets, loss, row_count, vocabulary_size);
+        logits, targets, loss_mask, loss, row_count, vocabulary_size, normalization_row_count);
 }
 
 void llm_cuda_launch_cross_entropy_backward(cudaStream_t stream, const float *logits,
-                                            const uint32_t *targets, float *gradient,
-                                            size_t row_count, size_t vocabulary_size) {
+                                            const uint32_t *targets, const uint32_t *loss_mask,
+                                            float *gradient, size_t row_count,
+                                            size_t vocabulary_size,
+                                            size_t normalization_row_count) {
     cross_entropy_backward_kernel<<<static_cast<unsigned int>(row_count),
                                     row_block_size(vocabulary_size), 0, stream>>>(
-        logits, targets, gradient, row_count, vocabulary_size);
+        logits, targets, loss_mask, gradient, row_count, vocabulary_size, normalization_row_count);
 }
 
 void llm_cuda_launch_adamw(cudaStream_t stream, float *parameter, float *gradient,

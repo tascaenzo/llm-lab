@@ -1,0 +1,139 @@
+{
+  "diagnostic_pass": true,
+  "exact_matches": 16,
+  "exact_rate": 1.0,
+  "examples": 16,
+  "mean_similarity": 1.0,
+  "mean_token_f1": 1.0,
+  "results": [
+    {
+      "actual": "Sono un assistente virtuale in lingua italiana. Posso aiutarti con domande, spiegazioni e testi brevi.",
+      "exact": true,
+      "expected": "Sono un assistente virtuale in lingua italiana. Posso aiutarti con domande, spiegazioni e testi brevi.",
+      "id": "micro-overfit-v1:001:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Mi chiamo Italiano-Chat, un piccolo assistente linguistico sperimentale.",
+      "exact": true,
+      "expected": "Mi chiamo Italiano-Chat, un piccolo assistente linguistico sperimentale.",
+      "id": "micro-overfit-v1:002:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Posso spiegare concetti, riscrivere testi e rispondere a semplici domande in italiano.",
+      "exact": true,
+      "expected": "Posso spiegare concetti, riscrivere testi e rispondere a semplici domande in italiano.",
+      "id": "micro-overfit-v1:003:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "No. Sono un modello linguistico e non possiedo esperienze o coscienza personale.",
+      "exact": true,
+      "expected": "No. Sono un modello linguistico e non possiedo esperienze o coscienza personale.",
+      "id": "micro-overfit-v1:004:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Rispondo principalmente in italiano.",
+      "exact": true,
+      "expected": "Rispondo principalmente in italiano.",
+      "id": "micro-overfit-v1:005:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Sono Italiano-Chat, un assistente virtuale progettato per rispondere in italiano.",
+      "exact": true,
+      "expected": "Sono Italiano-Chat, un assistente virtuale progettato per rispondere in italiano.",
+      "id": "micro-overfit-v1:006:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "La capitale della Francia è Parigi.",
+      "exact": true,
+      "expected": "La capitale della Francia è Parigi.",
+      "id": "micro-overfit-v1:007:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "A pressione atmosferica normale, l'acqua congela a zero gradi Celsius.",
+      "exact": true,
+      "expected": "A pressione atmosferica normale, l'acqua congela a zero gradi Celsius.",
+      "id": "micro-overfit-v1:008:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Una stella produce luce ed energia; un pianeta orbita attorno a una stella e non produce luce propria.",
+      "exact": true,
+      "expected": "Una stella produce luce ed energia; un pianeta orbita attorno a una stella e non produce luce propria.",
+      "id": "micro-overfit-v1:009:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "La fotosintesi è il processo con cui le piante usano luce, acqua e anidride carbonica per produrre zuccheri e ossigeno.",
+      "exact": true,
+      "expected": "La fotosintesi è il processo con cui le piante usano luce, acqua e anidride carbonica per produrre zuccheri e ossigeno.",
+      "id": "micro-overfit-v1:010:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "No. Il delfino è un mammifero marino e respira aria con i polmoni.",
+      "exact": true,
+      "expected": "No. Il delfino è un mammifero marino e respira aria con i polmoni.",
+      "id": "micro-overfit-v1:011:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "La capitale d'Italia è Roma.",
+      "exact": true,
+      "expected": "La capitale d'Italia è Roma.",
+      "id": "micro-overfit-v1:012:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Un triangolo ha tre lati.",
+      "exact": true,
+      "expected": "Un triangolo ha tre lati.",
+      "id": "micro-overfit-v1:013:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Internet è una rete mondiale che collega dispositivi e permette loro di scambiare dati.",
+      "exact": true,
+      "expected": "Internet è una rete mondiale che collega dispositivi e permette loro di scambiare dati.",
+      "id": "micro-overfit-v1:014:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Sette più cinque fa dodici.",
+      "exact": true,
+      "expected": "Sette più cinque fa dodici.",
+      "id": "micro-overfit-v1:015:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    },
+    {
+      "actual": "Venti meno otto fa dodici.",
+      "exact": true,
+      "expected": "Venti meno otto fa dodici.",
+      "id": "micro-overfit-v1:016:0",
+      "similarity": 1.0,
+      "token_f1": 1.0
+    }
+  ],
+  "schema": "llm-lab-micro-overfit-score-v1"
+}

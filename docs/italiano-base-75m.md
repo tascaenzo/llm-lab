@@ -172,12 +172,12 @@ configurazione iniziale e':
       --warmup-steps 8000 --total-steps 624362 \
       --beta1 0.9 --beta2 0.95 --epsilon 1e-8 --weight-decay 0.1 \
       --sampling shuffled --gradient-clip 1.0 \
-      --checkpoint artifacts/models/italiano-base-75m/latest.llmckpt \
+      --checkpoint artifacts/models/italiano-base-75m/runs/italiano-base-75m-v2/latest.llmckpt \
       --checkpoint-every 2000 \
       --validation DATASET.validation.llmdat --validation-every 2000 \
       --validation-batches 100 \
-      --best-checkpoint artifacts/models/italiano-base-75m/best.llmckpt \
-      --log artifacts/models/italiano-base-75m/training.jsonl
+      --best-checkpoint artifacts/models/italiano-base-75m/runs/italiano-base-75m-v2/best.llmckpt \
+      --log artifacts/models/italiano-base-75m/runs/italiano-base-75m-v2/training.jsonl
 
 STEPS, warmup e decay contano update di AdamW, non micro-batch. Il checkpoint
 viene scritto in modo atomico allo stesso percorso ogni intervallo e puo'
@@ -220,6 +220,12 @@ uno SHA-256 dell'header e del payload; i checkpoint v1--v4 restano leggibili per
 riprendere gli esperimenti esistenti. Gli eventi periodici aggiungono loss/PPL
 validation e registrano i nuovi checkpoint best.
 
+I nomi `best.llmckpt` e `latest.llmckpt` sono ammessi soltanto dentro una
+directory di run. Al termine, un checkpoint verificato viene promosso nella
+directory `checkpoints/` con un nome che include versione, step e ruolo; la
+linea canonica di `Italiano-Base-75M v1` e' in
+[Checkpoint Italiano Base 75M](italiano-base-75m-checkpoints.md).
+
 ## Dati e allineamento conversazionale
 
 Il pretraining usa il tokenizer train-only `italiano-v3.llmtok` e gli split
@@ -234,7 +240,8 @@ registri origine, licenza, filtri, deduplicazione, identificatori e split.
 Il trainer del tokenizer rifiuta manifest che non dichiarano esplicitamente
 `tokenizer_input_split: train`, evitando contaminazione di validation e test.
 
-Il fine-tuning chat e' una fase successiva e separata:
+Il fine-tuning chat e' una fase successiva e separata, ora implementata e
+specificata in [Italiano-Chat-75M](italiano-chat-75m.md):
 
 ```text
 Italiano-Base-75M
@@ -244,10 +251,9 @@ Italiano-Base-75M
       -> Italiano-Chat-75M
 ```
 
-Non usare conversazioni personali o dati privati nel dataset. La perdita sui
-token del prompt deve essere mascherata durante SFT; questa capacita' richiede
-un'estensione esplicita del formato dataset, non un'etichetta ad hoc nel
-batcher v1.
+Non usare conversazioni personali o dati privati nel dataset. Il formato
+`.llmsft` conserva una mask per posizione e il trainer calcola loss e gradienti
+soltanto sul contenuto assistant e sul relativo token di fine turno.
 
 ## Valutazione e criteri di uscita
 

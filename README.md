@@ -26,6 +26,9 @@ Il primo backend GPU Metal e' introdotto nella
 Il backend CUDA, usato per proseguire il training su GPU in cloud partendo da un
 checkpoint prodotto sul Mac, e' specificato in
 [docs/backend-cuda.md](docs/backend-cuda.md).
+La chat e la generazione usano KV cache, logits dell'ultima posizione e un
+loader inference-only; contratto e benchmark sono documentati in
+[docs/serving-inference.md](docs/serving-inference.md).
 Per studiare l'intero percorso e il ruolo di ogni file consulta la
 [guida al flusso dati e agli artefatti](wiki/09-flusso-dati-e-artefatti.md).
 
@@ -267,7 +270,7 @@ tokenizer registrata nel dataset:
 ```sh
 ./build/release/llm-lab model diagnose \
   data/derived/italiano-v3/lm/italiano-v3.validation.llmdat \
-  artifacts/models/italiano-base-75m/best.llmckpt \
+  artifacts/models/italiano-base-75m/checkpoints/italiano-base-75m-v1-step-610000-validation-best.llmckpt \
   artifacts/tokenizers/italiano-v3.llmtok 16 --batch-size 1 --backend metal
 ```
 

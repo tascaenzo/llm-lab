@@ -67,20 +67,25 @@ struct lm_model {
     llm_tensor rope_cos_table;
     llm_tensor rope_sin_table;
     size_t forward_batch_size;
+    int inference_only;
 };
 
 struct lm_trainer {
     lm_model *model;
     lm_batcher *batcher;
+    lm_sft_batcher *sft_batcher;
+    int sft_mode;
     lm_trainer_config config;
     llm_tensor input_ids;
     llm_tensor target_ids;
+    llm_tensor loss_mask;
     llm_tensor logits;
     llm_tensor loss;
     llm_tensor logits_gradient;
     llm_tensor gradient_norm_square;
     token_id *host_inputs;
     token_id *host_targets;
+    uint32_t *host_loss_mask;
     unsigned long long step;
     float learning_rate;
     float gradient_norm;
@@ -90,6 +95,8 @@ struct lm_trainer {
 llm_status lm_model_parameter_create(lm_model_parameter *parameter, llm_backend *backend,
                                      const char *name, size_t rank, const size_t *shape,
                                      uint64_t *random_state);
+llm_status lm_model_parameter_create_inference(lm_model_parameter *parameter, llm_backend *backend,
+                                               const char *name, size_t rank, const size_t *shape);
 void lm_model_parameter_destroy(lm_model_parameter *parameter);
 llm_status lm_model_parameter_zero_grad(lm_model_parameter *parameter, llm_backend *backend);
 
@@ -114,5 +121,8 @@ llm_status lm_transformer_forward(lm_model *model);
 llm_status lm_transformer_backward(lm_model *model);
 const llm_tensor *lm_model_output_hidden(const lm_model *model);
 llm_tensor *lm_model_output_hidden_gradient(lm_model *model);
+
+llm_status lm_model_create_internal(llm_backend *backend, const lm_model_config *config,
+                                    int inference_only, lm_model **out_model);
 
 #endif

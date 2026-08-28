@@ -20,7 +20,8 @@ Un LLM non e' soltanto una rete neurale: e' un sistema formato da dati, rapprese
 12. [12 — Backend Metal](12-backend-metal.md): come gli stessi tensori diventano buffer e kernel eseguiti dalla GPU Apple.
 13. [13 — Modello Minimal](13-primo-modello-addestrabile.md): la prima rete reale, piccola e verificabile su CPU.
 14. [14 — Italiano-Base-75M](14-italiano-base-75m.md): il primo decoder pensato per completamenti italiani utili.
-15. [Glossario](glossario.md): termini chiave.
+15. [15 — Esperimento Italiano-Chat-75M](15-esperimento-sft-75m-post-mortem.md): post-mortem del primo SFT, problemi emersi e piano verso il 300M.
+16. [Glossario](glossario.md): termini chiave.
 
 ## Scala iniziale
 

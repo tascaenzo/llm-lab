@@ -110,6 +110,7 @@ jobs:
           runtime_test runtime_operations_test runtime_language_operations_test
           runtime_cpu_backend_test runtime_cpu_transformer_test
           runtime_metal_backend_test runtime_cuda_backend_test model_test dataset_test
+          sft_dataset_test sft_trainer_test
           encode_decode model_io pretokenizer training
 
       # The C unit suites all run instrumented: the model and dataset code owns
