@@ -270,7 +270,7 @@ tokenizer registrata nel dataset:
 ```sh
 ./build/release/llm-lab model diagnose \
   data/derived/italiano-v3/lm/italiano-v3.validation.llmdat \
-  artifacts/models/italiano-base-75m/best.llmckpt \
+  artifacts/models/italiano-base-75m/checkpoints/italiano-base-75m-v1-step-610000-validation-best.llmckpt \
   artifacts/tokenizers/italiano-v3.llmtok 16 --batch-size 1 --backend metal
 ```
 

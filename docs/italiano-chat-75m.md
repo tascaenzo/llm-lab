@@ -3,8 +3,8 @@
 **Stato:** la pipeline SFT e' implementata su CPU, Metal e CUDA. Comprende
 formato conversazionale versionato, loss solo sui token assistant, accumulo
 normalizzato per token supervisionato, validation, checkpoint riprendibili e
-generazione con protocollo chat. Per ottenere un checkpoint utile restano da
-fornire il corpus reale, eseguire i pilot e superare i criteri qualitativi.
+generazione con protocollo chat. Il corpus curato v2 e' pronto per il prossimo
+run; il checkpoint resta da validare su prompt tenuti fuori dal training.
 
 Questa fase non aumenta layer o parametri. Parte da `Italiano-Base-75M` e ne
 consolida comportamento e operativita'. Aggiungere capacita' architetturale
@@ -59,21 +59,14 @@ Contratti obbligatori:
 - lo split 90/5/5 dipende da `FNV-1a-64(id) mod 10000`, quindi e' stabile e
   impedisce che la stessa conversazione cambi split tra run.
 
-Prima della tokenizzazione si verifica struttura, provenienza e distribuzione:
-
-```sh
-python3 utils/sft/validate_conversations.py \
-  data/clean/italiano-sft-v1/conversations.jsonl \
-  --report data/clean/italiano-sft-v1/validation-report.json
-```
-
-Il limite tokenizzato autorevole viene verificato dal comando nativo:
+Il limite tokenizzato autorevole viene verificato dal comando nativo, usando il
+corpus curato v2:
 
 ```sh
 ./build/release/llm-lab dataset sft-prepare \
   artifacts/tokenizers/italiano-v3.llmtok \
-  data/clean/italiano-sft-v1/conversations.jsonl \
-  data/derived/italiano-sft-v1/italiano-sft-v1 \
+  data/derived/italiano-chat-corpus-v2/italiano-chat-corpus-v2.context512.jsonl \
+  data/derived/italiano-chat-corpus-v2/italiano-chat-corpus-v2.context512 \
   --context 512
 ```
 
@@ -88,8 +81,8 @@ Per un 75M la qualita' e la coerenza contano piu' del volume indiscriminato.
 Il primo corpus candidato dovrebbe combinare istruzioni generali, dialoghi
 brevi, trasformazione del testo, ragionamento elementare, domande chiarificatrici
 e rifiuti sicuri. Ogni sorgente deve avere una licenza verificabile; dati
-personali, conversazioni private e output sintetici non revisionati non entrano
-nel training.
+personali, conversazioni private e output sintetici ripetitivi o non
+controllabili non entrano nel training.
 
 Prima di un run lungo:
 
@@ -99,9 +92,13 @@ Prima di un run lungo:
 4. rimuovere sovrapposizioni con la suite di valutazione;
 5. congelare corpus, manifest e checksum.
 
-Non esiste nel repository un corpus inventato automaticamente: la pipeline e'
-pronta, ma la qualita' del prodotto dipende da dati realmente autorizzati e
-revisionati.
+Il corpus v2 e' una selezione automatica riproducibile di dati autorizzati;
+non e' una garanzia di correttezza fattuale riga per riga. La sua costruzione,
+i filtri e i limiti sono descritti in [Corpus chat italiano v2 curato](italiano-chat-corpus-v2.md).
+
+Il file sorgente e le regole per aggiungere nuovi esempi sono descritti in
+[Corpus chat italiano v1](italiano-chat-corpus-v1.md). Il dataset da usare nel
+prossimo run e' [Corpus chat italiano v2 curato](italiano-chat-corpus-v2.md).
 
 ## Pilot e training
 
@@ -112,19 +109,19 @@ scheduler e posizione del batcher SFT.
 
 ```sh
 ./build/release/llm-lab model sft \
-  data/derived/italiano-sft-v1/italiano-sft-v1.train.llmsft 200 \
-  --base artifacts/models/italiano-base-75m/best.llmckpt \
+  data/derived/italiano-chat-corpus-v2/italiano-chat-corpus-v2.context512.train.llmsft 400 \
+  --base artifacts/models/italiano-base-75m/checkpoints/italiano-base-75m-v1-step-610000-validation-best.llmckpt \
   --backend metal --batch-size 2 --gradient-accumulation 8 \
   --learning-rate 3e-5 --min-learning-rate 3e-6 \
-  --warmup-steps 20 --total-steps 200 \
+  --warmup-steps 40 --total-steps 400 \
   --beta1 0.9 --beta2 0.95 --epsilon 1e-8 \
   --weight-decay 0.01 --gradient-clip 1.0 \
-  --validation data/derived/italiano-sft-v1/italiano-sft-v1.validation.llmsft \
-  --validation-every 25 --validation-batches 100 \
-  --checkpoint artifacts/models/italiano-chat-75m/pilot-latest.llmckpt \
-  --checkpoint-every 25 \
-  --best-checkpoint artifacts/models/italiano-chat-75m/pilot-best.llmckpt \
-  --log artifacts/models/italiano-chat-75m/pilot.jsonl
+  --validation data/derived/italiano-chat-corpus-v2/italiano-chat-corpus-v2.context512.validation.llmsft \
+  --validation-every 40 --validation-batches 45 \
+  --checkpoint artifacts/models/italiano-chat-75m/runs/italiano-chat-75m-v2-base610000-curated/latest.llmckpt \
+  --checkpoint-every 40 \
+  --best-checkpoint artifacts/models/italiano-chat-75m/runs/italiano-chat-75m-v2-base610000-curated/best.llmckpt \
+  --log artifacts/models/italiano-chat-75m/runs/italiano-chat-75m-v2-base610000-curated/training.jsonl
 ```
 
 Il pilot serve a scegliere learning rate, batch effettivo e durata. Non si
@@ -133,12 +130,12 @@ controlla la qualita' delle generazioni. Per riprendere esattamente:
 
 ```sh
 ./build/release/llm-lab model sft \
-  data/derived/italiano-sft-v1/italiano-sft-v1.train.llmsft 200 \
-  --resume artifacts/models/italiano-chat-75m/pilot-latest.llmckpt \
+  data/derived/italiano-chat-corpus-v2/italiano-chat-corpus-v2.context512.train.llmsft 400 \
+  --resume artifacts/models/italiano-chat-75m/runs/italiano-chat-75m-v2-base610000-curated/latest.llmckpt \
   --backend metal \
-  --validation data/derived/italiano-sft-v1/italiano-sft-v1.validation.llmsft \
-  --validation-every 25 --validation-batches 100 \
-  --checkpoint artifacts/models/italiano-chat-75m/pilot-latest.llmckpt
+  --validation data/derived/italiano-chat-corpus-v2/italiano-chat-corpus-v2.context512.validation.llmsft \
+  --validation-every 40 --validation-batches 45 \
+  --checkpoint artifacts/models/italiano-chat-75m/runs/italiano-chat-75m-v2-base610000-curated/latest.llmckpt
 ```
 
 ## Inferenza e valutazione
@@ -147,31 +144,24 @@ La CLI applica lo stesso template del training, esclude dalla generazione tutti
 i token di ruolo e padding, termina su `<|end|>` e usa il decoder incrementale
 con KV cache descritto in [Serving e inferenza incrementale](serving-inference.md):
 
+Il messaggio system e' realmente opzionale: senza `--system` la CLI non ne
+inserisce uno implicito, cosi' il prompt coincide con gli esempi SFT privi del
+ruolo system. Se il corpus e' stato addestrato con un system prompt, va passato
+esplicitamente con `--system TEXT`.
+
 ```sh
 ./build/release/llm-lab model chat \
-  artifacts/models/italiano-chat-75m/best.llmckpt \
+  artifacts/models/italiano-chat-75m/runs/italiano-chat-75m-v2-base610000-curated/best.llmckpt \
   artifacts/tokenizers/italiano-v3.llmtok 128 \
   "Spiegami la fotosintesi in modo semplice." \
+  --system "Sei un assistente utile, chiaro e pratico." \
   --backend metal --temperature 0.7 --top-k 40 \
   --repetition-penalty 1.1 --seed 1
 ```
 
-La suite versionata si esegue con parametri fissi e produce un JSONL che include
-checksum di modello, tokenizer e prompt:
-
-```sh
-python3 utils/sft/evaluate_chat.py \
-  ./build/release/llm-lab \
-  artifacts/models/italiano-chat-75m/best.llmckpt \
-  artifacts/tokenizers/italiano-v3.llmtok \
-  evaluations/italiano-chat-75m-prompts.jsonl \
-  artifacts/models/italiano-chat-75m/evaluation.jsonl \
-  --backend metal --tokens 128
-```
-
-Ogni risposta va valutata almeno per aderenza, italiano, formato, ripetizione,
-correttezza evidente e sicurezza. La suite qualitativa non sostituisce la loss
-assistant sul validation/test split.
+Le risposte vanno valutate con prompt fissi almeno per aderenza, italiano,
+formato, ripetizione, correttezza evidente e sicurezza. La suite qualitativa
+non sostituisce la loss assistant sul validation/test split.
 
 ## Gate prima di chiamarlo “funzionante”
 

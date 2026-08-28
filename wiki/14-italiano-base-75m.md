@@ -9,6 +9,10 @@ utili i completamenti in italiano.
 La specifica operativa e' in
 [Italiano-Base-75M](../docs/italiano-base-75m.md).
 
+Il pretraining e il primo ciclo SFT sono stati completati. I risultati reali,
+inclusi i limiti qualitativi e il piano di correzione, sono documentati nel
+[post-mortem dell'esperimento Italiano-Chat-75M](15-esperimento-sft-75m-post-mortem.md).
+
 ## Su quali dati
 
 Il modello nasceva per essere addestrato sulla sola Wikipedia italiana. La
@@ -45,14 +49,14 @@ attention e un MLP SwiGLU in ogni blocco.
 12 blocchi
 hidden size 512
 8 head di attention
-SwiGLU 1536
+SwiGLU 1608
 contesto 512 token
-circa 74 milioni di parametri
+75.010.560 parametri
 ```
 
 Non e' la configurazione piu' grande che potrebbe teoricamente entrare nella
 memoria del Mac. E' una scelta bilanciata: lo split di training contiene circa
-1,56 miliardi di token, cioe' all'incirca 21 token per parametro. Rendere il
+2,56 miliardi di token, cioe' all'incirca 34 token per parametro. Rendere il
 modello molto piu' grande lo farebbe allenare con meno esempi per ogni peso e
 rallenterebbe molto gli esperimenti senza una garanzia di testo migliore.
 
@@ -82,8 +86,8 @@ mai selezionate.
 
 Il trainer del modello 75M usa quindi epoche riproducibili, con
 campionamento streaming senza rimpiazzo. Un'epoca e' il passaggio sui circa
-1,56 miliardi di token train. Con 4.096 token effettivi per update equivale a
-circa 381 mila update.
+2,56 miliardi di token train. Con 4.096 token effettivi per update equivale a
+circa 624 mila update.
 
 Il trainer implementa accumulo dei gradienti, warmup lineare, cosine decay,
 checkpoint atomico periodico, ripresa dello stato, campionamento streaming

@@ -37,6 +37,10 @@ __pycache__/
 # Baseline e risultati prestazionali locali, dipendenti dalla macchina.
 /artifacts/benchmarks/local/
 
+# Checkpoint diagnostici locali: i report testuali sono versionabili, i pesi
+# binari sono grandi e rigenerabili.
+/artifacts/diagnostics/**/*.llmckpt
+
 # Checkpoint locali del training: grandi e dipendenti dall'esperimento.
 # Il checkpoint di riferimento del Modello Minimal e' invece un artefatto
 # riproducibile e versionato.

@@ -15,7 +15,7 @@ La suite e' qualitativa: completa la validation quantitativa, non la sostituisce
 `italiano-chat-75m-prompts.jsonl` verifica invece il comportamento istruzionale:
 aderenza, formato, ragionamento elementare, gestione dell'incertezza, richieste
 di chiarimento e sicurezza. Ogni record dichiara categoria e criteri manuali.
-La suite puo' essere eseguita in modo riproducibile con
-`utils/sft/evaluate_chat.py`, come descritto in
-`docs/italiano-chat-75m.md`. I prompt di valutazione non devono essere copiati
-nel corpus SFT.
+La suite va eseguita con `llm-lab model chat`, mantenendo fissi checkpoint,
+tokenizer, backend, temperatura, top-k, repetition penalty, seed e numero
+massimo di token. Comando e output vanno registrati insieme alla revisione
+manuale. I prompt di valutazione non devono essere copiati nel corpus SFT.

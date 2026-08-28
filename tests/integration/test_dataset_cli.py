@@ -456,6 +456,24 @@ def main():
                 "cpu",
             ]
         )
+        chat_without_system = run(
+            [
+                str(cli),
+                "model",
+                "chat",
+                str(sft_checkpoint),
+                str(model),
+                "2",
+                "a",
+                "--backend",
+                "cpu",
+            ]
+        )
+        if "prefill 4 token" not in chat_without_system.stderr:
+            raise AssertionError(
+                "la chat senza --system deve serializzare soltanto user/end/assistant: "
+                + chat_without_system.stderr
+            )
         sampled_command = [
             str(cli),
             "model",

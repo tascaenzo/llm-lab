@@ -46,7 +46,7 @@ produce JSON:
 ```sh
 python3 utils/benchmarks/benchmark_generation.py \
   ./build/release/llm-lab \
-  artifacts/models/italiano-base-75m/best.llmckpt \
+  artifacts/models/italiano-base-75m/checkpoints/italiano-base-75m-v1-step-610000-validation-best.llmckpt \
   artifacts/tokenizers/italiano-v3.llmtok \
   --backend cpu --tokens 64 --warmup 1 --runs 5 \
   --output artifacts/benchmarks/generation-cpu.json

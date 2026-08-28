@@ -20,11 +20,16 @@ prima la pagina wiki e poi la specifica corrispondente.
 9. [Italiano-Base-75M: primo decoder utilizzabile](italiano-base-75m.md)
 10. [Checkpoint pubblici di Italiano Base 75M](italiano-base-75m-checkpoints.md)
 11. [Italiano-Chat-75M: consolidamento e SFT](italiano-chat-75m.md)
-12. [Serving e inferenza incrementale](serving-inference.md)
-13. [Backend CPU](backend-cpu.md)
-14. [Backend Metal](backend-metal.md)
-15. [Backend CUDA](backend-cuda.md)
-16. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
+12. [Corpus chat italiano v1](italiano-chat-corpus-v1.md)
+13. [Corpus chat italiano v2 curato](italiano-chat-corpus-v2.md)
+14. [SFT sanity facts v1](sft-sanity-facts-v1.md)
+15. [Italiano Simple QA v1](italiano-simple-qa-v1.md)
+16. [Italiano Simple QA v2](italiano-simple-qa-v2.md)
+17. [Serving e inferenza incrementale](serving-inference.md)
+18. [Backend CPU](backend-cpu.md)
+19. [Backend Metal](backend-metal.md)
+20. [Backend CUDA](backend-cuda.md)
+21. [Piano Metal ad alte prestazioni con MPS](metal-mps-development-plan.md)
 
 Le specifiche descrivono anche componenti non ancora implementati. Ogni pagina
 deve indicare chiaramente confini, stato atteso e criteri di completamento.

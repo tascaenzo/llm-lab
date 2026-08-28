@@ -14,8 +14,8 @@
 #define LM_SFT_SPLIT_COUNT 3U
 
 static const unsigned char sft_magic[8] = {'L', 'L', 'M', 'S', 'F', 'T', '\n', '\0'};
-static const char *const sft_suffixes[LM_SFT_SPLIT_COUNT] = {
-    ".train.llmsft", ".validation.llmsft", ".test.llmsft"};
+static const char *const sft_suffixes[LM_SFT_SPLIT_COUNT] = {".train.llmsft", ".validation.llmsft",
+                                                             ".test.llmsft"};
 
 typedef struct sft_writer {
     FILE *file;
@@ -219,8 +219,8 @@ static lm_dataset_status writer_append(sft_writer *writer, const sft_sequence *s
         for (size_t position = 0U; position < context_length; ++position) {
             uint32_t value = 0U;
             if (part == 0U) {
-                value = position + 1U < sequence->length ? sequence->tokens[position]
-                                                         : padding_token;
+                value =
+                    position + 1U < sequence->length ? sequence->tokens[position] : padding_token;
             } else if (part == 1U) {
                 value = position + 1U < sequence->length ? sequence->tokens[position + 1U]
                                                          : padding_token;
@@ -257,8 +257,8 @@ static lm_dataset_status writer_finish(sft_writer *writer, uint32_t tokenizer_vo
     }
     unsigned char payload_checksum[32] = {0};
     tokenizer_sha256_final(&writer->payload_checksum, payload_checksum);
-    const uint64_t payload_bytes = writer->example_count * (uint64_t)context_length *
-                                   UINT64_C(3) * LM_SFT_TOKEN_SIZE;
+    const uint64_t payload_bytes =
+        writer->example_count * (uint64_t)context_length * UINT64_C(3) * LM_SFT_TOKEN_SIZE;
     unsigned char header[LM_SFT_HEADER_SIZE] = {0};
     memcpy(header, sft_magic, sizeof(sft_magic));
     store_u32(header + 8U, LM_SFT_FORMAT_VERSION);
@@ -348,9 +348,9 @@ static int id_set_insert(sft_id_set *set, uint64_t hash) {
 
 static lm_dataset_split split_for_id(const unsigned char *id, size_t length) {
     const uint64_t bucket = fnv1a_64(id, length) % UINT64_C(10000);
-    return bucket < UINT64_C(9000) ? LM_DATASET_TRAIN
-                                  : (bucket < UINT64_C(9500) ? LM_DATASET_VALIDATION
-                                                            : LM_DATASET_TEST);
+    return bucket < UINT64_C(9000)
+               ? LM_DATASET_TRAIN
+               : (bucket < UINT64_C(9500) ? LM_DATASET_VALIDATION : LM_DATASET_TEST);
 }
 
 static int sequence_append(sft_sequence *sequence, token_id token, uint32_t assistant_target) {
@@ -401,8 +401,7 @@ static int decoded_string_has_content(const unsigned char *json, const lm_json_t
     size_t length = 0U;
     const int decode_status = lm_json_decode_string(json, token, &value, &length);
     if (decode_status != 1) {
-        *out_status = decode_status < 0 ? LM_DATASET_ALLOCATION_FAILED
-                                       : LM_DATASET_INVALID_JSONL;
+        *out_status = decode_status < 0 ? LM_DATASET_ALLOCATION_FAILED : LM_DATASET_INVALID_JSONL;
         return 0;
     }
     int has_content = 0;
@@ -502,9 +501,8 @@ static lm_dataset_status append_message(const unsigned char *json, const lm_json
 
 static lm_dataset_status parse_conversation(const unsigned char *json, size_t json_length,
                                             const tokenizer *text_tokenizer,
-                                            const lm_chat_protocol *protocol,
-                                            size_t context_length, lm_dataset_split *out_split,
-                                            uint64_t *out_id_hash,
+                                            const lm_chat_protocol *protocol, size_t context_length,
+                                            lm_dataset_split *out_split, uint64_t *out_id_hash,
                                             sft_sequence *out_sequence) {
     size_t capacity = 64U;
     lm_json_token *tokens = NULL;
@@ -579,8 +577,7 @@ static lm_dataset_status parse_conversation(const unsigned char *json, size_t js
             result = LM_DATASET_INVALID_JSONL;
             break;
         }
-        if (message_count == 0U &&
-            lm_json_token_equals(json, &tokens[role_index], "system") == 0) {
+        if (message_count == 0U && lm_json_token_equals(json, &tokens[role_index], "system") == 0) {
             expected_role = 1;
         }
         result = append_message(json, tokens, token_count, index, text_tokenizer, protocol,
@@ -664,8 +661,8 @@ lm_dataset_status lm_sft_dataset_prepare_jsonl(const char *tokenizer_path,
     }
     const uint32_t model_vocabulary_size = tokenizer_vocab_size + 8U;
     lm_chat_protocol protocol = {0};
-    lm_dataset_status status = lm_chat_protocol_v1(
-        tokenizer_vocab_size, model_vocabulary_size, &protocol);
+    lm_dataset_status status =
+        lm_chat_protocol_v1(tokenizer_vocab_size, model_vocabulary_size, &protocol);
     unsigned char tokenizer_checksum[32] = {0};
     if (status == LM_DATASET_OK) {
         status = checksum_file(tokenizer_path, tokenizer_checksum);
@@ -685,8 +682,7 @@ lm_dataset_status lm_sft_dataset_prepare_jsonl(const char *tokenizer_path,
     while (status == LM_DATASET_OK) {
         size_t line_length = 0U;
         int has_line = 0;
-        const int line_status =
-            read_line(input, &line, &line_capacity, &line_length, &has_line);
+        const int line_status = read_line(input, &line, &line_capacity, &line_length, &has_line);
         if (line_status != 1) {
             status = line_status < 0 ? LM_DATASET_ALLOCATION_FAILED : LM_DATASET_IO_ERROR;
             break;
@@ -710,8 +706,8 @@ lm_dataset_status lm_sft_dataset_prepare_jsonl(const char *tokenizer_path,
             }
         }
         if (status == LM_DATASET_OK) {
-            status = writer_append(&writers[split], &sequence, context_length,
-                                   protocol.padding_token);
+            status =
+                writer_append(&writers[split], &sequence, context_length, protocol.padding_token);
         }
         sequence_destroy(&sequence);
     }
@@ -738,8 +734,7 @@ lm_dataset_status lm_sft_dataset_prepare_jsonl(const char *tokenizer_path,
         out_report->protocol = protocol;
         for (size_t index = 0U; index < LM_SFT_SPLIT_COUNT; ++index) {
             out_report->example_counts[index] = writers[index].example_count;
-            out_report->supervised_token_counts[index] =
-                writers[index].supervised_token_count;
+            out_report->supervised_token_counts[index] = writers[index].supervised_token_count;
             writers[index].published = 0;
         }
     }
@@ -810,8 +805,8 @@ lm_dataset_status lm_sft_dataset_open(const char *path, lm_sft_dataset **out_dat
          protocol.padding_token != expected_protocol.padding_token ||
          example_count >
              UINT64_MAX / ((uint64_t)context_length * UINT64_C(3) * LM_SFT_TOKEN_SIZE) ||
-         payload_bytes != example_count * (uint64_t)context_length * UINT64_C(3) *
-                              LM_SFT_TOKEN_SIZE)) {
+         payload_bytes !=
+             example_count * (uint64_t)context_length * UINT64_C(3) * LM_SFT_TOKEN_SIZE)) {
         status = LM_DATASET_INVALID_FORMAT;
     }
     if (status == LM_DATASET_OK) {
@@ -878,8 +873,7 @@ lm_chat_protocol lm_sft_dataset_protocol(const lm_sft_dataset *dataset) {
 }
 
 lm_dataset_status lm_sft_dataset_tokenizer_matches(const lm_sft_dataset *dataset,
-                                                    const char *tokenizer_path,
-                                                    int *out_matches) {
+                                                   const char *tokenizer_path, int *out_matches) {
     if (dataset == NULL || tokenizer_path == NULL || out_matches == NULL) {
         return LM_DATASET_INVALID_ARGUMENT;
     }
@@ -973,8 +967,7 @@ lm_dataset_status lm_sft_batcher_next(lm_sft_batcher *batcher, token_id *out_inp
         if (example > (UINT64_MAX - LM_SFT_HEADER_SIZE) / batcher->dataset->record_byte_count) {
             return LM_DATASET_OVERFLOW;
         }
-        const uint64_t offset =
-            LM_SFT_HEADER_SIZE + example * batcher->dataset->record_byte_count;
+        const uint64_t offset = LM_SFT_HEADER_SIZE + example * batcher->dataset->record_byte_count;
         if (seek_file(batcher->dataset->file, offset) != 0) {
             return LM_DATASET_IO_ERROR;
         }
@@ -984,8 +977,7 @@ lm_dataset_status lm_sft_batcher_next(lm_sft_batcher *batcher, token_id *out_inp
             status = read_u32_array(batcher->dataset->file, out_targets + row * context, context);
         }
         if (status == LM_DATASET_OK) {
-            status =
-                read_u32_array(batcher->dataset->file, out_loss_mask + row * context, context);
+            status = read_u32_array(batcher->dataset->file, out_loss_mask + row * context, context);
         }
         if (status != LM_DATASET_OK) {
             return status;
@@ -1021,8 +1013,7 @@ lm_dataset_status lm_sft_batcher_get_state(const lm_sft_batcher *batcher,
     return LM_DATASET_OK;
 }
 
-lm_dataset_status lm_sft_batcher_set_state(lm_sft_batcher *batcher,
-                                           const lm_batcher_state *state) {
+lm_dataset_status lm_sft_batcher_set_state(lm_sft_batcher *batcher, const lm_batcher_state *state) {
     if (batcher == NULL || state == NULL || state->random_state == 0U ||
         state->sample_index > batcher->dataset->example_count ||
         state->next_offset >= batcher->dataset->example_count ||

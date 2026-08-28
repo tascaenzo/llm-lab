@@ -2218,7 +2218,7 @@ static int run_model_chat(int argc, char **argv) {
         fprintf(stderr, "TOKENS must be a positive integer supported by this system.\n");
         return 1;
     }
-    const char *system_prompt = "Sei un assistente utile che risponde in italiano.";
+    const char *system_prompt = NULL;
     cli_generation_options options = {
         .temperature = 0.7F, .repetition_penalty = 1.1F, .top_k = 40U, .random_state = UINT64_C(1)};
     cli_backend_choice backend_choice = CLI_BACKEND_CPU;
@@ -2281,7 +2281,7 @@ static int run_model_chat(int argc, char **argv) {
         status = LLM_INVALID_SHAPE;
     }
     token_sequence system_tokens = {0}, user_tokens = {0};
-    if (status == LLM_OK) {
+    if (status == LLM_OK && system_prompt != NULL) {
         tokenizer_result = tokenizer_encode(text_tokenizer, (const unsigned char *)system_prompt,
                                             strlen(system_prompt), &system_tokens);
         status = tokenizer_result == TOKENIZER_OK ? LLM_OK : LLM_BACKEND_ERROR;
@@ -2292,12 +2292,12 @@ static int run_model_chat(int argc, char **argv) {
         status = tokenizer_result == TOKENIZER_OK ? LLM_OK : LLM_BACKEND_ERROR;
     }
     size_t prefix_length = 0U;
+    const size_t role_tokens = system_prompt != NULL ? 5U : 3U;
     if (status == LLM_OK &&
-        (system_tokens.length > SIZE_MAX - user_tokens.length - 5U ||
-         system_tokens.length + user_tokens.length + 5U > config.context_length ||
-         maximum_generated > SIZE_MAX - system_tokens.length - user_tokens.length - 5U)) {
+        (system_tokens.length > SIZE_MAX - user_tokens.length - role_tokens ||
+         system_tokens.length + user_tokens.length + role_tokens > config.context_length ||
+         maximum_generated > SIZE_MAX - system_tokens.length - user_tokens.length - role_tokens))
         status = LLM_INVALID_SHAPE;
-    }
     token_id *sequence = NULL;
     if (status == LLM_OK) {
         prefix_length = system_tokens.length + user_tokens.length + 5U;
@@ -2306,10 +2306,13 @@ static int run_model_chat(int argc, char **argv) {
     }
     if (status == LLM_OK) {
         size_t position = 0U;
-        sequence[position++] = protocol.system_token;
-        memcpy(sequence + position, system_tokens.ids, system_tokens.length * sizeof(*sequence));
-        position += system_tokens.length;
-        sequence[position++] = protocol.end_token;
+        if (system_prompt != NULL) {
+            sequence[position++] = protocol.system_token;
+            memcpy(sequence + position, system_tokens.ids,
+                   system_tokens.length * sizeof(*sequence));
+            position += system_tokens.length;
+            sequence[position++] = protocol.end_token;
+        }
         sequence[position++] = protocol.user_token;
         memcpy(sequence + position, user_tokens.ids, user_tokens.length * sizeof(*sequence));
         position += user_tokens.length;
