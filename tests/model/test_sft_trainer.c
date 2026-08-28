@@ -47,8 +47,8 @@ static int write_examples(const char *path) {
     return counts[0] == 3 && counts[1] == 1 && counts[2] == 1 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
-static void remove_artifacts(const char *prefix, const char *tokenizer_path,
-                             const char *jsonl_path, const char *checkpoint_path) {
+static void remove_artifacts(const char *prefix, const char *tokenizer_path, const char *jsonl_path,
+                             const char *checkpoint_path) {
     char path[600] = {0};
     (void)snprintf(path, sizeof(path), "%s.train.llmsft", prefix);
     (void)remove(path);

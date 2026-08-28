@@ -36,8 +36,8 @@ static int parse_string(const unsigned char *json, size_t length, lm_json_parser
         const unsigned char byte = json[parser->position];
         if (byte == '"') {
             size_t index = 0U;
-            const int status = allocate_token(parser, tokens, capacity, LM_JSON_STRING, start,
-                                              &index);
+            const int status =
+                allocate_token(parser, tokens, capacity, LM_JSON_STRING, start, &index);
             if (status != 1) {
                 return status;
             }
@@ -93,8 +93,7 @@ static int parse_primitive(const unsigned char *json, size_t length, lm_json_par
         return 0;
     }
     size_t index = 0U;
-    const int status =
-        allocate_token(parser, tokens, capacity, LM_JSON_PRIMITIVE, start, &index);
+    const int status = allocate_token(parser, tokens, capacity, LM_JSON_PRIMITIVE, start, &index);
     if (status != 1) {
         return status;
     }
@@ -175,8 +174,7 @@ int lm_json_token_equals(const unsigned char *json, const lm_json_token *token,
         return 0;
     }
     const size_t length = strlen(literal);
-    return token->end - token->start == length &&
-           memcmp(json + token->start, literal, length) == 0;
+    return token->end - token->start == length && memcmp(json + token->start, literal, length) == 0;
 }
 
 static int hex_value(unsigned char byte, uint32_t *out_value) {
@@ -272,8 +270,8 @@ int lm_json_decode_string(const unsigned char *json, const lm_json_token *token,
                     free(output);
                     return 0;
                 }
-                codepoint = UINT32_C(0x10000) + ((codepoint - UINT32_C(0xd800)) << 10U) +
-                            low - UINT32_C(0xdc00);
+                codepoint = UINT32_C(0x10000) + ((codepoint - UINT32_C(0xd800)) << 10U) + low -
+                            UINT32_C(0xdc00);
             } else if (codepoint >= UINT32_C(0xdc00) && codepoint <= UINT32_C(0xdfff)) {
                 free(output);
                 return 0;
@@ -291,11 +289,21 @@ int lm_json_decode_string(const unsigned char *json, const lm_json_token *token,
         case '/':
             output[length++] = byte;
             break;
-        case 'b': output[length++] = '\b'; break;
-        case 'f': output[length++] = '\f'; break;
-        case 'n': output[length++] = '\n'; break;
-        case 'r': output[length++] = '\r'; break;
-        case 't': output[length++] = '\t'; break;
+        case 'b':
+            output[length++] = '\b';
+            break;
+        case 'f':
+            output[length++] = '\f';
+            break;
+        case 'n':
+            output[length++] = '\n';
+            break;
+        case 'r':
+            output[length++] = '\r';
+            break;
+        case 't':
+            output[length++] = '\t';
+            break;
         default:
             free(output);
             return 0;

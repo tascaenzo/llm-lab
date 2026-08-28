@@ -196,12 +196,10 @@ llm_status lm_sft_trainer_create(lm_model *model, lm_sft_dataset *dataset,
     llm_backend *backend = lm_model_backend(model);
     status = llm_tensor_create(backend, LLM_DTYPE_U32, 2U, input_shape, &trainer->input_ids);
     if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_U32, 1U, target_shape,
-                                   &trainer->target_ids);
+        status = llm_tensor_create(backend, LLM_DTYPE_U32, 1U, target_shape, &trainer->target_ids);
     }
     if (status == LLM_OK) {
-        status =
-            llm_tensor_create(backend, LLM_DTYPE_U32, 1U, target_shape, &trainer->loss_mask);
+        status = llm_tensor_create(backend, LLM_DTYPE_U32, 1U, target_shape, &trainer->loss_mask);
     }
     if (status == LLM_OK) {
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &trainer->logits);
@@ -210,12 +208,12 @@ llm_status lm_sft_trainer_create(lm_model *model, lm_sft_dataset *dataset,
         status = llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &trainer->loss);
     }
     if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape,
-                                   &trainer->logits_gradient);
+        status =
+            llm_tensor_create(backend, LLM_DTYPE_F32, 2U, logits_shape, &trainer->logits_gradient);
     }
     if (status == LLM_OK) {
-        status = llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL,
-                                   &trainer->gradient_norm_square);
+        status =
+            llm_tensor_create(backend, LLM_DTYPE_F32, 0U, NULL, &trainer->gradient_norm_square);
     }
     if (status != LLM_OK) {
         lm_trainer_destroy(trainer);
@@ -301,9 +299,9 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
         size_t micro_supervised_tokens = token_count;
         lm_dataset_status batch_status = LM_DATASET_OK;
         if (trainer->sft_mode != 0) {
-            batch_status = lm_sft_batcher_next(
-                trainer->sft_batcher, trainer->host_inputs, trainer->host_targets,
-                trainer->host_loss_mask, &micro_supervised_tokens);
+            batch_status = lm_sft_batcher_next(trainer->sft_batcher, trainer->host_inputs,
+                                               trainer->host_targets, trainer->host_loss_mask,
+                                               &micro_supervised_tokens);
         } else {
             batch_status =
                 lm_batcher_next(trainer->batcher, trainer->host_inputs, trainer->host_targets);
@@ -332,20 +330,20 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
         }
         if (status == LLM_OK) {
             status = trainer->sft_mode != 0
-                         ? llm_cross_entropy_masked_forward(
-                               backend, &trainer->logits, &trainer->target_ids,
-                               &trainer->loss_mask, 1U, &trainer->loss)
+                         ? llm_cross_entropy_masked_forward(backend, &trainer->logits,
+                                                            &trainer->target_ids,
+                                                            &trainer->loss_mask, 1U, &trainer->loss)
                          : llm_cross_entropy_forward(backend, &trainer->logits,
                                                      &trainer->target_ids, &trainer->loss);
         }
         if (status == LLM_OK) {
-            status = trainer->sft_mode != 0
-                         ? llm_cross_entropy_masked_backward(
-                               backend, &trainer->logits, &trainer->target_ids,
-                               &trainer->loss_mask, 1U, &trainer->logits_gradient)
-                         : llm_cross_entropy_backward(backend, &trainer->logits,
-                                                      &trainer->target_ids,
-                                                      &trainer->logits_gradient);
+            status =
+                trainer->sft_mode != 0
+                    ? llm_cross_entropy_masked_backward(backend, &trainer->logits,
+                                                        &trainer->target_ids, &trainer->loss_mask,
+                                                        1U, &trainer->logits_gradient)
+                    : llm_cross_entropy_backward(backend, &trainer->logits, &trainer->target_ids,
+                                                 &trainer->logits_gradient);
         }
         if (status == LLM_OK) {
             trainer->gradients_are_zero = 0;
@@ -367,27 +365,24 @@ llm_status lm_trainer_step(lm_trainer *trainer, float *out_loss) {
     }
     const float learning_rate = learning_rate_for_step(&trainer->config, trainer->step + 1U);
     const float gradient_divisor =
-        trainer->sft_mode != 0 ? (float)(supervised_token_count == 0U ? 1U
-                                                                      : supervised_token_count)
+        trainer->sft_mode != 0 ? (float)(supervised_token_count == 0U ? 1U : supervised_token_count)
                                : (float)trainer->config.gradient_accumulation_steps;
     float gradient_norm = 0.0F;
     float clipping_scale = 1.0F;
     if (status == LLM_OK && trainer->config.gradient_clip_norm > 0.0F) {
-        status = trainer_gradient_norm(trainer, use_device_batch, gradient_divisor,
-                                       &gradient_norm);
+        status = trainer_gradient_norm(trainer, use_device_batch, gradient_divisor, &gradient_norm);
         if (status == LLM_OK && gradient_norm > trainer->config.gradient_clip_norm) {
             clipping_scale = trainer->config.gradient_clip_norm / gradient_norm;
         }
     }
-    const llm_adamw_options options = {
-        .learning_rate = learning_rate,
-        .beta1 = trainer->config.beta1,
-        .beta2 = trainer->config.beta2,
-        .epsilon = trainer->config.epsilon,
-        .weight_decay = trainer->config.weight_decay,
-        .gradient_scale = clipping_scale / gradient_divisor,
-        .step = trainer->step + 1U,
-        .zero_gradient = 1};
+    const llm_adamw_options options = {.learning_rate = learning_rate,
+                                       .beta1 = trainer->config.beta1,
+                                       .beta2 = trainer->config.beta2,
+                                       .epsilon = trainer->config.epsilon,
+                                       .weight_decay = trainer->config.weight_decay,
+                                       .gradient_scale = clipping_scale / gradient_divisor,
+                                       .step = trainer->step + 1U,
+                                       .zero_gradient = 1};
     if (status == LLM_OK) {
         status = begin_device_batch(backend, use_device_batch);
         if (status == LLM_OK) {
@@ -516,7 +511,8 @@ llm_status lm_model_evaluate_sft_validation(lm_model *model, lm_sft_dataset *dat
     }
     lm_model_config config = {0};
     llm_status status = lm_model_get_config(model, &config);
-    if (status != LLM_OK || config.vocabulary_size != lm_sft_dataset_model_vocabulary_size(dataset) ||
+    if (status != LLM_OK ||
+        config.vocabulary_size != lm_sft_dataset_model_vocabulary_size(dataset) ||
         config.context_length != lm_sft_dataset_context_length(dataset) ||
         batch_size > SIZE_MAX / config.context_length) {
         return status == LLM_OK ? LLM_INVALID_SHAPE : status;
@@ -534,8 +530,8 @@ llm_status lm_model_evaluate_sft_validation(lm_model *model, lm_sft_dataset *dat
     if (host_inputs == NULL || host_targets == NULL || host_mask == NULL) {
         status = LLM_ALLOCATION_FAILED;
     }
-    if (status == LLM_OK && lm_sft_batcher_create(dataset, batch_size, seed, &batcher) !=
-                                LM_DATASET_OK) {
+    if (status == LLM_OK &&
+        lm_sft_batcher_create(dataset, batch_size, seed, &batcher) != LM_DATASET_OK) {
         status = LLM_BACKEND_ERROR;
     }
     if (status == LLM_OK)
@@ -554,8 +550,8 @@ llm_status lm_model_evaluate_sft_validation(lm_model *model, lm_sft_dataset *dat
     const int use_device_batch = backend_uses_batches(backend);
     for (size_t index = 0U; status == LLM_OK && index < batch_count; ++index) {
         size_t batch_supervised = 0U;
-        if (lm_sft_batcher_next(batcher, host_inputs, host_targets, host_mask,
-                                &batch_supervised) != LM_DATASET_OK ||
+        if (lm_sft_batcher_next(batcher, host_inputs, host_targets, host_mask, &batch_supervised) !=
+                LM_DATASET_OK ||
             batch_supervised > SIZE_MAX - supervised_count) {
             status = LLM_BACKEND_ERROR;
             break;
@@ -563,19 +559,17 @@ llm_status lm_model_evaluate_sft_validation(lm_model *model, lm_sft_dataset *dat
         supervised_count += batch_supervised;
         status = begin_device_batch(backend, use_device_batch);
         if (status == LLM_OK)
-            status = llm_tensor_write(backend, &inputs, host_inputs,
-                                      token_count * sizeof(*host_inputs));
+            status =
+                llm_tensor_write(backend, &inputs, host_inputs, token_count * sizeof(*host_inputs));
         if (status == LLM_OK)
             status = llm_tensor_write(backend, &targets, host_targets,
                                       token_count * sizeof(*host_targets));
         if (status == LLM_OK)
-            status =
-                llm_tensor_write(backend, &mask, host_mask, token_count * sizeof(*host_mask));
+            status = llm_tensor_write(backend, &mask, host_mask, token_count * sizeof(*host_mask));
         if (status == LLM_OK)
             status = lm_model_forward(model, &inputs, &logits);
         if (status == LLM_OK)
-            status = llm_cross_entropy_masked_forward(backend, &logits, &targets, &mask, 1U,
-                                                      &loss);
+            status = llm_cross_entropy_masked_forward(backend, &logits, &targets, &mask, 1U, &loss);
         status = end_device_batch(backend, use_device_batch, status);
         float batch_loss = 0.0F;
         if (status == LLM_OK)

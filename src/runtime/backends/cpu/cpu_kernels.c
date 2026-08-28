@@ -264,8 +264,8 @@ static llm_status find_row_softmax_denominator(const float *row, size_t row_widt
 
 llm_status llm_cpu_cross_entropy_forward_f32(const float *logits, const uint32_t *targets,
                                              const uint32_t *loss_mask, size_t row_count,
-                                             size_t vocabulary_size,
-                                             size_t normalization_row_count, float *loss) {
+                                             size_t vocabulary_size, size_t normalization_row_count,
+                                             float *loss) {
     if (logits == NULL || targets == NULL || loss == NULL || row_count == 0U ||
         vocabulary_size == 0U || normalization_row_count == 0U ||
         normalization_row_count > row_count) {

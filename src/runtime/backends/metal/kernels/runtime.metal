@@ -463,8 +463,7 @@ kernel void llm_attention_decode_f32(
             llm_threadgroup_sum(dot, partial, thread_index, lane, simdgroup, threads_per_group) *
             parameters.scale;
         const float maximum = max(running_maximum, score);
-        const float previous_scale =
-            running_sum == 0.0f ? 0.0f : exp(running_maximum - maximum);
+        const float previous_scale = running_sum == 0.0f ? 0.0f : exp(running_maximum - maximum);
         const float score_scale = exp(score - maximum);
         running_sum = running_sum * previous_scale + score_scale;
         for (uint dimension = thread_index; dimension < parameters.head_dimension;
@@ -917,16 +916,13 @@ kernel void llm_softmax_last_f32(device const float *input [[buffer(0)]],
     }
 }
 
-kernel void llm_cross_entropy_forward_f32(device const float *logits [[buffer(0)]],
-                                          device const uint *targets [[buffer(1)]],
-                                          device const uint *loss_mask [[buffer(2)]],
-                                          device atomic_uint *loss [[buffer(3)]],
-                                          constant CrossEntropyParameters &parameters [[buffer(4)]],
-                                          uint row [[threadgroup_position_in_grid]],
-                                          uint thread_index [[thread_index_in_threadgroup]],
-                                          uint lane [[thread_index_in_simdgroup]],
-                                          uint simdgroup [[simdgroup_index_in_threadgroup]],
-                                          uint threads_per_group [[threads_per_threadgroup]]) {
+kernel void llm_cross_entropy_forward_f32(
+    device const float *logits [[buffer(0)]], device const uint *targets [[buffer(1)]],
+    device const uint *loss_mask [[buffer(2)]], device atomic_uint *loss [[buffer(3)]],
+    constant CrossEntropyParameters &parameters [[buffer(4)]],
+    uint row [[threadgroup_position_in_grid]], uint thread_index [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]], uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads_per_group [[threads_per_threadgroup]]) {
     if (row >= parameters.row_count) {
         return;
     }

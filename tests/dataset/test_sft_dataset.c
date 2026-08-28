@@ -53,8 +53,7 @@ static int test_sft_round_trip(void) {
                    LLM_LAB_TEST_BINARY_DIR, (long)getpid());
     (void)snprintf(jsonl_path, sizeof(jsonl_path), "%s/sft-%ld.jsonl", LLM_LAB_TEST_BINARY_DIR,
                    (long)getpid());
-    (void)snprintf(prefix, sizeof(prefix), "%s/sft-%ld", LLM_LAB_TEST_BINARY_DIR,
-                   (long)getpid());
+    (void)snprintf(prefix, sizeof(prefix), "%s/sft-%ld", LLM_LAB_TEST_BINARY_DIR, (long)getpid());
 
     tokenizer *text_tokenizer = NULL;
     TEST_ASSERT(tokenizer_create_byte_level(&text_tokenizer) == TOKENIZER_OK);

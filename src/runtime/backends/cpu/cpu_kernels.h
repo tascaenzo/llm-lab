@@ -32,8 +32,8 @@ llm_status llm_cpu_softmax_last_f32(const float *input, float *output, size_t ou
                                     size_t row_width);
 llm_status llm_cpu_cross_entropy_forward_f32(const float *logits, const uint32_t *targets,
                                              const uint32_t *loss_mask, size_t row_count,
-                                             size_t vocabulary_size,
-                                             size_t normalization_row_count, float *loss);
+                                             size_t vocabulary_size, size_t normalization_row_count,
+                                             float *loss);
 llm_status llm_cpu_cross_entropy_backward_f32(const float *logits, const uint32_t *targets,
                                               const uint32_t *loss_mask, size_t row_count,
                                               size_t vocabulary_size,

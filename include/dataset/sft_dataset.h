@@ -53,8 +53,7 @@ uint32_t lm_sft_dataset_model_vocabulary_size(const lm_sft_dataset *dataset);
 size_t lm_sft_dataset_context_length(const lm_sft_dataset *dataset);
 lm_chat_protocol lm_sft_dataset_protocol(const lm_sft_dataset *dataset);
 lm_dataset_status lm_sft_dataset_tokenizer_matches(const lm_sft_dataset *dataset,
-                                                    const char *tokenizer_path,
-                                                    int *out_matches);
+                                                   const char *tokenizer_path, int *out_matches);
 
 lm_dataset_status lm_sft_batcher_create(lm_sft_dataset *dataset, size_t batch_size, uint64_t seed,
                                         lm_sft_batcher **out_batcher);
@@ -66,7 +65,6 @@ lm_dataset_status lm_sft_batcher_next(lm_sft_batcher *batcher, token_id *out_inp
                                       size_t *out_active_target_count);
 lm_dataset_status lm_sft_batcher_get_state(const lm_sft_batcher *batcher,
                                            lm_batcher_state *out_state);
-lm_dataset_status lm_sft_batcher_set_state(lm_sft_batcher *batcher,
-                                           const lm_batcher_state *state);
+lm_dataset_status lm_sft_batcher_set_state(lm_sft_batcher *batcher, const lm_batcher_state *state);
 
 #endif
